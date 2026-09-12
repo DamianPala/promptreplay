@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+# recorded traces and replay results carry repository content and API ids
+traces/
+runs/

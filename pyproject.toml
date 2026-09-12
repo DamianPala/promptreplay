@@ -1,0 +1,58 @@
+[project]
+name = "provibench"
+version = "0.1.0"
+description = "Record real agent-harness API traffic, replay it byte-for-byte against LLM providers, compare cache behaviour and cost"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.5",
+    "rich>=14",
+    "httpx>=0.28",
+    "pydantic>=2.9",
+    "starlette>=0.45",
+    "uvicorn>=0.34",
+]
+
+[project.scripts]
+provibench = "provibench.app:run"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1",
+    "pytest>=8",
+    "ruff>=0.14",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.10,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "N", "UP", "B", "C4", "SIM", "RUF", "C90", "PLR0913", "PLR0917"]
+# N818: exception classes are named after their F3 `kind` (`Timeout`, `Interrupted`, ...);
+# an `Error` suffix would collide with the builtins `TimeoutError` and `InterruptedError`.
+ignore = ["N818"]
+mccabe.max-complexity = 8
+pylint.max-args = 8
+pylint.max-positional-args = 5
+
+[tool.ruff.lint.isort]
+force-single-line = false
+known-first-party = ["provibench"]
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config -q"
+testpaths = ["tests"]
+filterwarnings = ["error"]
