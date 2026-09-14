@@ -1,4 +1,8 @@
-"""`report`: summarise an existing run, probe or full replay, optionally writing markdown.
+"""`report`: summarise an existing run, probe or full replay, as text, markdown or HTML.
+
+The HTML is rendered from the same document this command prints under `--json`, so the
+file and the terminal cannot disagree; `bench.html_report` does the rendering and this
+module only decides where the file goes.
 
 `provibench.bench.*` pulls in httpx and pydantic; its symbols are imported only inside
 the callback, so building the CLI (schema, --help, completion) stays cheap.
@@ -28,7 +32,7 @@ from provibench.core.documents import (
     obj,
     string,
 )
-from provibench.core.errors import NotFound
+from provibench.core.errors import NotFound, PreconditionFailed
 from provibench.core.registry import Command, require_invocation
 from provibench.core.spec import CommandSpec, Effects
 
@@ -54,11 +58,13 @@ _OUTPUT = obj(
         "trace": string(),
         "conversation": string(),
         "created": string(),
+        "run_hex": nullable_string(),
         "protocol": string(enum=["full", "probe"]),
         "options": _OPTIONS,
         "summaries": array(SUMMARY),
         "probe_summaries": array(PROBE_SUMMARY),
         "markdown_path": nullable_string(),
+        "html": nullable_string(),
         "changed": boolean(),
     },
     required=[
@@ -66,11 +72,13 @@ _OUTPUT = obj(
         "trace",
         "conversation",
         "created",
+        "run_hex",
         "protocol",
         "options",
         "summaries",
         "probe_summaries",
         "markdown_path",
+        "html",
         "changed",
     ],
 )
@@ -84,24 +92,46 @@ _OUTPUT = obj(
     "RUN is a run directory, a trace name (the newest run under <runs-dir>/<name>), or "
     "'latest' (the newest run across every trace). A probe run is summarised as hit rate, "
     "prefix fraction and effective price per spec, a full replay as its per-turn totals. "
-    "With --md, the same report is also written as markdown.",
+    "With --md, the same report is also written as markdown; with --html, as one "
+    "self-contained HTML file with the same tables and a chart.",
 )
 @click.argument("run")
 @click.option("--md", "md_path", default=None, help="Write the report as markdown to this path")
+@click.option(
+    "--html",
+    "html_path",
+    default=None,
+    metavar="PATH",
+    help="Write the report as one self-contained HTML file to this path",
+)
+@click.option("--force", is_flag=True, help="Overwrite an existing --md or --html file")
 @click.pass_context
-def report(ctx: click.Context, run: str, md_path: str | None) -> Document:
+def report(
+    ctx: click.Context, run: str, md_path: str | None, html_path: str | None, force: bool
+) -> Document:
     invocation = require_invocation(ctx)
     runs_dir = Path(invocation.setting("runs_dir") or ".")
     run_dir = _resolve_run_dir(run, runs_dir, invocation.cwd)
 
     from provibench.bench.probe_runs import read_protocol
 
+    # Both targets are refused before either is written: the markdown goes out while the
+    # document is built, so checking the HTML only at the end would leave one of the two
+    # files behind on a command that failed.
+    if html_path is not None:
+        _output_target(invocation, html_path, force, option="html")
     if read_protocol(run_dir) == "probe":
-        return _probe_report(invocation, run_dir, md_path)
-    return _full_report(invocation, run_dir, md_path)
+        document = _probe_report(invocation, run_dir, md_path, force)
+    else:
+        document = _full_report(invocation, run_dir, md_path, force)
+    document["html"] = _write_html(invocation, html_path, force, document)
+    document["changed"] = bool(document["changed"]) or document["html"] is not None
+    return document
 
 
-def _full_report(invocation: Invocation, run_dir: Path, md_path: str | None) -> Document:
+def _full_report(
+    invocation: Invocation, run_dir: Path, md_path: str | None, force: bool
+) -> Document:
     from provibench.bench.replay import load_run
     from provibench.bench.summary import cache_mode_note, render_markdown, summarize
 
@@ -110,22 +140,27 @@ def _full_report(invocation: Invocation, run_dir: Path, md_path: str | None) -> 
     summaries = [
         summarize(ref.label, results[ref.label], ref.providers, notes) for ref in meta.runs
     ]
-    markdown_path = _write_markdown(invocation, md_path, render_markdown(summaries))
+    entries = [summary_to_document(summary) for summary in summaries]
+    markdown_path = _write_markdown(invocation, md_path, render_markdown(entries), force)
     return {
         "run_dir": str(run_dir),
         "trace": meta.trace,
         "conversation": meta.conversation,
         "created": meta.created,
+        "run_hex": meta.run_hex,
         "protocol": meta.protocol,
         "options": _replay_options(meta.options),
-        "summaries": [summary_to_document(s) for s in summaries],
+        "summaries": entries,
         "probe_summaries": [],
         "markdown_path": markdown_path,
+        "html": None,
         "changed": markdown_path is not None,
     }
 
 
-def _probe_report(invocation: Invocation, run_dir: Path, md_path: str | None) -> Document:
+def _probe_report(
+    invocation: Invocation, run_dir: Path, md_path: str | None, force: bool
+) -> Document:
     from provibench.bench.probe_drift import apply_drift
     from provibench.bench.probe_runs import load_probe_run
     from provibench.bench.probe_summary import summarize_probe
@@ -143,17 +178,19 @@ def _probe_report(invocation: Invocation, run_dir: Path, md_path: str | None) ->
         ],
         meta.specs,
     )
-    markdown_path = _write_markdown(invocation, md_path, probe_markdown(summaries))
+    markdown_path = _write_markdown(invocation, md_path, probe_markdown(summaries), force)
     return {
         "run_dir": str(run_dir),
         "trace": meta.trace,
         "conversation": meta.conversation,
         "created": meta.created,
+        "run_hex": meta.run_hex,
         "protocol": meta.protocol,
         "options": dict(meta.options.model_dump()),
         "summaries": [],
         "probe_summaries": [probe_summary_to_document(s) for s in summaries],
         "markdown_path": markdown_path,
+        "html": None,
         "changed": markdown_path is not None,
     }
 
@@ -169,15 +206,45 @@ def _replay_options(options: ReplayOptions) -> Document:
     }
 
 
-def _write_markdown(invocation: Invocation, md_path: str | None, text: str) -> str | None:
+def _write_html(
+    invocation: Invocation, html_path: str | None, force: bool, document: Document
+) -> str | None:
+    """Render the report as one HTML file, refusing to replace one that is already there."""
+    if html_path is None:
+        return None
+    from provibench.bench.html_report import render_html
+
+    target = _output_target(invocation, html_path, force, option="html")
+    target.write_text(render_html(document), encoding="utf-8")
+    return str(target)
+
+
+def _write_markdown(
+    invocation: Invocation, md_path: str | None, text: str, force: bool
+) -> str | None:
     if md_path is None:
         return None
-    target = Path(md_path)
-    if not target.is_absolute():
-        target = invocation.cwd / target
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target = _output_target(invocation, md_path, force, option="md")
     target.write_text(text + "\n", encoding="utf-8")
     return str(target)
+
+
+def _output_target(invocation: Invocation, path: str, force: bool, *, option: str) -> Path:
+    """Resolve a written report's path, or refuse to replace one that is already there.
+
+    Both written forms take the same `--force`: a report is regenerated from the same run,
+    so silently replacing either file is the same surprise.
+    """
+    target = Path(path)
+    if not target.is_absolute():
+        target = invocation.cwd / target
+    if target.exists() and not force:
+        raise PreconditionFailed(
+            f"{target} already exists",
+            hint=f"Pass --force to overwrite the --{option} output",
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 def _resolve_run_dir(run: str, runs_dir: Path, cwd: Path) -> Path:

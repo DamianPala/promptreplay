@@ -14,11 +14,15 @@ from provibench.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
 
-def _write_run(runs_dir: Path, trace: str, created: str) -> Path:
+def _write_run(
+    runs_dir: Path, trace: str, created: str, *, prompt_total: int = 10, cached: int = 0
+) -> Path:
     """A real run directory (via `write_run`), then renamed to a chosen `created` stamp.
 
     `write_run` always stamps `datetime.now(UTC)`; renaming afterwards is the simplest way
-    to get two runs with a controlled, comparable ordering.
+    to get two runs with a controlled, comparable ordering. The token counts are settable
+    because a cell's formatting — a thousands separator, a rounding — only differs from
+    another renderer's at sizes the default fixture is too small to reach.
     """
     target = Target(
         name="t", url="https://x.test/v1/messages", api_key_env="X_KEY", kind="anthropic"
@@ -31,8 +35,8 @@ def _write_run(runs_dir: Path, trace: str, created: str) -> Path:
         latency_ms=1.0,
         message_id="m1",
         model="model-a",
-        prompt_total=10,
-        cached=0,
+        prompt_total=prompt_total,
+        cached=cached,
         cache_write=0,
         output_tokens=1,
     )
@@ -107,10 +111,169 @@ def test_report_md_relative_path_resolves_against_injected_cwd(
     assert outcome.document["markdown_path"] == str(cli.root / "relative-report.md")
 
 
+# --- the HTML report ----------------------------------------------------------
+
+
+def test_report_html_writes_one_self_contained_file(cli: Cli, bench_paths: BenchPaths) -> None:
+    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
+    html_path = cli.root / "out" / "report.html"
+    outcome = cli.run(
+        "report", str(run_dir), "--html", str(html_path), "--force", env=bench_paths.env
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert outcome.document["html"] == str(html_path)
+    assert outcome.document["changed"] is True
+    text = html_path.read_text(encoding="utf-8")
+    assert text.startswith("<!DOCTYPE html>")
+    assert "<script" not in text and "http://" not in text and "https://" not in text
+    assert "<td>t:model-a</td>" in text
+
+
+def test_report_without_html_reports_no_path(cli: Cli, bench_paths: BenchPaths) -> None:
+    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
+    outcome = cli.run("report", str(run_dir), env=bench_paths.env)
+    assert outcome.code == 0, outcome.stderr
+    assert outcome.document["html"] is None
+    assert outcome.document["changed"] is False
+
+
+def test_report_html_refuses_to_overwrite_without_force(cli: Cli, bench_paths: BenchPaths) -> None:
+    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
+    html_path = cli.root / "report.html"
+    html_path.write_text("mine", encoding="utf-8")
+    outcome = cli.run("report", str(run_dir), "--html", str(html_path), env=bench_paths.env)
+    assert outcome.code == 1
+    assert outcome.error["kind"] == "precondition_failed"
+    assert "--force" in str(outcome.error["hint"])
+    assert html_path.read_text(encoding="utf-8") == "mine"
+
+    forced = cli.run(
+        "report", str(run_dir), "--html", str(html_path), "--force", env=bench_paths.env
+    )
+    assert forced.code == 0, forced.stderr
+    assert html_path.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
+
+
+def test_report_html_and_md_write_both_files_and_a_relative_path_resolves(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
+    outcome = cli.run(
+        "report",
+        str(run_dir),
+        "--md",
+        "r.md",
+        "--html",
+        "r.html",
+        env=bench_paths.env,
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert outcome.document["markdown_path"] == str(cli.root / "r.md")
+    assert outcome.document["html"] == str(cli.root / "r.html")
+    assert (cli.root / "r.md").is_file() and (cli.root / "r.html").is_file()
+
+
+def test_md_and_html_print_the_same_totals_for_one_run(cli: Cli, bench_paths: BenchPaths) -> None:
+    """Both written forms go through `summary_row`, so a cell cannot differ between them."""
+    run_dir = _write_run(
+        bench_paths.runs_dir, "t", "20260101-000000", prompt_total=20_000, cached=12_000
+    )
+    md_path, html_path = cli.root / "r.md", cli.root / "r.html"
+    outcome = cli.run(
+        "report",
+        str(run_dir),
+        "--md",
+        str(md_path),
+        "--html",
+        str(html_path),
+        env=bench_paths.env,
+    )
+    assert outcome.code == 0, outcome.stderr
+    markdown = md_path.read_text(encoding="utf-8")
+    html = html_path.read_text(encoding="utf-8")
+    assert "| 20,000 |" in markdown and "<td>20,000</td>" in html
+    assert "| 12,000 |" in markdown and "<td>12,000</td>" in html
+    assert "80000" not in markdown
+
+
+def test_report_md_refuses_to_overwrite_without_force(cli: Cli, bench_paths: BenchPaths) -> None:
+    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
+    md_path = cli.root / "r.md"
+    md_path.write_text("mine", encoding="utf-8")
+    outcome = cli.run("report", str(run_dir), "--md", str(md_path), env=bench_paths.env)
+    assert outcome.code == 1
+    assert outcome.error["kind"] == "precondition_failed"
+    assert "--md" in str(outcome.error["hint"])
+    assert md_path.read_text(encoding="utf-8") == "mine"
+
+    forced = cli.run("report", str(run_dir), "--md", str(md_path), "--force", env=bench_paths.env)
+    assert forced.code == 0, forced.stderr
+    assert md_path.read_text(encoding="utf-8").startswith("| label |")
+
+
+def test_a_refused_html_target_writes_no_markdown_either(cli: Cli, bench_paths: BenchPaths) -> None:
+    """A command that refuses one target writes neither, so a failed run leaves no half-report."""
+    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
+    md_path, html_path = cli.root / "r.md", cli.root / "r.html"
+    html_path.write_text("mine", encoding="utf-8")
+    outcome = cli.run(
+        "report", str(run_dir), "--md", str(md_path), "--html", str(html_path), env=bench_paths.env
+    )
+    assert outcome.code == 1
+    assert outcome.error["kind"] == "precondition_failed"
+    assert "--html" in str(outcome.error["hint"])
+    assert html_path.read_text(encoding="utf-8") == "mine"
+    assert not md_path.exists()
+
+
+def test_report_html_prints_the_path_in_human_output(cli: Cli, bench_paths: BenchPaths) -> None:
+    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
+    html_path = cli.root / "r.html"
+    outcome = cli.run(
+        "report", str(run_dir), "--html", str(html_path), tty_stdout=True, env=bench_paths.env
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert f"HTML report: {html_path}" in outcome.stdout
+
+
+def test_probe_report_html_carries_the_tables_and_the_charts(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    run_dir = _write_probe_run(
+        bench_paths.runs_dir,
+        {
+            "or:model@novita": [
+                probe_record(provider="Novita", model="model"),
+                probe_record(role="warm", attempt=1, cached=90, provider="Novita", model="model"),
+            ],
+            "or:model@gmicloud": [
+                probe_record(spec_label="or:model@gmicloud", provider="GMICloud", model="model"),
+                probe_record(
+                    spec_label="or:model@gmicloud",
+                    role="warm",
+                    attempt=1,
+                    cached=0,
+                    provider="GMICloud",
+                    model="model",
+                ),
+            ],
+        },
+    )
+    html_path = cli.root / "probe.html"
+    outcome = cli.run("report", str(run_dir), "--html", str(html_path), env=bench_paths.env)
+    assert outcome.code == 0, outcome.stderr
+    assert outcome.document["run_hex"] == "abc123def456"
+    text = html_path.read_text(encoding="utf-8")
+    assert "specs: or:model@&lt;provider&gt;" in text
+    assert "<td>@novita</td>" in text and "<td>@gmicloud</td>" in text
+    assert text.count("<svg") == 2
+    assert "@media (prefers-color-scheme: dark)" in text
+
+
 # --- probe runs ---------------------------------------------------------------
 
 
-def _probe_record(**overrides: object) -> dict[str, object]:
+def probe_record(**overrides: object) -> dict[str, object]:
     """One record as a probe run's jsonl carries it, with the fields the tests care about."""
     record: dict[str, object] = {
         "spec_label": "or:model@novita",
@@ -199,22 +362,20 @@ def test_probe_report_shortens_the_shared_prefix_into_a_caption(
         bench_paths.runs_dir,
         {
             "or:model@novita": [
-                _probe_record(provider="Novita", model="model"),
-                _probe_record(role="warm", attempt=1, cached=90, prompt_total=100),
-                _probe_record(
-                    role="stream", ttft_ms=400.0, gen_tok_s=40.0, fingerprint="tok1 tok2"
-                ),
+                probe_record(provider="Novita", model="model"),
+                probe_record(role="warm", attempt=1, cached=90, prompt_total=100),
+                probe_record(role="stream", ttft_ms=400.0, gen_tok_s=40.0, fingerprint="tok1 tok2"),
             ],
             "or:model@gmicloud": [
-                _probe_record(spec_label="or:model@gmicloud", provider="GMICloud", model="model"),
-                _probe_record(
+                probe_record(spec_label="or:model@gmicloud", provider="GMICloud", model="model"),
+                probe_record(
                     spec_label="or:model@gmicloud",
                     role="warm",
                     attempt=1,
                     cached=90,
                     prompt_total=100,
                 ),
-                _probe_record(
+                probe_record(
                     spec_label="or:model@gmicloud",
                     role="stream",
                     ttft_ms=600.0,
@@ -244,16 +405,16 @@ def test_probe_report_marks_provider_drift_against_the_reference(
         bench_paths.runs_dir,
         {
             "or:model@novita": [
-                _probe_record(provider="Novita", model="model"),
-                _probe_record(role="warm", attempt=1, cached=90, provider="Novita", model="model"),
-                _probe_record(
+                probe_record(provider="Novita", model="model"),
+                probe_record(role="warm", attempt=1, cached=90, provider="Novita", model="model"),
+                probe_record(
                     role="stream", provider="Novita", model="model", fingerprint="tok1 tok2"
                 ),
             ],
             # pinned to novita but served by another endpoint, with the same size and prefix
             "or:model@gmicloud": [
-                _probe_record(spec_label="or:model@gmicloud", provider="Somebody", model="model"),
-                _probe_record(
+                probe_record(spec_label="or:model@gmicloud", provider="Somebody", model="model"),
+                probe_record(
                     spec_label="or:model@gmicloud",
                     role="warm",
                     attempt=1,
@@ -261,7 +422,7 @@ def test_probe_report_marks_provider_drift_against_the_reference(
                     provider="Somebody",
                     model="model",
                 ),
-                _probe_record(
+                probe_record(
                     spec_label="or:model@gmicloud",
                     role="stream",
                     provider="Somebody",
@@ -296,7 +457,7 @@ def test_probe_report_renders_a_run_without_stream_records(
     """A run from before this slice has no TTFT, no tok/s and no TTL: the columns show `-`."""
     run_dir = _write_probe_run(
         bench_paths.runs_dir,
-        {"or:model@novita": [_probe_record(), _probe_record(role="warm", attempt=1, cached=90)]},
+        {"or:model@novita": [probe_record(), probe_record(role="warm", attempt=1, cached=90)]},
         legacy=True,
     )
     plain = cli.run("report", str(run_dir), env=bench_paths.env)
@@ -324,10 +485,10 @@ def test_probe_report_shows_the_ttl_column_only_when_it_ran(
         bench_paths.runs_dir,
         {
             "or:model@novita": [
-                _probe_record(),
-                _probe_record(role="warm", attempt=1, cached=90),
-                _probe_record(role="ttl", attempt=60, cached=90),
-                _probe_record(role="ttl", attempt=300, cached=0),
+                probe_record(),
+                probe_record(role="warm", attempt=1, cached=90),
+                probe_record(role="ttl", attempt=60, cached=90),
+                probe_record(role="ttl", attempt=300, cached=0),
             ]
         },
     )
