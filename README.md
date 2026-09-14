@@ -153,9 +153,11 @@ them. The criteria are, in order:
 
 1. **Stability floor**, always on: an endpoint with a negative `status`, or under 97 %
    uptime over the last day, is dropped and named in the listing with its reason
-   (`dropped: relace/fp4 (status -2), siliconflow/fp8 (uptime 1d 77.9 %)`). An endpoint that
-   did not report a status or an uptime is not degraded, it is unmeasured, so it stays.
-   `--include TAG` keeps an endpoint past the floor.
+   (`dropped: relace/fp4 (status -2), siliconflow/fp8 (uptime 1d 77.90 %)`). The reason
+   prints two decimals so a value that rounds up to the floor (`96.96`) cannot look like it
+   contradicts the criterion; the candidate table prints two there as well and one
+   elsewhere. An endpoint that did not report a status or an uptime is not degraded, it is
+   unmeasured, so it stays. `--include TAG` keeps an endpoint past the floor.
 2. **`--zdr`** intersects the list with OpenRouter's [Zero Data Retention
    endpoints](https://openrouter.ai/docs/features/zdr); the ones left out are listed as
    `not ZDR`.
@@ -180,10 +182,13 @@ that request with a 404 instead of failing three colds later, and the run report
 with no summary row; the candidate that would have taken its `--top` slot is the next one
 in the ranking. Nothing is sent before the confirmation, so the check is priced in the
 estimate you agree to: the line `pre-check: up to 5 requests, 61,000 tokens, $0.0100` is
-part of that total, `--budget` is compared against it, and a refusal says how much of the
-total the check is when dropping the check would fit. The estimate's spec rows are the
-endpoints `--top` would probe, so a candidate promoted by a removal is the one part of the
-run its total does not cover.
+part of that total, and a refusal says how much of the total the check is when dropping the
+check would fit, unless it names the upper bound below instead. The estimate's spec rows are
+the endpoints `--top` would probe, so a candidate promoted by a removal is not covered by
+that total: a `--top` run adds the line
+`upper bound if the N priciest candidates are the ones that answer: $0.0130` under the
+check, and `--budget` is compared against that bound — the check can promote any N of the
+ranked candidates, and that is what the run can cost.
 
 ### Reading a sweep
 

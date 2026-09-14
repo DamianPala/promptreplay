@@ -15,7 +15,13 @@ from typing import Any
 import httpx
 import pytest
 
-from provibench.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
+from provibench.bench.trace import (
+    RecordedResponse,
+    TraceEntry,
+    Usage,
+    append_entry,
+    write_trace_text,
+)
 from provibench.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
@@ -287,6 +293,30 @@ def test_probe_runs_a_rung_and_persists_the_run(
     assert summary["eff_per_m_prompt"] == pytest.approx((1 - 0.9) * 1.0 + 0.9 * 0.1)
     assert summary["errors"] == 0
     assert summary["skipped"] == 0
+
+
+def test_a_compressed_trace_files_its_run_under_the_name_without_the_suffixes(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`t.jsonl.gz` is the trace `t`, and the packaged `sample.jsonl.gz` is the trace `sample`.
+
+    The run directory is what `report` resolves a trace name to, so a name carrying the
+    file's suffixes would be a run only a full path could reach.
+    """
+    _write_targets(bench_paths.targets_path)
+    plain = _probe_trace(bench_paths)
+    write_trace_text(bench_paths.traces_dir / "t.jsonl.gz", plain.read_text(encoding="utf-8"))
+    _install(monkeypatch, _transport(lambda index: _ok()))
+
+    outcome = _probe(cli, bench_paths, "t.jsonl.gz", "fake:model-a", "--gap", "0", "--yes")
+    assert outcome.code == 0, outcome.stderr
+    run_dir = Path(str(outcome.document["run_dir"]))
+    assert run_dir.parent == bench_paths.runs_dir / "t"
+
+    # the name resolves back to that run, which is what a suffix in it would have broken
+    reported = cli.run("report", "t", env={**bench_paths.env, **_ENV})
+    assert reported.code == 0, reported.stderr
+    assert reported.document["run_dir"] == str(run_dir)
 
 
 def test_probe_defaults_to_the_smallest_middle_and_largest_rung(

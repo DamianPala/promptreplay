@@ -9,6 +9,7 @@ neither yields a token-only estimate with the price recorded as `n/a`.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from math import isclose
 from typing import TYPE_CHECKING
 
 import httpx
@@ -66,6 +67,20 @@ class PreCheckCost(BaseModel):
     requests: int
     tokens: int
     usd: float | None = None
+
+
+class UpperBound(BaseModel):
+    """The most a `--top` run can cost: the N priciest candidates are the ones that answer.
+
+    The estimate prices the N best-ranked candidates, but the availability check decides
+    which of the ranked candidates the run actually probes — any N of them can be the ones
+    that survive it. So the estimate is what the run is expected to spend and this is what
+    it can spend, and `--budget` has to cover the second: a candidate the check promotes can
+    be three times the price of the one it replaced.
+    """
+
+    keep: int
+    usd: float
 
 
 async def fetch_endpoint_index(
@@ -263,8 +278,22 @@ def estimate_total(
     return sum(amounts) + pre_check.usd
 
 
+def same_amount(left: float | None, right: float | None) -> bool:
+    """Whether two totals are the same number, additions in a different order included.
+
+    Two candidate sets with equal prices sum to the same amount but not always the same
+    float; neither the estimate nor a refusal should treat that as a difference.
+    """
+    if left is None or right is None:
+        return left is right
+    return isclose(left, right, rel_tol=1e-9, abs_tol=1e-12)
+
+
 def render_estimate(
-    estimates: Sequence[SpecEstimate], *, pre_check: PreCheckCost | None = None
+    estimates: Sequence[SpecEstimate],
+    *,
+    pre_check: PreCheckCost | None = None,
+    upper_bound: UpperBound | None = None,
 ) -> str:
     """A fixed-width table of the estimates and their total; `n/a` where unknown.
 
@@ -273,7 +302,9 @@ def render_estimate(
     16 endpoints are told apart here too — a label cut in the middle reads as another
     endpoint, and this is the table a reader checks before paying for the run. A run that
     will check availability says so, and the total is what `--budget` is compared against:
-    the spec rows plus the check the plan priced.
+    the spec rows plus the check the plan priced. A `--top` run says what the total could
+    become under it — the rows stay the ranked expectation, and the upper bound is one line
+    under the check that can replace them.
     """
     caption, labels = column_labels(
         [estimate.label for estimate in estimates], label_width=_LABEL_WIDTH
@@ -294,6 +325,8 @@ def render_estimate(
     lines = text_table(_HEADERS, rows)
     if pre_check is not None:
         lines.append(_pre_check_line(pre_check))
+    if upper_bound is not None and not same_amount(upper_bound.usd, total):
+        lines.append(_upper_bound_line(upper_bound))
     lines.append(_NOTE)
     lines.extend(f"note: {note}" for estimate in estimates for note in estimate.notes)
     return "\n".join([caption, *lines] if caption is not None else lines)
@@ -311,6 +344,14 @@ def _pre_check_line(cost: PreCheckCost) -> str:
     """The check the estimate priced: how many candidates it will visit, and what that costs."""
     usd = f"${cost.usd:.4f}" if cost.usd is not None else "$n/a"
     return f"pre-check: up to {cost.requests} requests, {cost.tokens:,} tokens, {usd}"
+
+
+def _upper_bound_line(bound: UpperBound) -> str:
+    """What the run costs if the check promotes the priciest candidates `--top` allows."""
+    return (
+        f"upper bound if the {bound.keep} priciest candidates are the ones that answer: "
+        f"${bound.usd:.4f}"
+    )
 
 
 def _estimate_row(estimate: SpecEstimate, label: str) -> list[str]:

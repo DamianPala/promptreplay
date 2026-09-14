@@ -7,12 +7,15 @@ from typing import Literal
 import pytest
 
 from provibench.bench.estimate import (
+    PreCheckCost,
     SpecEstimate,
     SpecPrices,
+    UpperBound,
     estimate_total,
     probe_estimate,
     render_estimate,
     replay_estimate,
+    same_amount,
     spec_prices,
 )
 from provibench.bench.openrouter import Endpoint
@@ -269,3 +272,26 @@ def test_render_estimate_elides_a_lone_long_label_keeping_its_provider() -> None
     text = render_estimate([_priced(f"openrouter:{'deepseek/' + 'x' * 60}@novita")])
     assert "…" in text
     assert "@novita" in text  # the part that names the row survives the cut
+
+
+def test_render_estimate_prints_the_upper_bound_under_the_check() -> None:
+    """The rows stay the ranked expectation; the line under the check prices the priciest cut."""
+    estimates = [_priced("fake:a"), _priced("fake:b")]
+    cost = PreCheckCost(requests=2, tokens=200, usd=0.0002)
+    lines = render_estimate(
+        estimates, pre_check=cost, upper_bound=UpperBound(keep=2, usd=0.0009)
+    ).splitlines()
+    check = next(index for index, line in enumerate(lines) if line.startswith("pre-check: "))
+    assert lines[check + 1] == (
+        "upper bound if the 2 priciest candidates are the ones that answer: $0.0009"
+    )
+    # the total is already 0.0004, so a bound equal to it says nothing the table does not
+    same = render_estimate(estimates, pre_check=cost, upper_bound=UpperBound(keep=2, usd=0.0004))
+    assert "upper bound" not in same
+
+
+def test_same_amount_tolerates_a_reordered_sum() -> None:
+    assert same_amount(0.1 + 0.2, 0.3)
+    assert same_amount(None, None)
+    assert not same_amount(None, 1.0) and not same_amount(1.0, None)
+    assert not same_amount(1.0, 1.001)

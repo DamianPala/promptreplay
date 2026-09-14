@@ -7,6 +7,8 @@ so a change to what "best" means shows up here rather than in a table.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from provibench.bench.estimate import SpecPrices, precheck_cost
@@ -21,6 +23,7 @@ from provibench.bench.selection import (
     pinned_spec,
     rank_candidates,
     ranked,
+    render_candidates,
     select_candidates,
     sort_key,
     stability_reason,
@@ -87,9 +90,14 @@ def test_stability_reason_names_the_status_and_the_uptime() -> None:
     assert stability_reason(_endpoint("a", status="-2"), included=True) is None
     assert (
         stability_reason(_endpoint("a", uptime=UPTIME_FLOOR - 0.1), included=False)
-        == "uptime 1d 96.9 %"
+        == "uptime 1d 96.90 %"
     )
     assert stability_reason(_endpoint("a", uptime=UPTIME_FLOOR), included=False) is None
+
+
+def test_a_drop_reason_next_to_the_floor_does_not_round_up_to_it() -> None:
+    """96.96 at one decimal reads `97.0 %`: the reason would contradict the criterion."""
+    assert stability_reason(_endpoint("a", uptime=96.96), included=False) == "uptime 1d 96.96 %"
 
 
 def test_stability_reason_keeps_what_the_api_did_not_say() -> None:
@@ -164,6 +172,21 @@ def test_select_candidates_drops_non_zdr_first_then_the_floor() -> None:
     assert selection.dropped[1].checked is False
 
 
+def test_candidate_table_prints_two_decimals_only_next_to_the_floor() -> None:
+    """A kept uptime that rounds to the floor gets its second digit; a healthy one does not."""
+    selection = select_candidates(
+        [_endpoint("parasail/fp8", uptime=96.96), _endpoint("novita", uptime=99.9)],
+        gateway=_GATEWAY,
+        model=_MODEL,
+        include=["parasail"],
+    )
+    lines = render_candidates(selection, model=_MODEL, sort="price", zdr=False)
+    row = next(line for line in lines if line.startswith("parasail/fp8"))
+    assert "96.96" in row
+    healthy = next(line for line in lines if line.startswith("novita"))
+    assert "99.9" in healthy and "99.90" not in healthy
+
+
 def test_select_candidates_include_overrides_the_floor_for_that_tag() -> None:
     endpoints = [_endpoint("relace/fp4", status=-2), _endpoint("novita")]
     selection = select_candidates(endpoints, gateway=_GATEWAY, model=_MODEL, include=["relace"])
@@ -197,6 +220,31 @@ def test_unavailable_reason_names_overloads_and_bare_failures() -> None:
     assert unavailable_reason(status=503, payload=None) == "unavailable: HTTP 503"
     assert unavailable_reason(status=0, payload=None, error="connection reset") == (
         "unavailable: connection reset"
+    )
+
+
+def test_unavailable_reason_reads_the_wrapped_error_the_record_kept() -> None:
+    """A 429 the gateway wraps: the failure is named inside the envelope, not by its `type`.
+
+    The record's error is the wrapped object — the same string the probe's own
+    `skipped, <error_type>` note is read from — so both lines name the refusal alike.
+    """
+    body: dict[str, object] = {
+        "type": "error",
+        "error": {
+            "type": "rate_limit_error",
+            "message": "Provider returned error",
+            "error_type": "rate_limit_exceeded",
+        },
+    }
+    assert (
+        unavailable_reason(status=429, payload=body, error=json.dumps(body["error"]))
+        == "unavailable: rate_limit_exceeded"
+    )
+    # an envelope that only spells the wrapper: the status is the one thing that is true
+    assert (
+        unavailable_reason(status=429, payload={"type": "error", "message": "nope"})
+        == "unavailable: HTTP 429"
     )
 
 

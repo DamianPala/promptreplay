@@ -60,6 +60,9 @@ UPTIME_FLOOR = 97.0
 
 _SUPPORTED_SORTS: Set[str] = frozenset(SORT_KEYS)
 
+_FLOOR_MARGIN = 0.1
+"""How close to the floor an uptime has to be before the table prints it to two decimals."""
+
 _CANDIDATE_COLUMNS = ("tag", "status", "uptime 1d", "$/M in", "lat p50 ms", "tput p50")
 
 
@@ -184,6 +187,10 @@ def stability_reason(endpoint: Endpoint, *, included: bool) -> str | None:
 
     `--include` overrides the floor: naming a tag is the operator saying they want that
     endpoint measured anyway, which is the one way back in for a degraded endpoint.
+
+    The dropped uptime is printed to two decimals because one is not enough to explain the
+    drop: a value just under the floor rounds up to the floor itself (`96.96` reads `97.0`),
+    which makes the reason look like it contradicts the criterion it states.
     """
     if included:
         return None
@@ -192,7 +199,7 @@ def stability_reason(endpoint: Endpoint, *, included: bool) -> str | None:
         return f"status {endpoint.status}"
     uptime = endpoint.uptime_1d
     if uptime is not None and uptime < UPTIME_FLOOR:
-        return f"uptime 1d {uptime:.1f} %"
+        return f"uptime 1d {uptime:.2f} %"
     return None
 
 
@@ -283,11 +290,28 @@ def _candidate_row(endpoint: Endpoint) -> list[str]:
     return [
         endpoint.tag,
         "-" if endpoint.status is None else str(endpoint.status),
-        _number(endpoint.uptime_1d, digits=1),
+        _uptime_cell(endpoint.uptime_1d),
         f"{endpoint.prices.input:.3f}",
         _number(endpoint.latency_ms_30m, digits=0),
         _number(endpoint.throughput_30m, digits=1),
     ]
+
+
+def _uptime_cell(value: float | None) -> str:
+    """The uptime column: one decimal, or two when the value sits next to the floor.
+
+    `97.0` in this column could be anything from 96.95 up, and an endpoint kept by
+    `--include` would then be printed as a value the floor should have dropped. The second
+    digit is only paid where it disambiguates; a healthy endpoint reads as it always did.
+    """
+    if value is None:
+        return "-"
+    return f"{value:.{_uptime_digits(value)}f}"
+
+
+def _uptime_digits(value: float) -> int:
+    """How many decimals an uptime needs: two within `_FLOOR_MARGIN` of the floor, else one."""
+    return 2 if abs(value - UPTIME_FLOOR) < _FLOOR_MARGIN else 1
 
 
 def _number(value: float | None, *, digits: int) -> str:

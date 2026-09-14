@@ -25,6 +25,7 @@ from provibench.commands.probe_phases import (
     planned_specs,
     recorded_sweep,
     run_check,
+    upper_bound_estimate,
 )
 from provibench.commands.probe_phases import estimates as planned_estimates
 from provibench.commands.run_specs import (
@@ -139,7 +140,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     from provibench.bench.probe_runs import write_probe_run
     from provibench.bench.probe_summary import summarize_probe
     from provibench.bench.summary import cache_mode_note
-    from provibench.bench.trace import load_trace
+    from provibench.bench.trace import load_trace, trace_name
 
     trace_path = resolve_trace_path(request.trace, invocation)
     selected, key = select_conversation(load_trace(trace_path), request.conversation)
@@ -157,11 +158,17 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     plan = request.pre_check
     pre_check = None if plan is None else precheck_cost(plan.candidates, selected, options, prices)
     estimates = planned_estimates(request, selected, options, prices)
-    message_lines(invocation, render_estimate(estimates, pre_check=pre_check))
+    # Under `--top` the estimate prices the N best-ranked candidates while the check decides
+    # which of them the run probes, so the budget is compared against what that can cost.
+    upper_bound = upper_bound_estimate(request, selected, options, prices, pre_check=pre_check)
+    message_lines(
+        invocation, render_estimate(estimates, pre_check=pre_check, upper_bound=upper_bound)
+    )
     check_budget(
         estimates,
         request.budget,
         pre_check=pre_check,
+        upper_bound=upper_bound,
         hint="Raise --budget, or make the run smaller: drop a spec or a rung, lower "
         "--repeats, or skip the streamed request with --no-throughput",
     )
@@ -172,6 +179,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         planned_specs(request),
         yes=request.yes,
         pre_check=pre_check,
+        upper_bound=upper_bound,
     )
 
     checked = _checked(request, selected, options, invocation)
@@ -213,7 +221,9 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     runs_dir = Path(invocation.setting("runs_dir") or ".")
     run_dir = write_probe_run(
         runs_dir,
-        trace_path.stem,
+        # The trace's own name, so the packaged `sample.jsonl.gz` files under `sample/`
+        # exactly as `sample.jsonl` would, and `report sample` finds it.
+        trace_name(trace_path),
         key,
         run,
         specs,

@@ -25,6 +25,7 @@ from typing import Any, cast
 import httpx
 
 from provibench.bench.probe_context import ProbeContext
+from provibench.bench.probe_errors import error_type
 from provibench.bench.probe_models import ProbeCall, ProbeOptions, is_served
 from provibench.bench.probe_requests import send
 from provibench.bench.replay import prepare_body
@@ -156,8 +157,14 @@ def unavailable_reason(*, status: int, payload: object, error: str | None = None
     The two documented cases read differently because they mean different things: a 404 from
     a pinned endpoint is the account's settings talking (`unavailable for this key`, naming
     the restriction), while an overload that survived the retries is the provider's.
+
+    The kind is read off the record's own error first, with the same extraction the probe's
+    `skipped, <error_type>` note uses: a 429 the gateway wraps in its own envelope names the
+    failure in the wrapped object, and a reader comparing the two lines would otherwise be
+    told the same refusal was `error` here and `rate_limit_exceeded` there. The response body
+    is the fallback, for a record whose error is a transport message rather than a payload.
     """
-    kind = _error_type(payload)
+    kind = error_type(error) or _body_error_type(payload)
     if status == _NOT_FOUND or kind == "not_found":
         detail = _first_reason(_message(payload) or error or "") or kind or "not_found"
         return f"unavailable for this key: {detail[:_REASON_CAP]}"
@@ -208,12 +215,17 @@ def _message(payload: object) -> str | None:
     return None
 
 
-def _error_type(payload: object) -> str | None:
-    """The API's own name for the failure: `error_type`, or the nested error's `type`."""
+def _body_error_type(payload: object) -> str | None:
+    """The response body's name for the failure, when the record's own error carries none.
+
+    Read the same way the record's error is: the word `error` is a wrapper's marker rather
+    than a kind, so a body that spells only that names nothing and the caller falls back to
+    the status, which is at least true of the response.
+    """
     for source in (payload, _field(payload, "error")):
         for key in ("error_type", "type", "code"):
             value = _field(source, key)
-            if isinstance(value, str) and value:
+            if isinstance(value, str) and value and value != "error":
                 return value
     return None
 

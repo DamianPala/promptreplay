@@ -64,6 +64,11 @@ _PRICING: dict[str, dict[str, str]] = {
         "input_cache_read": "0.000000032",
     },
     "relace/fp4": {"prompt": "0.0000009", "completion": "0.000001", "input_cache_read": "0"},
+    "parasail/fp8": {
+        "prompt": "0.00000028",
+        "completion": "0.00000056",
+        "input_cache_read": "0.000000028",
+    },
     "openinference": {"prompt": "0.0000001", "completion": "0.0000002", "input_cache_read": "0"},
 }
 _ENV = {"OR_KEY": "secret", "DS_KEY": "secret"}
@@ -79,6 +84,18 @@ _GUARDRAIL_404: dict[str, Any] = {
     "error_type": "not_found",
 }
 _GUARDRAIL_REASON = "unavailable for this key: Paid model training violation (account settings)"
+
+# The 429 the live sweep saw: the gateway wraps the provider's refusal in its own envelope,
+# whose `type` is the word `error`; only the object it wraps names the failure.
+_RATE_LIMIT_429: dict[str, Any] = {
+    "type": "error",
+    "error": {
+        "type": "rate_limit_error",
+        "message": "Provider returned error",
+        "error_type": "rate_limit_exceeded",
+    },
+}
+_RATE_LIMIT_REASON = "unavailable: rate_limit_exceeded"
 
 
 def _endpoint(tag: str, **extra: object) -> dict[str, Any]:
@@ -210,22 +227,24 @@ class _Provider:
     always reports zero, the way a fresh nonce makes it. `unavailable` answers any request
     for that tag — the availability check's or the probe's — with the response it maps to:
     an account-level exclusion for a candidate, a failing endpoint for a spec the run
-    nevertheless paid for. Every message body is appended to `sent`, every probe request's
-    `(spec, turn)` to `order`, and every request's path to `calls`, which is what a test
-    asserting on the order requests went out in reads.
+    nevertheless paid for; `limited` does the same for the 429 the gateway wraps in its own
+    envelope. Every message body is appended to `sent`, every probe request's `(spec, turn)`
+    to `order`, and every request's path to `calls`, which is what a test asserting on the
+    order requests went out in reads.
 
     A pre-check is a request without the probe's nonce. It is recorded on `prechecked` and
     leaves the warm-up counter alone: it is a separate request rather than the cold write of
     the rung whose body it borrows.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 (one keyword per part of the fake a test varies)
         self,
         *,
         cached: Mapping[str, int] | None = None,
         endpoints: list[dict[str, Any]] | None = None,
         zdr: list[dict[str, Any]] | None = None,
         unavailable: Mapping[str, dict[str, Any]] | None = None,
+        limited: Mapping[str, dict[str, Any]] | None = None,
         sent: list[dict[str, Any]] | None = None,
         order: list[tuple[str, int]] | None = None,
         prechecked: list[str] | None = None,
@@ -235,6 +254,7 @@ class _Provider:
         self.endpoints = _ENDPOINTS if endpoints is None else endpoints
         self.zdr = zdr or []
         self.blocked = dict(unavailable or {})
+        self.limited = dict(limited or {})
         self.sent = sent
         self.order = order
         self.prechecked = prechecked
@@ -255,14 +275,22 @@ class _Provider:
         if "provibench-probe:" in request.content.decode():
             # a probe request: the first one per spec is its cold write, and a blocked tag
             # fails there the way an excluded endpoint fails a real one
-            if key in self.blocked:
-                return httpx.Response(404, json=self.blocked[key])
-            return self._probe(request, body, key)
+            refused = self._refused(key)
+            return self._probe(request, body, key) if refused is None else refused
         if self.prechecked is not None:
             self.prechecked.append(key)
+        refused = self._refused(key)
+        if refused is not None:
+            return refused
+        return httpx.Response(200, json=_answer(request, body, 0))
+
+    def _refused(self, key: str) -> httpx.Response | None:
+        """The refusal an endpoint answers every request with, or `None` when it answers."""
         if key in self.blocked:
             return httpx.Response(404, json=self.blocked[key])
-        return httpx.Response(200, json=_answer(request, body, 0))
+        if key in self.limited:
+            return httpx.Response(429, json=self.limited[key])
+        return None
 
     def _listed(self, request: httpx.Request) -> httpx.Response | None:
         """The three GETs a run makes, or `None` when this path is a message POST.
@@ -874,6 +902,15 @@ def _estimate_amounts(stderr: str) -> tuple[float, float]:
     return total, float(share)
 
 
+def _upper_bound_amount(stderr: str) -> float:
+    """The upper bound a `--top` run's estimate printed, in USD."""
+    return float(
+        next(line for line in stderr.splitlines() if line.startswith("upper bound if the ")).rsplit(
+            "$", 1
+        )[1]
+    )
+
+
 # Six endpoints with distinct 1-day uptimes, so `--sort uptime` has one obvious order and
 # a `--top 5` still has one candidate left out. Listed in a deliberately wrong order.
 _RANKED = [
@@ -1035,6 +1072,8 @@ def test_sweep_stability_floor_drops_endpoints_and_include_brings_one_back(
         _endpoint("novita", **_health(99.9)),
         _endpoint("relace/fp4", **_health(99.9, status=-2)),
         _endpoint("siliconflow", **_health(77.9)),
+        # the live case: 96.96 rounds to the floor at one decimal, so the reason spells it out
+        _endpoint("parasail/fp8", **_health(96.96)),
         _endpoint("gmicloud", **_health(99.0)),
     ]
     _install(monkeypatch, _transport(endpoints=endpoints))
@@ -1042,10 +1081,12 @@ def test_sweep_stability_floor_drops_endpoints_and_include_brings_one_back(
     outcome = _sweep(cli, bench_paths, *_one_rung())
     assert outcome.code == 0, outcome.stderr
     assert _specs(outcome) == {f"or:{_MODEL}@novita", f"or:{_MODEL}@gmicloud"}
-    assert "dropped: relace/fp4 (status -2), siliconflow (uptime 1d 77.9 %)" in outcome.stderr
+    assert "dropped: relace/fp4 (status -2), siliconflow (uptime 1d 77.90 %)" in outcome.stderr
+    assert "parasail/fp8 (uptime 1d 96.96 %)" in outcome.stderr
     assert [(drop["tag"], drop["reason"]) for drop in _block(outcome)["dropped"]] == [
         ("relace/fp4", "status -2"),
-        ("siliconflow", "uptime 1d 77.9 %"),
+        ("siliconflow", "uptime 1d 77.90 %"),
+        ("parasail/fp8", "uptime 1d 96.96 %"),
     ]
 
     included = _sweep(cli, bench_paths, *_one_rung("--include", "relace"))
@@ -1119,6 +1160,42 @@ def test_sweep_availability_check_removes_a_candidate_without_a_summary_row(
     ]
 
 
+def test_sweep_precheck_names_a_wrapped_429_like_the_probe_does(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check's drop reason reads the record's error the way the probe's skip note does.
+
+    A 429 comes back inside the gateway's own envelope, so the body's own `type` says
+    `error`; the failure is named by the object it wraps, which is what the record keeps.
+    """
+    _write_targets(bench_paths.targets_path, aliases=False)
+    prechecked: list[str] = []
+
+    async def no_wait(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_wait)  # the 429 backoff, without the waiting
+    _install(
+        monkeypatch,
+        _transport(
+            endpoints=_RANKED,
+            prechecked=prechecked,
+            limited={"gmicloud": _RATE_LIMIT_429},
+        ),
+    )
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--sort", "uptime", "--top", "3"))
+    assert outcome.code == 0, outcome.stderr
+    # the rate-limited candidate is out and the next ranked one takes its slot; the three
+    # requests to it are the attempt and its two retries
+    assert list(dict.fromkeys(prechecked)) == ["novita", "siliconflow", "gmicloud", "novita/fp8"]
+    assert prechecked.count("gmicloud") == 3
+    assert _RATE_LIMIT_REASON in outcome.stderr
+    dropped = _block(outcome)["dropped"]
+    assert [drop["tag"] for drop in dropped] == ["gmicloud"]
+    assert dropped[0]["reason"] == _RATE_LIMIT_REASON and dropped[0]["checked"] is True
+
+
 def test_sweep_check_without_top_checks_every_candidate(
     cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1174,6 +1251,50 @@ def test_sweep_availability_check_counts_in_the_estimate_and_the_budget(
     assert "pre-check: up to 6 requests, 600 tokens," in within.stderr
 
 
+def test_sweep_top_budget_must_cover_the_upper_bound(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--budget` has to cover the priciest candidates the check can promote, not the N best.
+
+    The check removes candidates after the estimate was agreed to, so the run can probe
+    endpoints the estimate never priced — here `relace/fp4` and `novita/fp8` instead of the
+    cheaper `openinference` and `siliconflow` the price sort put first.
+    """
+    _write_targets(bench_paths.targets_path, aliases=False)
+    sent: list[dict[str, Any]] = []
+    _install(monkeypatch, _transport(endpoints=_RANKED, sent=sent))
+
+    priced = _sweep(cli, bench_paths, *_one_rung("--top", "2", "--budget", "1"))
+    assert priced.code == 0, priced.stderr
+    total, _ = _estimate_amounts(priced.stderr)
+    upper = _upper_bound_amount(priced.stderr)
+    assert total < upper  # the two best-ranked candidates are not the two priciest
+    sent.clear()
+
+    between = _sweep(
+        cli, bench_paths, *_one_rung("--top", "2", "--budget", f"{(total + upper) / 2:.6f}")
+    )
+    assert between.code == 2
+    assert between.error["kind"] == "invalid_input"
+    message = str(between.error["message"])
+    assert "upper bound" in message and f"${upper:.4f}" in message
+    assert sent == []  # refused before anything went out
+
+
+def test_sweep_prints_no_upper_bound_when_it_equals_the_total(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run that cuts nothing has one number: every candidate is already priced."""
+    _write_targets(bench_paths.targets_path, aliases=False)
+    _install(monkeypatch, _transport(endpoints=_RANKED))
+
+    # without `--top` there is no cut at all, and `--top` on every candidate is the same run
+    for flags in (("--check",), ("--top", "6")):
+        outcome = _sweep(cli, bench_paths, *_one_rung(*flags, "--budget", "1"))
+        assert outcome.code == 0, outcome.stderr
+        assert "upper bound" not in outcome.stderr
+
+
 def test_sweep_nothing_is_sent_when_the_confirmation_is_declined(
     cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1205,20 +1326,26 @@ def test_sweep_nothing_is_sent_when_the_confirmation_is_declined(
     assert outcome.code == 2
     assert outcome.error["kind"] == "confirmation_required"
     assert prechecked == [] and sent == []  # nothing at all went out
-    # the question names the check the estimate priced, and it is asked before any of it
+    # the question names the check the estimate priced, and it is asked before any of it;
+    # it also carries the upper bound, which is what a `--top` run can really be billed
     assert "the availability check runs first, up to 6 candidate(s)" in outcome.stderr
+    assert "if the check promotes the 2 priciest candidates" in outcome.stderr
     assert "pre-check: up to 6 requests," in outcome.stderr
 
 
 def test_sweep_budget_refusal_names_the_check_that_tipped_it(
     cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A budget the specs alone fit says the availability check is what it cannot cover."""
+    """A budget the specs alone fit says the availability check is what it cannot cover.
+
+    The check is what `--check` adds on its own; under `--top` a refusal names the upper
+    bound instead, because the check can promote candidates the estimate did not price.
+    """
     _write_targets(bench_paths.targets_path, aliases=False)
     sent: list[dict[str, Any]] = []
     _install(monkeypatch, _transport(endpoints=_RANKED, sent=sent))
 
-    priced = _sweep(cli, bench_paths, *_one_rung("--top", "2", "--budget", "1"))
+    priced = _sweep(cli, bench_paths, *_one_rung("--check", "--budget", "1"))
     assert priced.code == 0, priced.stderr
     total, share = _estimate_amounts(priced.stderr)
     specs_only = total - share
@@ -1226,12 +1353,12 @@ def test_sweep_budget_refusal_names_the_check_that_tipped_it(
     sent.clear()
 
     tipped = _sweep(
-        cli, bench_paths, *_one_rung("--top", "2", "--budget", f"{specs_only + share / 2:.6f}")
+        cli, bench_paths, *_one_rung("--check", "--budget", f"{specs_only + share / 2:.6f}")
     )
     assert tipped.code == 2
     assert "of it the availability check" in str(tipped.error["message"])
 
-    plain = _sweep(cli, bench_paths, *_one_rung("--top", "2", "--budget", f"{specs_only / 2:.6f}"))
+    plain = _sweep(cli, bench_paths, *_one_rung("--check", "--budget", f"{specs_only / 2:.6f}"))
     assert plain.code == 2
     assert "of it the availability check" not in str(plain.error["message"])
     assert sent == []  # refused before anything went out, both times

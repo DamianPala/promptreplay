@@ -15,7 +15,7 @@ from provibench.core.context import Invocation
 from provibench.core.errors import InvalidInput, NotFound, OperationFailed
 
 if TYPE_CHECKING:
-    from provibench.bench.estimate import PreCheckCost, SpecEstimate, SpecPrices
+    from provibench.bench.estimate import PreCheckCost, SpecEstimate, SpecPrices, UpperBound
     from provibench.bench.openrouter import Endpoint
     from provibench.bench.targets import RunSpec, Target
     from provibench.bench.trace import TraceEntry
@@ -219,6 +219,7 @@ def check_budget(
     *,
     hint: str,
     pre_check: PreCheckCost | None = None,
+    upper_bound: UpperBound | None = None,
 ) -> None:
     """Refuse a budget the estimate cannot cover, before anything is sent.
 
@@ -226,9 +227,11 @@ def check_budget(
     than checked against the priced part of it; the hint is the caller's own advice for a
     total that is merely too big. The availability check is part of that total — it is the
     run's own spend, priced from the plan — so a refusal says how much of it the check is
-    when dropping the check would fit.
+    when dropping the check would fit. A `--top` run brings an `upper_bound` too: the check
+    can promote the priciest candidates under it, and that is the number the budget has to
+    cover, so the refusal names it.
     """
-    from provibench.bench.estimate import estimate_total
+    from provibench.bench.estimate import estimate_total, same_amount
 
     if budget is None:
         return
@@ -239,10 +242,35 @@ def check_budget(
             hint="Add a prices table for that model to targets.toml, or drop --budget",
         )
     total = estimate_total(estimates, pre_check=pre_check)
-    if total is None or total <= budget:
+    # the bound ranks by input price while the total also prices generation, so the
+    # ceiling is whichever of the two is higher, never a bound that undercuts the total
+    ceiling = total if upper_bound is None else max(upper_bound.usd, total or 0.0)
+    if ceiling is None or ceiling <= budget:
         return
-    message = f"The worst-case estimate ${total:.4f} exceeds --budget ${budget:.4f}"
-    if pre_check is not None and pre_check.usd is not None and total - pre_check.usd <= budget:
+    if total is None:
+        message = f"--budget ${budget:.4f} cannot cover what the run can cost"
+    elif total > budget:
+        message = f"The worst-case estimate ${total:.4f} exceeds --budget ${budget:.4f}"
+    else:
+        message = (
+            f"The worst-case estimate ${total:.4f} fits --budget ${budget:.4f}, but the run "
+            f"can cost more"
+        )
+    if (
+        upper_bound is not None
+        and (total is None or upper_bound.usd > total)
+        and not same_amount(upper_bound.usd, total)
+    ):
+        message += (
+            f"; the upper bound is ${upper_bound.usd:.4f} if the {upper_bound.keep} priciest "
+            f"candidates are the ones that answer"
+        )
+    elif (
+        pre_check is not None
+        and pre_check.usd is not None
+        and total is not None
+        and (total - pre_check.usd <= budget)
+    ):
         # the specs alone fit: the availability check is what tips the total over
         message += f", ${pre_check.usd:.4f} of it the availability check"
     raise InvalidInput(message, hint=hint)
