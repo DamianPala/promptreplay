@@ -203,7 +203,7 @@ def _probe_report(
     }
 
 
-def _replay_options(options: ReplayOptions) -> Document:
+def _replay_options(options: "ReplayOptions") -> Document:
     """The full-replay options as a document, without the probe-only fields."""
     return {
         "max_tokens": options.max_tokens,
