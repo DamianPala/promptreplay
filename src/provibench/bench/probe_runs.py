@@ -3,6 +3,11 @@
 A run directory is the record of what was spent, so it carries everything needed to
 re-read the result offline: the rungs and repeats that ran, the endpoint snapshot the
 prices came from, and the price of each spec at run time. `report` never needs a network.
+
+The snapshot (`endpoints`, one record per spec) is the part of that record that goes out
+of date: the endpoint's price, quantization, context length, uptime and status as the run's
+own listing reported them. `history` and `compare` read it to say what moved between two
+runs; a run written before this block existed carries none, and reads as `-`.
 """
 
 from __future__ import annotations
@@ -13,18 +18,51 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from provibench.bench.estimate import SpecPrices
-from provibench.bench.openrouter import Endpoint
+from provibench.bench.openrouter import Endpoint, normalize_provider
 from provibench.bench.probe_models import ProbeOptions, ProbeResult, ProbeRun
 from provibench.bench.replay import RunRef
 from provibench.bench.selection import SweepInfo
 from provibench.bench.targets import RunSpec
 
-__all__ = ["ProbeRunMeta", "SweepInfo", "load_probe_run", "read_protocol", "write_probe_run"]
+__all__ = [
+    "EndpointSnapshot",
+    "ProbeRunMeta",
+    "SweepInfo",
+    "endpoint_snapshot",
+    "load_probe_run",
+    "read_protocol",
+    "write_probe_run",
+]
 """`SweepInfo` lives in `bench.selection` with the criteria it records; it is re-exported
 here because a run directory is where a reader meets it."""
+
+_PRICE_SOURCE_NONE = "n/a"
+"""The source of a spec the run had no listed price for; `ProbeSummary.price_source` too."""
+
+
+class EndpointSnapshot(BaseModel):
+    """One spec's endpoint as the run's own listing described it: the facts that drift.
+
+    A gateway spec's record is the endpoint it pinned (`@tag`): quantization, context
+    length, 1-day uptime and status come from the endpoint list, the two prices from the
+    same listing. A native spec has no endpoint to pin, so only its price and where that
+    price came from are recorded. Everything is nullable because a listing may omit any of
+    it, and because a native spec has nothing to say about quantization at all.
+    """
+
+    tag: str | None = None
+    """The pinned endpoint's tag; `None` for a native spec and for an unpinned gateway one."""
+    price_input: float | None = None
+    price_cache_read: float | None = None
+    source: str = _PRICE_SOURCE_NONE
+    """Where the price came from: `openrouter-endpoint`, `table`, or `n/a` with no price."""
+    quantization: str | None = None
+    context_length: int | None = None
+    uptime_1d: float | None = None
+    status: int | str | None = None
 
 
 class ProbeRunMeta(BaseModel):
@@ -39,11 +77,93 @@ class ProbeRunMeta(BaseModel):
     specs: list[RunRef]
     ttl_s: list[int] | None = None
     """The offsets `--ttl` re-read the first rung at; `None` when TTL never ran."""
-    endpoints: dict[str, list[Endpoint]] = Field(default_factory=dict)
+    endpoints: dict[str, EndpointSnapshot] = Field(default_factory=dict)
+    """One snapshot per spec label; empty for a run that stored no listing."""
     prices: dict[str, SpecPrices] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
     sweep: SweepInfo | None = None
     """The sweep this run expanded from; `None` for a run whose specs were given by hand."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_pre_slice_listing(cls, data: object) -> object:
+        """Skip the whole endpoint listing a run written before this slice stored here.
+
+        That block was `{model slug: [endpoint, ...]}` — the gateway's full list, not a
+        per-spec snapshot — so the entries that are lists are dropped on load. The file
+        keeps them, and the reader shows `-` for those runs, which is the honest answer:
+        the run did not record what its endpoints said about themselves. A snapshot is an
+        object (or an `EndpointSnapshot` on the way in), so this cannot drop one.
+        """
+        document = _as_mapping(data)
+        raw = _as_mapping(document.get("endpoints")) if document is not None else None
+        if document is None or raw is None:
+            return data
+        kept = {label: value for label, value in raw.items() if not isinstance(value, list)}
+        if len(kept) == len(raw):
+            return data
+        return {**document, "endpoints": kept}
+
+
+def endpoint_snapshot(
+    specs: Sequence[RunSpec],
+    index: Mapping[str, list[Endpoint]],
+    prices: Mapping[str, SpecPrices],
+) -> dict[str, EndpointSnapshot]:
+    """One snapshot per spec: the endpoint it pinned, and the price the run priced it with.
+
+    The price is read from the run's own `prices` rather than matched again, so the
+    snapshot can never disagree with the estimate and the report about what a spec cost —
+    including the `targets.toml` override a native spec is priced by. The endpoint facts
+    come from the listing the run already fetched; a spec that pinned no tag has none.
+    """
+    records: dict[str, EndpointSnapshot] = {}
+    for spec in specs:
+        endpoint = _pinned_endpoint(spec, index)
+        listed = prices.get(spec.label)
+        records[spec.label] = EndpointSnapshot(
+            tag=endpoint.tag if endpoint is not None else _pinned_tag(spec),
+            price_input=listed.prices.input if listed is not None else None,
+            price_cache_read=listed.prices.cache_read if listed is not None else None,
+            source=listed.source if listed is not None else _PRICE_SOURCE_NONE,
+            quantization=endpoint.quantization if endpoint is not None else None,
+            context_length=endpoint.context_length if endpoint is not None else None,
+            uptime_1d=endpoint.uptime_1d if endpoint is not None else None,
+            status=endpoint.status if endpoint is not None else None,
+        )
+    return records
+
+
+def _pinned_endpoint(spec: RunSpec, index: Mapping[str, list[Endpoint]]) -> Endpoint | None:
+    """The endpoint a pinned gateway spec names, matched as `spec_prices` matches it.
+
+    The tag and the provider name are both tried, normalized, because a spec pins what the
+    listing calls the endpoint and the two spellings are not guaranteed to agree. An
+    unpinned spec is not one endpoint — any endpoint of the model may have answered it — so
+    its snapshot carries no endpoint facts, only the price the run priced it with.
+    """
+    if spec.target.kind != "openrouter" or not spec.providers:
+        return None
+    wanted = {normalize_provider(name) for name in spec.providers}
+    return next(
+        (
+            endpoint
+            for endpoint in index.get(spec.model, [])
+            if normalize_provider(endpoint.tag) in wanted
+            or normalize_provider(endpoint.provider_name) in wanted
+        ),
+        None,
+    )
+
+
+def _pinned_tag(spec: RunSpec) -> str | None:
+    return spec.providers[0] if spec.providers else None
+
+
+def _as_mapping(value: object) -> dict[str, object] | None:
+    if isinstance(value, dict):
+        return cast("dict[str, object]", value)
+    return None
 
 
 def write_probe_run(  # noqa: PLR0913 (one keyword per part of the record it writes)
@@ -53,7 +173,7 @@ def write_probe_run(  # noqa: PLR0913 (one keyword per part of the record it wri
     run: ProbeRun,
     specs: Sequence[RunSpec],
     *,
-    endpoints: Mapping[str, list[Endpoint]] | None = None,
+    endpoints: Mapping[str, EndpointSnapshot] | None = None,
     prices: Mapping[str, SpecPrices] | None = None,
     notes: Sequence[str] = (),
     sweep: SweepInfo | None = None,

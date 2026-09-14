@@ -43,6 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Traces load from gzipped files, and `scrub --out` writes them
 - Runs persist their protocol, nonce, prices and an endpoint snapshot, so `report`
   re-renders a run with no network, in the terminal, markdown or HTML
+- The endpoint snapshot is per spec and dated: every probe and sweep records the listed
+  input and cache-read price, quantization, context length, uptime 1d and status of the
+  endpoint it pinned, so price and endpoint drift are part of the record
+- `history [MODEL]`: every run of a model in the runs dir as one table — date, hit %,
+  effective $/M, TTFT, tok/s, errors and the listed price of that week — with `--trace` and
+  `--since`, a hit-rate sparkline per spec, and `--json` rows and series
+- `compare RUN_A RUN_B`: the per-spec delta between two runs of one trace, with the listed
+  price change taken from the two endpoint snapshots, `latest`/`previous` naming, and an
+  `invalid_input` refusal across traces or protocols unless `--force`
 - `--force` for `report`'s `--md` and `--html` and for `scrub --out`, which are otherwise
   refused when the target exists
 

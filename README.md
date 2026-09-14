@@ -28,9 +28,10 @@ provibench config show             # effective settings and their source
 provibench completion --install    # shell completions
 ```
 
-`record`, `inspect`, `probe`, `sweep`, `replay`, `report`, `scrub`, and `endpoints` are the
-domain commands built on top of `src/provibench/bench/`; see [docs/design.md](docs/design.md)
-for the full design (trace/replay format, `targets.toml`, cost model).
+`record`, `inspect`, `probe`, `sweep`, `replay`, `report`, `history`, `compare`, `scrub`,
+and `endpoints` are the domain commands built on top of `src/provibench/bench/`; see
+[docs/design.md](docs/design.md) for the full design (trace/replay format, `targets.toml`,
+cost model).
 
 ## Probe
 
@@ -106,9 +107,10 @@ columns without shortening two rows into the same name; a rung that carries a la
 read is allowed to run longer, because that marker is worth the columns, and so is a table
 whose reference row had to be wider than the budget.
 
-A run is persisted under `runs/<trace>/<timestamp>/` as the options, the endpoint snapshot
-and prices it was priced with, and one `<spec>.jsonl` per spec; `report` re-reads it with no
-network. `--json` prints the same summaries for scripts, including the fields the terminal
+A run is persisted under `runs/<trace>/<timestamp>/` as the options, the endpoint snapshot —
+one record per spec: the endpoint it pinned, with its listed input and cache-read price,
+quantization, context length, uptime 1d and status at the time — the prices it was priced
+with, and one `<spec>.jsonl` per spec; `report` re-reads it with no network. `--json` prints the same summaries for scripts, including the fields the terminal
 tables leave out: the served provider names (`served`), every model the responses named
 (`models_seen`), and the raw per-rung records the columns are folded from.
 
@@ -240,6 +242,62 @@ provibench report latest --md report.md
 `--run` takes the same spec shape as `probe`'s positional `SPEC`; `report` accepts a run
 directory, a trace name (its newest run), or `latest` (the newest run across every trace).
 Every command accepts `--json` and the other global flags documented by `provibench schema`.
+
+## Runs over time
+
+Providers change routing, quantization, cache configuration and prices from week to week,
+so the realistic use is a re-run every few days rather than one benchmark. Every `probe`,
+`sweep` and `replay` already writes its run directory under `runs/<trace>/<timestamp>/`, so
+the run directories are the record and a cron line is the whole setup:
+
+```sh
+# every Monday at 09:03, a fresh sweep of the model you actually use
+3 9 * * 1 cd ~/bench && provibench sweep sample deepseek/deepseek-v4.1-flash --yes --budget 1
+```
+
+`cd` matters: the runs dir defaults to `./runs`, so the sweep has to run from the same
+directory every time. Nothing else needs keeping — `history` and `compare` read those
+directories offline, and the listed price they show is the price of the week that run
+happened in.
+
+```sh
+provibench history deepseek/deepseek-v4.1-flash             # every run of the model
+provibench history deepseek/deepseek-v4.1-flash --since 14d # the last two weeks only
+provibench compare previous latest                           # what changed since last week
+provibench compare sample/20260912-090301 sample/20260919-090302  # two named directories
+```
+
+`history` prints one row per run and provider — date, spec, hit %, effective $/M, TTFT,
+tok/s, errors, and the listed $/M from the endpoint snapshot that run recorded — ordered by
+provider and then by date. Under the table one sparkline per spec draws its hit rate across
+the runs it has, oldest on the left, with the run count. `MODEL` is the model the runs'
+specs carry, so a native spec is asked about by the name its own endpoint serves
+(`deepseek-flash`); with no `MODEL`, every model in the runs dir lists.
+
+```
+specs: or:deepseek/deepseek-v4.1-flash@<provider>
+date             | spec    | hit % | eff $/M | TTFT ms | tok/s | errors | in $/M
+2026-09-12 09:03 | @novita | 96.4  | 0.037   | 412     | 38.1  | 0       | 0.300
+2026-09-19 09:03 | @novita | 41.2  | 0.187   | 508     | 31.6  | 1       | 0.240
+
+@novita  █▁  2 run(s)
+```
+
+`compare RUN_A RUN_B` names each run the way `report` does — a directory, a trace name (its
+newest run), or `latest`/`previous` — and prints one row per spec both runs measured with
+the metric as `A → B` and the change between them: hit rate, effective $/M, TTFT and
+tok/s. The listed prices are compared from the two endpoint snapshots, a spec only one run
+measured is named under the table, and runs of different traces or protocols are refused
+(`invalid_input`) unless `--force`, because a full replay's per-turn totals and a probe's
+warm-read hit rate are not the same measurement. The delta is `B − A` of the arguments
+given, so `compare previous latest` reads forward in time.
+
+Every run records what its endpoints said about themselves at the time (`run.json`'s
+`endpoints` block: listed input and cache-read price, quantization, context length, uptime
+1d and status, per gateway spec; a native spec records its price and where it came from).
+That block is what makes a history row's listed price the price of *that* week, and it is
+also how `compare` can say that a price moved. A run written before the block existed still
+lists and still compares — its listed price reads `-`.
 
 ## Sharing a trace
 

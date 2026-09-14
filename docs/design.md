@@ -171,6 +171,8 @@ Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, con
 | `inspect TRACE [--conversation KEY]` | read-only | conversation list plus per-turn table of the selected conversation |
 | `replay TRACE --run SPEC... [--conversation] [--max-tokens] [--delay] [--strip-thinking] [--limit] [--yes]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, summaries}` and the report table |
 | `report RUN_DIR [--md PATH]` | read-only | summaries table, cache curves; `--md` writes markdown |
+| `history [MODEL] [--trace T] [--since DURATION]` | read-only | one row per run and spec from `runs/*/*/run.json`, plus a hit-rate sparkline per spec |
+| `compare RUN_A RUN_B [--trace T] [--force]` | read-only | per-spec deltas between two runs of one trace; `invalid_input` across traces or protocols |
 | `scrub TRACE --out PATH [--replace OLD=NEW]... [--user NAME]... [--turns N] [--allow-email ADDR]... [--force]` | idempotent | `{trace, out, entries_in/out/dropped, selection, bytes_in/out, user_names, rules, changed}` and the rules table |
 | `endpoints MODEL` | read-only | OpenRouter endpoints: tag, provider, quantization, context, prices, uptime, latency, throughput |
 

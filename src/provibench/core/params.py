@@ -13,8 +13,9 @@ import click
 
 from provibench.core.errors import InvalidInput
 
-DURATION_PATTERN = re.compile(r"^([1-9][0-9]*)([smh])$")
-_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600}
+DURATION_PATTERN = re.compile(r"^([1-9][0-9]*)([smhd])$")
+_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+_DURATION_UNITS = ", ".join(_UNIT_SECONDS)
 
 LIMIT_MIN = 1
 LIMIT_MAX = 100
@@ -37,11 +38,11 @@ STDIN_OR_PATH = StdinOrPath()
 
 
 def parse_duration(text: str) -> int:
-    """Seconds for a duration such as `30s`, `5m`, or `2h`; anything else is `InvalidInput`."""
+    """Seconds for a duration such as `30s`, `5m`, `2h`, or `30d`; anything else is invalid."""
     match = DURATION_PATTERN.match(text)
     if match is None:
         raise InvalidInput(
-            f"Invalid duration {text!r}: use a positive integer followed by s, m, or h",
+            f"Invalid duration {text!r}: use a positive integer followed by {_DURATION_UNITS}",
         )
     try:
         seconds = int(match.group(1)) * _UNIT_SECONDS[match.group(2)]

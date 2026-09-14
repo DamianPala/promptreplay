@@ -530,7 +530,12 @@ def test_sweep_records_the_sweep_block_and_the_endpoint_snapshot(
     assert sweep["dropped"] == []
     assert [ranked["tag"] for ranked in sweep["ranking"]] == ["novita"]
     assert sweep["ranking"][0]["price_input"] == pytest.approx(0.3)
-    assert meta["endpoints"][_MODEL]  # the snapshot the estimate was priced from
+    # the snapshot the estimate was priced from, one record per probed spec
+    assert meta["endpoints"][f"or:{_MODEL}@novita"]["tag"] == "novita"
+    native = meta["endpoints"][f"deepseek:{_NATIVE}"]
+    # a native spec has no endpoint of the gateway's listing: its price and its source
+    assert native["tag"] is None and native["quantization"] is None
+    assert native["source"] == "table" and native["price_input"] > 0
     assert [spec["label"] for spec in meta["specs"]] == _labels(outcome.document["summaries"])
     assert outcome.document["sweep"] == meta["sweep"]
 

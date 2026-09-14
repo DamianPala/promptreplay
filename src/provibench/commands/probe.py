@@ -137,7 +137,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     from provibench.bench.estimate import precheck_cost, render_estimate
     from provibench.bench.probe import run_probe
     from provibench.bench.probe_drift import apply_drift
-    from provibench.bench.probe_runs import write_probe_run
+    from provibench.bench.probe_runs import endpoint_snapshot, write_probe_run
     from provibench.bench.probe_summary import summarize_probe
     from provibench.bench.summary import cache_mode_note
     from provibench.bench.trace import load_trace, trace_name
@@ -227,7 +227,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         key,
         run,
         specs,
-        endpoints=index,
+        endpoints=endpoint_snapshot(specs, index, prices),
         prices=prices,
         notes=[*lookup_notes, *parallel],
         sweep=sweep,

@@ -8,12 +8,12 @@ module only decides where the file goes.
 the callback, so building the CLI (schema, --help, completion) stays cheap.
 """
 
-from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
 
+from provibench.commands.run_refs import resolve_run_dir
 from provibench.commands.summary_view import (
     PROBE_SUMMARY,
     SUMMARY,
@@ -34,7 +34,7 @@ from provibench.core.documents import (
     obj,
     string,
 )
-from provibench.core.errors import NotFound, PreconditionFailed
+from provibench.core.errors import PreconditionFailed
 from provibench.core.registry import Command, require_invocation
 from provibench.core.spec import CommandSpec, Effects
 
@@ -256,27 +256,5 @@ def _output_target(invocation: Invocation, path: str, force: bool, *, option: st
 
 
 def _resolve_run_dir(run: str, runs_dir: Path, cwd: Path) -> Path:
-    candidate = Path(run)
-    if not candidate.is_absolute():
-        candidate = cwd / candidate
-    if (candidate / "run.json").is_file():
-        return candidate
-    if run == "latest":
-        newest = _newest_run_dir(runs_dir.glob("*/*"))
-    else:
-        trace_dir = runs_dir / run
-        newest = _newest_run_dir(trace_dir.glob("*")) if trace_dir.is_dir() else None
-    if newest is None:
-        raise NotFound(
-            f"No run found for {run!r}",
-            hint=f"Pass a run directory, a trace name under {runs_dir}, or 'latest'",
-        )
-    return newest
-
-
-def _newest_run_dir(candidates: Iterable[Path]) -> Path | None:
-    runs = sorted(
-        (path for path in candidates if path.is_dir() and (path / "run.json").is_file()),
-        key=lambda path: path.name,
-    )
-    return runs[-1] if runs else None
+    """RUN resolved the way `report` names runs: a directory, a trace, or `latest`."""
+    return resolve_run_dir(run, runs_dir, cwd)

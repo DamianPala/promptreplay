@@ -19,9 +19,11 @@ from provibench.core.registry import Command
 from tests.conftest import Cli
 
 EXPECTED_COMMANDS = {
+    "compare": ("read_only", False, False),
     "completion": ("idempotent", False, False),
     "config show": ("read_only", False, False),
     "endpoints": ("read_only", False, False),
+    "history": ("read_only", False, False),
     "inspect": ("read_only", False, False),
     "probe": ("non_idempotent", True, False),
     "record": ("non_idempotent", False, False),
@@ -189,8 +191,10 @@ _O4_TYPES: dict[str, tuple[type, ...]] = {
 
 # Extra argv each listed command needs so it can succeed.
 _SUCCESS_ARGV: dict[str, list[str]] = {
+    "compare": ["--trace", "fixture-run", "latest", "previous"],
     "completion": ["bash"],
     "endpoints": ["deepseek/model"],
+    "history": [],
     "inspect": ["fixture"],
     "probe": ["probe-fixture", "t:model-a", "--yes"],
     "record": ["--name", "record-fixture", "--upstream", "https://example.invalid", "--append"],
@@ -270,6 +274,17 @@ def _seed_domain_fixtures(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
         cache_write=0,
         output_tokens=1,
     )
+    # Two runs of one trace, an old stamp and a new one: `history` needs a run to list and
+    # `compare latest previous` needs an order to read the two of them in.
+    older = write_run(
+        cli.root / "runs",
+        "fixture-run",
+        "c1",
+        [spec],
+        ReplayOptions(),
+        results={spec.label: [result]},
+    )
+    older.rename(older.parent / "20200101-000000")
     write_run(
         cli.root / "runs",
         "fixture-run",

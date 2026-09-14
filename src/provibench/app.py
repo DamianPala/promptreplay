@@ -8,7 +8,9 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from provibench.commands.compare import compare as compare_command
 from provibench.commands.endpoints import endpoints as endpoints_command
+from provibench.commands.history import history as history_command
 from provibench.commands.inspect import inspect as inspect_command
 from provibench.commands.probe import probe as probe_command
 from provibench.commands.record import record as record_command
@@ -83,6 +85,8 @@ def build_cli() -> Root:
     root.add_command(schema_command(distribution=PROGRAM, conformance=CONFORMANCE))
     root.add_command(config_group(DECLARATION))
     root.add_command(completion_command(PROGRAM))
+    root.add_command(history_command)
+    root.add_command(compare_command)
     root.add_command(record_command)
     root.add_command(inspect_command)
     root.add_command(probe_command)
