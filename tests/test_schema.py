@@ -9,9 +9,10 @@ import pytest
 
 from provibench.app import build_cli
 from provibench.bench.openrouter import Endpoint
+from provibench.bench.probe import ProbeOptions, ProbeResult, ProbeRun
 from provibench.bench.replay import ReplayOptions, ReplayResult, write_run
 from provibench.bench.targets import Prices, RunSpec, Target
-from provibench.bench.trace import TraceEntry, append_entry
+from provibench.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
 from provibench.core.documents import Document, as_document, as_list
 from provibench.core.introspection import command_flags, listed_commands
 from provibench.core.registry import Command
@@ -22,6 +23,7 @@ EXPECTED_COMMANDS = {
     "config show": ("read_only", False, False),
     "endpoints": ("read_only", False, False),
     "inspect": ("read_only", False, False),
+    "probe": ("non_idempotent", True, False),
     "record": ("non_idempotent", False, False),
     "replay": ("non_idempotent", True, False),
     "report": ("idempotent", False, False),
@@ -188,20 +190,15 @@ _SUCCESS_ARGV: dict[str, list[str]] = {
     "completion": ["bash"],
     "endpoints": ["deepseek/model"],
     "inspect": ["fixture"],
+    "probe": ["probe-fixture", "t:model-a", "--yes"],
     "record": ["--name", "record-fixture", "--upstream", "https://example.invalid", "--append"],
     "replay": ["fixture", "--run", "t:model-a", "--yes"],
     "report": ["fixture-run"],
 }
 
 
-def _seed_domain_fixtures(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fixture state and boundary fakes so record/inspect/replay/report/endpoints succeed.
-
-    No network, no API keys: `serve`, `replay_all`, and `fetch_endpoints` are faked at
-    their bench-module source (the point commands import them from, lazily, on every
-    call), matching the "mock only boundaries" rule.
-    """
-    traces_dir = cli.root / "traces"
+def _seed_traces(traces_dir: Path) -> None:
+    """Two recorded traces: one single turn, and one with a rung and its warm turn."""
     traces_dir.mkdir(parents=True, exist_ok=True)
     append_entry(
         traces_dir / "fixture.jsonl",
@@ -213,6 +210,35 @@ def _seed_domain_fixtures(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
             conversation="c1",
         ),
     )
+    for seq in (1, 2):
+        append_entry(
+            traces_dir / "probe-fixture.jsonl",
+            TraceEntry(
+                seq=seq,
+                ts="2026-01-01T00:00:00Z",
+                path="/v1/messages",
+                body={
+                    "model": "orig",
+                    "system": [{"type": "text", "text": "You are helpful."}],
+                    "messages": [{"role": "user", "content": f"question {seq}"}],
+                    "max_tokens": 1024,
+                },
+                conversation="c1",
+                response=RecordedResponse(
+                    status=200, latency_ms=1.0, usage=Usage(input_tokens=100)
+                ),
+            ),
+        )
+
+
+def _seed_domain_fixtures(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fixture state and boundary fakes so record/inspect/probe/replay/report/endpoints succeed.
+
+    No network, no API keys: `serve`, `run_probe`, `replay_all`, and `fetch_endpoints` are
+    faked at their bench-module source (the point commands import them from, lazily, on
+    every call), matching the "mock only boundaries" rule.
+    """
+    _seed_traces(cli.root / "traces")
 
     targets_path = cli.home / ".config" / "provibench" / "targets.toml"
     targets_path.parent.mkdir(parents=True, exist_ok=True)
@@ -258,6 +284,40 @@ def _seed_domain_fixtures(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
             ),
         )
 
+    async def fake_run_probe(
+        specs: list[RunSpec],
+        entries: list[TraceEntry],
+        opts: ProbeOptions,
+        env: object,
+        **_: object,
+    ) -> ProbeRun:
+        """A served cold write and one served warm read per spec, so nothing is partial."""
+        records: dict[str, list[ProbeResult]] = {}
+        for spec in specs:
+            cold = ProbeResult(
+                spec_label=spec.label,
+                rung=1,
+                role="cold",
+                attempt=0,
+                seq=1,
+                status=200,
+                latency_ms=1.0,
+                prompt_total=100,
+            )
+            warm = ProbeResult(
+                spec_label=spec.label,
+                rung=1,
+                role="warm",
+                attempt=1,
+                seq=2,
+                status=200,
+                latency_ms=1.0,
+                prompt_total=110,
+                cached=100,
+            )
+            records[spec.label] = [cold, warm]
+        return ProbeRun(run_hex="0123456789ab", options=opts.resolved(entries), records=records)
+
     async def fake_replay_all(
         specs: list[RunSpec], entries: object, opts: object, env: object, **kwargs: object
     ) -> dict[str, list[ReplayResult]]:
@@ -291,6 +351,7 @@ def _seed_domain_fixtures(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
         ]
 
     monkeypatch.setattr("provibench.bench.proxy.serve", fake_serve)
+    monkeypatch.setattr("provibench.bench.probe.run_probe", fake_run_probe)
     monkeypatch.setattr("provibench.bench.replay.replay_all", fake_replay_all)
     monkeypatch.setattr("provibench.bench.openrouter.fetch_endpoints", fake_fetch_endpoints)
 

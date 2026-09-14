@@ -1,0 +1,201 @@
+"""Tests for the worst-case estimates: what they price, and what they say about it."""
+
+from __future__ import annotations
+
+from typing import Literal
+
+import pytest
+
+from provibench.bench.estimate import (
+    SpecPrices,
+    estimate_total,
+    probe_estimate,
+    render_estimate,
+    replay_estimate,
+    spec_prices,
+)
+from provibench.bench.openrouter import Endpoint
+from provibench.bench.targets import Prices, RunSpec, Target
+from provibench.bench.trace import RecordedResponse, TraceEntry, Usage
+
+_TABLE = Prices(input=1.0, cache_read=0.1, cache_write=1.0, output=2.0)
+
+
+def _target(
+    kind: Literal["openrouter", "anthropic"] = "anthropic",
+    prices: dict[str, Prices] | None = None,
+) -> Target:
+    return Target(
+        name="t",
+        url="https://api.test/v1/messages",
+        api_key_env="X_KEY",
+        kind=kind,
+        prices=prices or {},
+    )
+
+
+def _endpoint(tag: str, provider_name: str, prompt_per_token: str) -> Endpoint:
+    return Endpoint(
+        tag=tag,
+        provider_name=provider_name,
+        prices=Prices(
+            input=float(prompt_per_token) * 1e6,
+            cache_read=float(prompt_per_token) / 10 * 1e6,
+            cache_write=float(prompt_per_token) * 1e6,
+            output=float(prompt_per_token) * 2e6,
+        ),
+    )
+
+
+def _entry(seq: int, prompt_tokens: int | None) -> TraceEntry:
+    response = None
+    if prompt_tokens is not None:
+        response = RecordedResponse(
+            status=200, latency_ms=1.0, usage=Usage(input_tokens=prompt_tokens)
+        )
+    return TraceEntry(
+        seq=seq,
+        ts="2026-01-01T00:00:00Z",
+        path="/v1/messages",
+        body={"messages": [{"role": "user", "content": f"question {seq}"}]},
+        conversation="c1",
+        response=response,
+    )
+
+
+# --- pricing ------------------------------------------------------------------
+
+
+def test_spec_prices_takes_the_endpoint_a_pinned_spec_named() -> None:
+    index = {
+        "model": [
+            _endpoint("cheap", "Cheap", "0.0000001"),
+            _endpoint("novita", "Novita", "0.0000003"),
+        ]
+    }
+    spec = RunSpec(target=_target("openrouter"), model="model", providers=["Novita"])
+    prices = spec_prices(spec, index)
+    assert prices is not None
+    assert prices.prices.input == 0.3
+    assert prices.source == "openrouter-endpoint"
+    assert prices.provider == "Novita"
+
+
+def test_spec_prices_takes_the_most_expensive_endpoint_when_unpinned() -> None:
+    index = {
+        "model": [
+            _endpoint("cheap", "Cheap", "0.0000001"),
+            _endpoint("pricey", "Pricey", "0.0000009"),
+            _endpoint("mid", "Mid", "0.0000005"),
+        ]
+    }
+    spec = RunSpec(target=_target("openrouter"), model="model")
+    prices = spec_prices(spec, index)
+    assert prices is not None
+    assert prices.prices.input == pytest.approx(0.9)  # worst case, not the cheapest endpoint
+    assert prices.provider == "Pricey"
+
+
+def test_spec_prices_without_a_match_is_none() -> None:
+    spec = RunSpec(target=_target("openrouter"), model="model", providers=["ghost"])
+    assert spec_prices(spec, {"model": [_endpoint("cheap", "Cheap", "0.0000001")]}) is None
+    assert spec_prices(spec, {}) is None
+    assert spec_prices(RunSpec(target=_target(), model="model"), {}) is None
+
+
+def test_spec_prices_reads_the_targets_table_for_a_native_spec() -> None:
+    spec = RunSpec(target=_target("anthropic", {"model": _TABLE}), model="model")
+    prices = spec_prices(spec, {})
+    assert prices is not None
+    assert prices.source == "table"
+    assert prices.provider is None
+
+
+# --- estimates ----------------------------------------------------------------
+
+
+def test_probe_estimate_counts_the_cold_write_and_every_warm_read() -> None:
+    entries = [_entry(1, 100), _entry(2, 200), _entry(3, 300)]
+    prices = SpecPrices(prices=_TABLE, source="table")
+    # rung 1: cold turn 1 (100) + 2 warm reads of turn 2 (2 * 200)
+    estimate = probe_estimate(_spec_anthropic(), entries, [1], [2], prices)
+    assert estimate.tokens == 500
+    assert estimate.usd == 500 * 1.0 * 1e-6
+    assert estimate.tokens_known is True
+
+
+def test_probe_estimate_marks_unknown_tokens_and_prices_nothing() -> None:
+    entries = [_entry(1, None), _entry(2, 200)]
+    prices = SpecPrices(prices=_TABLE, source="table")
+    estimate = probe_estimate(_spec_anthropic(), entries, [1], [1], prices)
+    assert estimate.tokens == 200
+    assert estimate.tokens_known is False
+    assert estimate.usd is None  # a total over unknown tokens would be a guess
+    assert "turn 1 has no recorded prompt usage; its tokens are unknown" in estimate.notes
+
+
+def test_probe_estimate_notes_that_an_unpinned_endpoint_is_the_expensive_one() -> None:
+    entries = [_entry(1, 100), _entry(2, 200)]
+    index = {
+        "model": [
+            _endpoint("cheap", "Cheap", "0.0000001"),
+            _endpoint("pricey", "Pricey", "0.0000009"),
+        ]
+    }
+    spec = RunSpec(target=_target("openrouter"), model="model")
+    prices = spec_prices(spec, index)
+    estimate = probe_estimate(spec, entries, [1], [1], prices)
+    assert estimate.usd is not None
+    [note] = estimate.notes
+    assert "most expensive endpoint (Pricey)" in note
+    assert "@provider" in note
+
+
+def test_probe_estimate_without_a_price_is_tokens_only() -> None:
+    entries = [_entry(1, 100), _entry(2, 200)]
+    estimate = probe_estimate(_spec_anthropic(), entries, [1], [1], None)
+    assert estimate.tokens == 300
+    assert estimate.usd is None
+    assert estimate.notes == ["no listed input price for this model; the estimate is tokens only"]
+
+
+def test_replay_estimate_counts_every_selected_turn_once() -> None:
+    entries = [_entry(1, 100), _entry(2, 200), _entry(3, 300)]
+    prices = SpecPrices(prices=_TABLE, source="table")
+    estimate = replay_estimate(_spec_anthropic(), entries, prices)
+    assert estimate.tokens == 600
+    assert estimate.usd == 600 * 1.0 * 1e-6
+
+
+def _spec_anthropic() -> RunSpec:
+    return RunSpec(target=_target("anthropic", {"model": _TABLE}), model="model")
+
+
+# --- rendering ----------------------------------------------------------------
+
+
+def test_estimate_total_sums_what_is_known() -> None:
+    entries = [_entry(1, 100), _entry(2, 100)]
+    priced = probe_estimate(
+        _spec_anthropic(), entries, [1], [0], SpecPrices(prices=_TABLE, source="table")
+    )
+    unpriced = probe_estimate(_spec_anthropic(), entries, [1], [0], None)
+    assert estimate_total([priced]) == 100 * 1.0 * 1e-6
+    assert estimate_total([priced, unpriced]) == 100 * 1.0 * 1e-6  # the known part only
+    assert estimate_total([unpriced]) is None
+
+
+def test_render_estimate_says_retries_are_excluded() -> None:
+    entries = [_entry(1, 100), _entry(2, 100)]
+    estimate = probe_estimate(
+        _spec_anthropic(), entries, [1], [0], SpecPrices(prices=_TABLE, source="table")
+    )
+    text = render_estimate([estimate])
+    assert "excluding retries" in text
+    assert "worst case assumes no cache hit" in text
+
+
+def test_render_estimate_without_specs_is_only_a_header_and_a_total() -> None:
+    lines = render_estimate([]).splitlines()
+    assert lines[0].startswith("spec")
+    assert lines[2].startswith("total")

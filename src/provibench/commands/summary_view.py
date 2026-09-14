@@ -20,9 +20,11 @@ from provibench.core.documents import (
     array,
     as_document,
     as_list,
+    boolean,
     integer,
     nullable_number,
     nullable_object,
+    nullable_string,
     number,
     obj,
     string,
@@ -31,6 +33,7 @@ from provibench.core.terminal_text import escape_terminal_text
 
 if TYPE_CHECKING:
     from provibench.bench.pricing import CostBreakdown
+    from provibench.bench.probe_summary import ProbeSummary
     from provibench.bench.summary import RunSummary
 
 _PROVIDER_COUNT = obj({"provider": string(), "count": integer()}, required=["provider", "count"])
@@ -107,6 +110,77 @@ _COLUMNS = (
     "p95 ms",
 )
 
+_RUNG_SUMMARY = obj(
+    {
+        "spec": string(),
+        "rung": integer(),
+        "prompt_cold": integer(),
+        "cached_cold": integer(),
+        "hit_rate": number(),
+        "prefix_fraction": nullable_number(),
+        "hits": array(nullable_number()),
+        "cold_ms": number(),
+        "warm_ms": nullable_number(),
+        "cache_write_cold": integer(),
+        "errors": integer(),
+        "retries": integer(),
+        "skipped": boolean(),
+        "cold_error": nullable_string(),
+    },
+    required=[
+        "spec",
+        "rung",
+        "prompt_cold",
+        "cached_cold",
+        "hit_rate",
+        "prefix_fraction",
+        "hits",
+        "cold_ms",
+        "warm_ms",
+        "cache_write_cold",
+        "errors",
+        "retries",
+        "skipped",
+        "cold_error",
+    ],
+)
+PROBE_SUMMARY = obj(
+    {
+        "label": string(),
+        "rungs": array(_RUNG_SUMMARY),
+        "hit_rate": nullable_number(),
+        "prefix_fraction": nullable_number(),
+        "h": nullable_number(),
+        "input_price": nullable_number(),
+        "cache_read_price": nullable_number(),
+        "price_source": string(),
+        "eff_per_m_prompt": nullable_number(),
+        "billed_usd": nullable_number(),
+        "providers_seen": array(_PROVIDER_COUNT),
+        "errors": integer(),
+        "retries": integer(),
+        "skipped": integer(),
+        "notes": array(string()),
+    },
+    required=[
+        "label",
+        "rungs",
+        "hit_rate",
+        "prefix_fraction",
+        "h",
+        "input_price",
+        "cache_read_price",
+        "price_source",
+        "eff_per_m_prompt",
+        "billed_usd",
+        "providers_seen",
+        "errors",
+        "retries",
+        "skipped",
+        "notes",
+    ],
+)
+
 
 def summary_to_document(summary: RunSummary) -> Document:
     """`summary` reshaped so every field has a fixed set of JSON properties."""
@@ -134,6 +208,77 @@ def summary_to_document(summary: RunSummary) -> Document:
         "latency_p95_ms": summary.latency_p95_ms,
         "notes": list(summary.notes),
     }
+
+
+def probe_summary_to_document(summary: ProbeSummary) -> Document:
+    """`summary` reshaped so `providers_seen` has a fixed set of JSON properties."""
+    return {
+        "label": summary.label,
+        "rungs": [rung.model_dump() for rung in summary.rungs],
+        "hit_rate": summary.hit_rate,
+        "prefix_fraction": summary.prefix_fraction,
+        "h": summary.h,
+        "input_price": summary.input_price,
+        "cache_read_price": summary.cache_read_price,
+        "price_source": summary.price_source,
+        "eff_per_m_prompt": summary.eff_per_m_prompt,
+        "billed_usd": summary.billed_usd,
+        "providers_seen": [
+            {"provider": name, "count": count}
+            for name, count in sorted(summary.providers_seen.items())
+        ],
+        "errors": summary.errors,
+        "retries": summary.retries,
+        "skipped": summary.skipped,
+        "notes": list(summary.notes),
+    }
+
+
+def render_probe_run(invocation: Invocation, document: Document) -> None:
+    """Human rendering of a `probe` result: the spec and rung tables."""
+    _render_probe(invocation, document.get("summaries"))
+
+
+def probe_tables_text(document: Document) -> str:
+    """The probe run's two tables as text, for a caller that writes them itself."""
+    from provibench.bench.probe_summary import render_probe
+
+    entries = [d for d in map(as_document, as_list(document.get("summaries")) or []) if d]
+    return render_probe([_probe_summary(entry) for entry in entries])
+
+
+def render_probe_report(invocation: Invocation, document: Document) -> None:
+    """Human rendering of `report` for a probe run: the same two tables."""
+    _render_probe(invocation, document.get("probe_summaries"))
+
+
+def render_report_document(invocation: Invocation, document: Document) -> None:
+    """`report`'s human rendering: the probe tables for a probe run, else the replay table."""
+    if document.get("protocol") == "probe":
+        render_probe_report(invocation, document)
+        return
+    render_summaries(invocation, document)
+
+
+def _render_probe(invocation: Invocation, value: object) -> None:
+    """The probe tables are plain text, so they render the same at any terminal width."""
+    from provibench.bench.probe_summary import render_probe
+
+    entries = [d for d in map(as_document, as_list(value) or []) if d]
+    summaries = [_probe_summary(entry) for entry in entries]
+    stdout = invocation.streams.stdout
+    escaped = [escape_terminal_text(line) for line in render_probe(summaries).splitlines()]
+    stdout.write("\n".join(escaped) + "\n")
+    stdout.flush()
+
+
+def _probe_summary(entry: Document) -> ProbeSummary:
+    """The document shape back into a `ProbeSummary`: `providers_seen` is a list there."""
+    from provibench.bench.probe_summary import ProbeSummary
+
+    providers = [d for d in map(as_document, as_list(entry.get("providers_seen")) or []) if d]
+    seen = {str(p.get("provider")): _count(p.get("count")) for p in providers}
+    return ProbeSummary.model_validate({**entry, "providers_seen": seen})
 
 
 def _cost_document(cost: CostBreakdown | None) -> Document | None:

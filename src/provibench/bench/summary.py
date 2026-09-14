@@ -128,7 +128,10 @@ def _notes(results: list[ReplayResult]) -> list[str]:
 
 
 def summarize(
-    label: str, results: list[ReplayResult], requested_providers: list[str]
+    label: str,
+    results: list[ReplayResult],
+    requested_providers: list[str],
+    notes: Sequence[str] = (),
 ) -> RunSummary:
     ok = sum(1 for r in results if r.status == 200)
     successful_latencies = [r.latency_ms for r in results if r.status == 200]
@@ -154,8 +157,13 @@ def summarize(
         effective_per_m_prompt=_effective_per_m(prompt_total, cost, billed_total),
         latency_p50_ms=_percentile(successful_latencies, 50),
         latency_p95_ms=_percentile(successful_latencies, 95),
-        notes=_notes(results),
+        notes=[*notes, *_notes(results)],
     )
+
+
+def cache_mode_note(warm: bool) -> str:
+    """How a run treated the provider's cache, for the report's notes column."""
+    return "warm" if warm else "cold (nonce)"
 
 
 def _fmt(value: float | None, digits: int = 4) -> str:

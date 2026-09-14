@@ -8,13 +8,15 @@ top of it, so the only boundary mocked here is the network `httpx.AsyncClient` o
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
 
-from provibench.bench.trace import TraceEntry, append_entry
+from provibench.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
 from provibench.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
@@ -38,14 +40,28 @@ def _write_targets(path: Path) -> None:
     path.write_text(_TARGETS_TOML)
 
 
-def _trace_entry(seq: int, conversation: str = "c1", text: str = "hi") -> TraceEntry:
+def _trace_entry(
+    seq: int, conversation: str = "c1", text: str = "hi", *, prompt_tokens: int = 100
+) -> TraceEntry:
+    """One recorded turn: a system prompt (so the run nonce has somewhere to go) and a usage."""
     return TraceEntry(
         seq=seq,
         ts=f"2026-01-01T00:00:{seq:02d}Z",
         path="/v1/messages",
         headers={"anthropic-version": "2023-06-01"},
-        body={"model": "orig", "messages": [{"role": "user", "content": text}], "max_tokens": 1024},
+        body={
+            "model": "orig",
+            "system": [
+                {"type": "text", "text": "You are helpful."},
+                {"type": "text", "text": "Repo context.", "cache_control": {"type": "ephemeral"}},
+            ],
+            "messages": [{"role": "user", "content": text}],
+            "max_tokens": 1024,
+        },
         conversation=conversation,
+        response=RecordedResponse(
+            status=200, latency_ms=1.0, usage=Usage(input_tokens=prompt_tokens)
+        ),
     )
 
 
@@ -76,6 +92,23 @@ def _ok_response(request: httpx.Request) -> httpx.Response:
     )
 
 
+def _capture(bodies: list[dict[str, Any]]) -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return _ok_response(request)
+
+    return handler
+
+
+def _run_dir(outcome: Any) -> Path:
+    return Path(str(outcome.document["run_dir"]))
+
+
+def _meta(run_dir: Path) -> dict[str, Any]:
+    raw: dict[str, Any] = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    return raw
+
+
 def test_replay_runs_and_persists_a_run(
     cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -93,7 +126,7 @@ def test_replay_runs_and_persists_a_run(
     assert doc["conversation"] == "c1"
     assert doc["turns"] == 2
     assert doc["changed"] is True
-    run_dir = Path(str(doc["run_dir"]))
+    run_dir = _run_dir(outcome)
     assert (run_dir / "run.json").is_file()
     [summary] = [d for d in map(as_document, as_list(doc["summaries"]) or []) if d]
     assert summary["label"] == "t:model-a"
@@ -216,3 +249,158 @@ def test_replay_missing_trace_is_not_found(cli: Cli, bench_paths: BenchPaths) ->
     )
     assert outcome.code == 1
     assert outcome.error["kind"] == "not_found"
+
+
+# --- the run nonce ------------------------------------------------------------
+
+
+def test_replay_stamps_one_run_nonce_into_every_turn_and_records_it(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    trace = bench_paths.traces_dir / "t.jsonl"
+    append_entry(trace, _trace_entry(1))
+    append_entry(trace, _trace_entry(2))
+    bodies: list[dict[str, Any]] = []
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(_capture(bodies)))
+
+    outcome = cli.run(
+        "replay", "t", "--run", "t:model-a", "--yes", env={**bench_paths.env, "X_KEY": "secret"}
+    )
+    assert outcome.code == 0, outcome.stderr
+
+    nonces = [body["system"][0]["text"].splitlines()[0] for body in bodies]
+    assert len(nonces) == 2
+    assert len(set(nonces)) == 1  # one nonce per run, so turn 2 can read turn 1's write
+    assert nonces[0].startswith("provibench-run:")
+    meta = _meta(_run_dir(outcome))
+    assert meta["protocol"] == "full"
+    assert meta["run_hex"] == nonces[0].removeprefix("provibench-run:")
+    assert meta["options"]["warm"] is False
+    assert bodies[0]["system"][0]["text"].endswith("You are helpful.")
+    # the nonce goes into the first block only; the recorded marker block is untouched
+    assert bodies[0]["system"][1] == {
+        "type": "text",
+        "text": "Repo context.",
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def test_replay_warm_sends_no_nonce_and_records_the_choice(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    trace = bench_paths.traces_dir / "t.jsonl"
+    append_entry(trace, _trace_entry(1))
+    bodies: list[dict[str, Any]] = []
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(_capture(bodies)))
+
+    outcome = cli.run(
+        "replay",
+        "t",
+        "--run",
+        "t:model-a",
+        "--warm",
+        "--yes",
+        env={**bench_paths.env, "X_KEY": "secret"},
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert bodies[0]["system"][0]["text"] == "You are helpful."
+    assert _meta(_run_dir(outcome))["options"]["warm"] is True
+
+
+def test_replay_without_a_system_prompt_fails_before_any_request(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    trace = bench_paths.traces_dir / "t.jsonl"
+    entry = _trace_entry(1)
+    entry.body.pop("system")
+    append_entry(trace, entry)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return _ok_response(request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+
+    outcome = cli.run(
+        "replay", "t", "--run", "t:model-a", "--yes", env={**bench_paths.env, "X_KEY": "secret"}
+    )
+    assert outcome.code == 1
+    assert outcome.error["kind"] == "operation_failed"
+    assert "--warm" in str(outcome.error["message"])
+    assert calls["n"] == 0
+
+
+# --- estimate and budget ------------------------------------------------------
+
+
+def test_replay_shows_the_worst_case_estimate_before_sending(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    trace = bench_paths.traces_dir / "t.jsonl"
+    append_entry(trace, _trace_entry(1, prompt_tokens=200))
+    append_entry(trace, _trace_entry(2, prompt_tokens=300))
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(_ok_response))
+
+    outcome = cli.run(
+        "replay", "t", "--run", "t:model-a", "--yes", env={**bench_paths.env, "X_KEY": "secret"}
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert "worst case" in outcome.stderr
+    assert "500" in outcome.stderr  # 200 + 300 recorded prompt tokens
+    assert "0.0005" in outcome.stderr  # 500 tokens at 1.0 USD/M
+
+
+def test_replay_budget_refuses_above_the_estimate_and_sends_nothing(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    trace = bench_paths.traces_dir / "t.jsonl"
+    append_entry(trace, _trace_entry(1, prompt_tokens=200))
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return _ok_response(request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+
+    outcome = cli.run(
+        "replay",
+        "t",
+        "--run",
+        "t:model-a",
+        "--budget",
+        "0.0001",
+        "--yes",
+        env={**bench_paths.env, "X_KEY": "secret"},
+    )
+    assert outcome.code == 2
+    assert outcome.error["kind"] == "invalid_input"
+    assert calls["n"] == 0
+    assert not (bench_paths.runs_dir / "t").exists()
+
+
+def test_replay_budget_within_the_estimate_still_runs(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    trace = bench_paths.traces_dir / "t.jsonl"
+    append_entry(trace, _trace_entry(1, prompt_tokens=200))
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(_ok_response))
+
+    outcome = cli.run(
+        "replay",
+        "t",
+        "--run",
+        "t:model-a",
+        "--budget",
+        "1.0",
+        "--yes",
+        env={**bench_paths.env, "X_KEY": "secret"},
+    )
+    assert outcome.code == 0, outcome.stderr

@@ -36,11 +36,13 @@ def _target(
 
 
 _MINIMAL_OK_BODY = {"id": "msg_1", "usage": {"input_tokens": 1, "output_tokens": 1}}
+_RUN_HEX = "0123456789ab"
 
 
 def _trace_entry(seq: int, *, extra_body: dict[str, Any] | None = None) -> TraceEntry:
     body: dict[str, Any] = {
         "model": "orig-model",
+        "system": [{"type": "text", "text": "You are helpful."}],
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": 1024,
     }
@@ -203,7 +205,9 @@ def test_replay_run_openrouter_end_to_end_enriches_from_generation() -> None:
 
     async def run() -> list[ReplayResult]:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await replay_run(spec, entries, opts, "fake-key", client=client)
+            return await replay_run(
+                spec, entries, opts, "fake-key", client=client, run_hex=_RUN_HEX
+            )
 
     results = asyncio.run(run())
     assert len(results) == 2
@@ -243,7 +247,9 @@ def test_replay_run_anthropic_end_to_end_uses_price_table() -> None:
 
     async def run() -> list[ReplayResult]:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await replay_run(spec, entries, ReplayOptions(), "fake-key", client=client)
+            return await replay_run(
+                spec, entries, ReplayOptions(), "fake-key", client=client, run_hex=_RUN_HEX
+            )
 
     results = asyncio.run(run())
     assert len(results) == 1
@@ -263,7 +269,9 @@ def test_replay_run_anthropic_missing_price_table_notes_and_no_cost() -> None:
 
     async def run() -> list[ReplayResult]:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await replay_run(spec, entries, ReplayOptions(), "fake-key", client=client)
+            return await replay_run(
+                spec, entries, ReplayOptions(), "fake-key", client=client, run_hex=_RUN_HEX
+            )
 
     results = asyncio.run(run())
     assert results[0].cost is None
@@ -287,7 +295,9 @@ def test_replay_run_retries_once_after_400_thinking_error() -> None:
 
     async def run() -> list[ReplayResult]:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await replay_run(spec, [entry], ReplayOptions(), "fake-key", client=client)
+            return await replay_run(
+                spec, [entry], ReplayOptions(), "fake-key", client=client, run_hex=_RUN_HEX
+            )
 
     results = asyncio.run(run())
     assert len(bodies_seen) == 2
@@ -308,7 +318,9 @@ def test_replay_run_400_without_trigger_words_does_not_retry() -> None:
 
     async def run() -> list[ReplayResult]:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await replay_run(spec, [entry], ReplayOptions(), "fake-key", client=client)
+            return await replay_run(
+                spec, [entry], ReplayOptions(), "fake-key", client=client, run_hex=_RUN_HEX
+            )
 
     results = asyncio.run(run())
     assert calls["n"] == 1
@@ -325,7 +337,9 @@ def test_replay_run_network_error_becomes_status_zero_and_does_not_abort() -> No
 
     async def run() -> list[ReplayResult]:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await replay_run(spec, entries, ReplayOptions(), "fake-key", client=client)
+            return await replay_run(
+                spec, entries, ReplayOptions(), "fake-key", client=client, run_hex=_RUN_HEX
+            )
 
     results = asyncio.run(run())
     assert len(results) == 2

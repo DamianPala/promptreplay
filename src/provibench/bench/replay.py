@@ -13,20 +13,14 @@ from typing import Any, cast
 import httpx
 from pydantic import BaseModel, Field
 
-from provibench.bench.openrouter import (
-    Generation,
-    fetch_endpoints,
-    fetch_generation,
-    normalize_provider,
-)
-from provibench.bench.pricing import CostBreakdown, compute_cost
-from provibench.bench.sse import ParsedMessage, parse_json_message
-from provibench.bench.targets import Prices, RunSpec, resolve_api_key
+from provibench.bench.enrich import enrich_anthropic, enrich_openrouter
+from provibench.bench.nonce import inject_nonce, require_stampable, run_nonce
+from provibench.bench.pricing import CostBreakdown
+from provibench.bench.requests import build_headers, parse_body, post, should_retry_without_thinking
+from provibench.bench.targets import RunSpec, resolve_api_key
 from provibench.bench.trace import TraceEntry, Usage
 
 _STRIPPED_BLOCK_TYPES = {"thinking", "redacted_thinking"}
-_THINKING_RETRY_TRIGGERS = ("max_tokens", "budget", "thinking")
-_DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
 
 
 class ReplayOptions(BaseModel):
@@ -34,6 +28,8 @@ class ReplayOptions(BaseModel):
     delay_s: float = 0.0
     strip_thinking: bool = False
     timeout_s: float = 300.0
+    warm: bool = False
+    """Skip the run nonce: measure the cache as found instead of writing a fresh one."""
 
 
 class ReplayResult(BaseModel):
@@ -90,32 +86,10 @@ def prepare_body(body: dict[str, Any], spec: RunSpec, opts: ReplayOptions) -> di
     return prepared
 
 
-def _build_headers(entry: TraceEntry, api_key: str) -> dict[str, str]:
-    headers = {
-        "x-api-key": api_key,
-        "Authorization": f"Bearer {api_key}",
-        "content-type": "application/json",
-        "anthropic-version": entry.headers.get("anthropic-version", _DEFAULT_ANTHROPIC_VERSION),
-    }
-    beta = entry.headers.get("anthropic-beta")
-    if beta:
-        headers["anthropic-beta"] = beta
-    return headers
-
-
-def _should_retry_without_thinking(body_text: str) -> bool:
-    lowered = body_text.lower()
-    return any(trigger in lowered for trigger in _THINKING_RETRY_TRIGGERS)
-
-
-def _parse_body(resp: httpx.Response) -> ParsedMessage:
-    try:
-        data = resp.json()
-    except ValueError:
-        return ParsedMessage(error=resp.text[:500])
-    if not isinstance(data, dict):
-        return ParsedMessage(error=str(data)[:500])
-    return parse_json_message(cast("dict[str, Any]", data))
+# The probe PoC script (`scripts/probe_poc.py`) reaches into this module for the request
+# plumbing it shares with `replay`; the names stay for that record.
+_build_headers = build_headers
+_parse_body = parse_body
 
 
 def _empty_result(
@@ -144,7 +118,7 @@ async def _post(
     body: dict[str, Any],
     opts: ReplayOptions,
 ) -> httpx.Response:
-    return await client.post(spec.target.url, headers=headers, json=body, timeout=opts.timeout_s)
+    return await post(client, spec, headers, body, timeout_s=opts.timeout_s)
 
 
 async def _replay_turn(
@@ -155,9 +129,12 @@ async def _replay_turn(
     api_key: str,
     *,
     client: httpx.AsyncClient,
+    nonce: str | None = None,
 ) -> ReplayResult:
     prepared = prepare_body(entry.body, spec, opts)
-    headers = _build_headers(entry, api_key)
+    if nonce is not None:
+        prepared = inject_nonce(prepared, nonce)
+    headers = build_headers(entry, api_key)
     note: str | None = None
     started = perf_counter()
 
@@ -167,7 +144,7 @@ async def _replay_turn(
         elapsed = (perf_counter() - started) * 1000
         return _empty_result(entry, turn, spec, elapsed, error=str(exc), note=None)
 
-    if resp.status_code == 400 and _should_retry_without_thinking(resp.text):
+    if resp.status_code == 400 and should_retry_without_thinking(resp.text):
         prepared.pop("thinking", None)
         note = "thinking param dropped"
         try:
@@ -177,7 +154,7 @@ async def _replay_turn(
             return _empty_result(entry, turn, spec, elapsed, error=str(exc), note=note)
 
     latency_ms = (perf_counter() - started) * 1000
-    parsed = _parse_body(resp)
+    parsed = parse_body(resp)
     usage = parsed.usage
     return ReplayResult(
         seq=entry.seq,
@@ -198,88 +175,9 @@ async def _replay_turn(
     )
 
 
-def _append_note(existing: str | None, addition: str) -> str:
-    return f"{existing}; {addition}" if existing else addition
-
-
-def _apply_generation(
-    result: ReplayResult, gen: Generation | None, price_by_key: dict[str, Prices]
-) -> None:
-    if gen is None:
-        result.note = _append_note(result.note, "generation lookup failed")
-        return
-
-    result.generation = gen.raw
-    result.billed_total = gen.total_cost
-    result.cache_discount = gen.cache_discount
-    if gen.provider_name:
-        result.provider = gen.provider_name
-    if gen.native_tokens_prompt is not None:
-        result.prompt_total = gen.native_tokens_prompt
-    if gen.native_tokens_cached is not None:
-        result.cached = gen.native_tokens_cached
-    if gen.native_tokens_completion is not None:
-        result.output_tokens = gen.native_tokens_completion
-
-    if result.cached > result.prompt_total:
-        result.note = _append_note(result.note, "cached exceeds prompt_total; input cost skipped")
-        return
-
-    prices = price_by_key.get(normalize_provider(gen.provider_name or ""))
-    if prices is None:
-        note = f"no endpoint price match for provider {gen.provider_name!r}"
-        result.note = _append_note(result.note, note)
-        return
-
-    result.cost = compute_cost(
-        input_tokens=result.prompt_total - result.cached,
-        cache_read=result.cached,
-        cache_write=result.cache_write,
-        output_tokens=result.output_tokens,
-        prices=prices,
-        source="openrouter-endpoint",
-    )
-
-
-async def _enrich_openrouter(
-    spec: RunSpec, results: list[ReplayResult], client: httpx.AsyncClient, api_key: str
-) -> None:
-    endpoints = await fetch_endpoints(client, spec.model)
-    price_by_key: dict[str, Prices] = {}
-    for ep in endpoints:
-        price_by_key[normalize_provider(ep.tag)] = ep.prices
-        price_by_key[normalize_provider(ep.provider_name)] = ep.prices
-
-    sem = asyncio.Semaphore(4)
-    successful = [r for r in results if r.status == 200 and r.message_id]
-
-    async def _fetch(result: ReplayResult) -> None:
-        message_id = result.message_id
-        if message_id is None:
-            return  # unreachable: `successful` already filtered on message_id
-        async with sem:
-            gen = await fetch_generation(client, api_key, message_id)
-        _apply_generation(result, gen, price_by_key)
-
-    await asyncio.gather(*(_fetch(r) for r in successful))
-
-
-def _enrich_anthropic(spec: RunSpec, results: list[ReplayResult]) -> None:
-    prices = spec.target.prices.get(spec.model)
-    for result in results:
-        if result.status != 200:
-            continue
-        if prices is None:
-            result.note = _append_note(result.note, f"no price table for {spec.model}")
-            continue
-        result.cost = compute_cost(
-            input_tokens=result.usage.input_tokens,
-            cache_read=result.cached,
-            cache_write=result.cache_write,
-            output_tokens=result.output_tokens,
-            prices=prices,
-            source="table",
-        )
+# The probe PoC script (`scripts/probe_poc.py`) imports the enrichment under its old name;
+# the engine itself calls `enrich_openrouter`.
+_enrich_openrouter = enrich_openrouter
 
 
 async def replay_run(
@@ -289,11 +187,13 @@ async def replay_run(
     api_key: str,
     *,
     client: httpx.AsyncClient,
+    run_hex: str,
     on_progress: Callable[[ReplayResult], None] | None = None,
 ) -> list[ReplayResult]:
+    nonce = None if opts.warm else run_nonce(run_hex)
     results: list[ReplayResult] = []
     for turn, entry in enumerate(entries, start=1):
-        result = await _replay_turn(entry, turn, spec, opts, api_key, client=client)
+        result = await _replay_turn(entry, turn, spec, opts, api_key, client=client, nonce=nonce)
         results.append(result)
         if on_progress is not None:
             on_progress(result)
@@ -301,9 +201,9 @@ async def replay_run(
             await asyncio.sleep(opts.delay_s)
 
     if spec.target.kind == "openrouter":
-        await _enrich_openrouter(spec, results, client, api_key)
+        await enrich_openrouter(spec, results, client, api_key)
     else:
-        _enrich_anthropic(spec, results)
+        enrich_anthropic(spec, results)
     return results
 
 
@@ -313,10 +213,15 @@ async def replay_all(
     opts: ReplayOptions,
     env: Mapping[str, str],
     *,
+    run_hex: str,
     on_progress: Callable[[ReplayResult], None] | None = None,
 ) -> dict[str, list[ReplayResult]]:
-    # Resolve keys up front so a missing key fails before any request is sent.
+    # Resolve keys and check the nonce up front: both fail before any request is sent.
     api_keys = {spec.label: resolve_api_key(spec.target, env) for spec in specs}
+    if not opts.warm:
+        require_stampable(
+            (f"turn {turn}", entry.body) for turn, entry in enumerate(entries, start=1)
+        )
     timeout = httpx.Timeout(opts.timeout_s, connect=30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         outcomes = await asyncio.gather(
@@ -327,6 +232,7 @@ async def replay_all(
                     opts,
                     api_keys[spec.label],
                     client=client,
+                    run_hex=run_hex,
                     on_progress=on_progress,
                 )
                 for spec in specs
@@ -345,9 +251,11 @@ class RunRef(BaseModel):
 
 
 class RunMeta(BaseModel):
+    protocol: str = "full"
     trace: str
     conversation: str
     created: str
+    run_hex: str | None = None
     options: ReplayOptions
     runs: list[RunRef]
 
@@ -360,6 +268,7 @@ def write_run(
     opts: ReplayOptions,
     *,
     results: dict[str, list[ReplayResult]],
+    run_hex: str | None = None,
 ) -> Path:
     created = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     run_dir = runs_dir / trace_name / created
@@ -383,7 +292,12 @@ def write_run(
         )
 
     meta = RunMeta(
-        trace=trace_name, conversation=conversation, created=created, options=opts, runs=refs
+        trace=trace_name,
+        conversation=conversation,
+        created=created,
+        run_hex=run_hex,
+        options=opts,
+        runs=refs,
     )
     (run_dir / "run.json").write_text(meta.model_dump_json(indent=2) + "\n", encoding="utf-8")
     return run_dir
