@@ -7,16 +7,27 @@ import click
 
 from provibench.app import build_cli
 from provibench.core.introspection import command_flags, global_flags, listed_commands
+from provibench.core.registry import Group
 
 SKILL = Path(__file__).parents[1] / "skills/provibench/SKILL.md"
+README = Path(__file__).parents[1] / "README.md"
 
 
 def test_skill_commands_and_flags_match_introspection() -> None:
     root = build_cli()
+    _assert_commands_match_introspection(root, _command_lines(SKILL))
+
+
+def test_readme_commands_and_flags_match_introspection() -> None:
+    root = build_cli()
+    _assert_commands_match_introspection(root, _command_lines(README))
+
+
+def _assert_commands_match_introspection(root: Group, lines: list[str]) -> None:
     commands = dict(listed_commands(root))
     shared_flags = {_long_name(option) for option in global_flags(root)}
 
-    for line in _command_lines():
+    for line in lines:
         tokens = shlex.split(line)
         command_start = tokens.index("provibench")
         tokens = tokens[command_start:]
@@ -33,10 +44,10 @@ def test_skill_commands_and_flags_match_introspection() -> None:
                 assert flag in known_flags, f"{flag!r} in {line!r} is not in schema"
 
 
-def _command_lines() -> list[str]:
+def _command_lines(path: Path) -> list[str]:
     lines: list[str] = []
     in_fence = False
-    for line in SKILL.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith("```"):
             in_fence = not in_fence
         elif in_fence and "provibench " in line:
