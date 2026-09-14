@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import click
 
-from provibench.commands.inspect import resolve_trace_path
+from provibench.commands.inspect import load_trace_entries, resolve_trace_path
 from provibench.commands.summary_view import SUMMARY, render_summaries, summary_to_document
 from provibench.core.confirm import require_confirmation
 from provibench.core.context import Invocation
@@ -50,11 +50,12 @@ _OUTPUT = obj(
         effects=Effects.NON_IDEMPOTENT, confirm=True, output=_OUTPUT, render=render_summaries
     ),
     help="Replay a trace's recorded requests against one or more targets.\n\n"
-    "Sends every recorded turn of a conversation to each --run target with "
+    "TRACE is either an existing path, a name under traces_dir, or 'sample' (the packaged "
+    "example). Sends every recorded turn of a conversation to each --run target with "
     "max_tokens: 1, so a run costs only prompt tokens; the output-side generation is "
     "discarded. Spends API credit, so this asks for confirmation unless --yes is given.",
 )
-@click.argument("trace")
+@click.argument("trace", help="Trace path, a name under traces_dir, or 'sample'")
 @click.option(
     "--run",
     "run_specs",
@@ -83,14 +84,14 @@ def replay(  # noqa: PLR0913 (click binds one parameter per flag; there is no gr
 ) -> Document:
     from provibench.bench.replay import ReplayOptions, replay_all, write_run
     from provibench.bench.summary import summarize
-    from provibench.bench.trace import load_trace
+    from provibench.bench.trace import trace_name
 
     invocation = require_invocation(ctx)
     targets = _load_targets(invocation)
     specs = _parse_specs(run_specs, targets)
 
     trace_path = resolve_trace_path(trace, invocation)
-    entries = load_trace(trace_path)
+    entries = load_trace_entries(trace_path)
     selected_entries, selected_key = _select_conversation(entries, conversation)
     if limit is not None:
         selected_entries = selected_entries[:limit]
@@ -113,7 +114,9 @@ def replay(  # noqa: PLR0913 (click binds one parameter per flag; there is no gr
         raise OperationFailed(str(exc)) from exc
 
     runs_dir = Path(invocation.setting("runs_dir") or ".")
-    run_dir = write_run(runs_dir, trace_path.stem, selected_key, specs, opts, results=results)
+    run_dir = write_run(
+        runs_dir, trace_name(trace_path), selected_key, specs, opts, results=results
+    )
     summaries = [summarize(spec.label, results[spec.label], spec.providers) for spec in specs]
 
     return {

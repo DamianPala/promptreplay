@@ -14,7 +14,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from provibench.bench.trace import TraceEntry, append_entry
+from provibench.bench.trace import TraceEntry, append_entry, read_trace_text, write_trace_text
 from provibench.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
@@ -124,6 +124,50 @@ def test_replay_limit_truncates_the_replayed_turns(
     )
     assert outcome.code == 0, outcome.stderr
     assert outcome.document["turns"] == 1
+
+
+def test_replay_files_a_gzipped_trace_under_its_plain_name(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    plain = bench_paths.traces_dir / "t.jsonl"
+    append_entry(plain, _trace_entry(1))
+    write_trace_text(bench_paths.traces_dir / "t.jsonl.gz", read_trace_text(plain))
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(_ok_response))
+
+    outcome = cli.run(
+        "replay",
+        "t.jsonl.gz",
+        "--run",
+        "t:model-a",
+        "--yes",
+        env={**bench_paths.env, "X_KEY": "secret"},
+    )
+
+    assert outcome.code == 0, outcome.stderr
+    run_dir = Path(str(outcome.document["run_dir"]))
+    assert run_dir.parent == bench_paths.runs_dir / "t"
+
+
+def test_replay_of_the_packaged_sample_files_under_sample(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(_ok_response))
+
+    outcome = cli.run(
+        "replay",
+        "sample",
+        "--run",
+        "t:model-a",
+        "--yes",
+        env={**bench_paths.env, "X_KEY": "secret"},
+    )
+
+    assert outcome.code == 0, outcome.stderr
+    run_dir = Path(str(outcome.document["run_dir"]))
+    assert run_dir.parent == bench_paths.runs_dir / "sample"
+    assert outcome.document["turns"] == 30
 
 
 def test_replay_selects_conversation_and_rejects_unknown_one(

@@ -25,6 +25,7 @@ EXPECTED_COMMANDS = {
     "record": ("non_idempotent", False, False),
     "replay": ("non_idempotent", True, False),
     "report": ("idempotent", False, False),
+    "scrub": ("idempotent", False, False),
 }
 
 
@@ -191,6 +192,8 @@ _SUCCESS_ARGV: dict[str, list[str]] = {
     "record": ["--name", "record-fixture", "--upstream", "https://example.invalid", "--append"],
     "replay": ["fixture", "--run", "t:model-a", "--yes"],
     "report": ["fixture-run"],
+    # --force: the schema check runs every command twice, with --json in each position.
+    "scrub": ["fixture", "--out", "scrubbed.jsonl", "--force"],
 }
 
 
