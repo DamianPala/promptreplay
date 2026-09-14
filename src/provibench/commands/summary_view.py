@@ -23,6 +23,7 @@ from provibench.core.documents import (
     boolean,
     integer,
     nullable_boolean,
+    nullable_integer,
     nullable_number,
     nullable_object,
     nullable_string,
@@ -135,6 +136,32 @@ PROBE_SUMMARY = _all(
     }
 )
 
+_SWEEP_DROP = _all({"tag": string(), "spec": string(), "reason": string(), "checked": boolean()})
+_SWEEP_RANKED = _all(
+    {
+        "tag": string(),
+        "price_input": number(),
+        "uptime_1d": nullable_number(),
+        "status": nullable_string(),
+        "latency_p50_ms": nullable_number(),
+        "throughput_p50_tok_s": nullable_number(),
+    }
+)
+SWEEP_BLOCK_PROPERTIES: dict[str, JsonSchema] = {
+    "model": string(),
+    "target": string(),
+    "included": array(string()),
+    "excluded": array(string()),
+    "sort": string(),
+    "top": nullable_integer(),
+    "zdr": boolean(),
+    "check": boolean(),
+    "dropped": array(_SWEEP_DROP),
+    "ranking": array(_SWEEP_RANKED),
+}
+"""The `sweep` block's fields: `sweep` publishes them, `report` re-reads them as nullable."""
+SWEEP_BLOCK = obj(SWEEP_BLOCK_PROPERTIES, required=list(SWEEP_BLOCK_PROPERTIES))
+
 
 def summary_to_document(summary: RunSummary) -> Document:
     """`summary` reshaped so every field has a fixed set of JSON properties."""
@@ -199,20 +226,30 @@ def probe_summary_to_document(summary: ProbeSummary) -> Document:
 
 def render_probe_run(invocation: Invocation, document: Document) -> None:
     """Human rendering of a `probe` result: the spec and rung tables."""
-    _render_probe(invocation, document.get("summaries"))
+    _render_probe(invocation, document, key="summaries")
 
 
-def probe_tables_text(document: Document) -> str:
-    """The probe run's two tables as text, for a caller that writes them itself."""
+def probe_report_text(document: Document, *, key: str = "summaries") -> str:
+    """The probe run's tables and its selection as text, for a caller that writes its own.
+
+    A sweep's run says how its endpoints were chosen under the same tables, so a caller that
+    prints this block itself shows the selection line and the `not probed` notes as well —
+    which is the failure path, where the reader most wants to know which candidates were
+    removed before the requests that failed.
+    """
     from provibench.bench.probe_tables import render_probe
 
-    entries = [d for d in map(as_document, as_list(document.get("summaries")) or []) if d]
-    return render_probe([_probe_summary(entry) for entry in entries])
+    entries = [d for d in map(as_document, as_list(document.get(key)) or []) if d]
+    lines = [
+        *render_probe([_probe_summary(entry) for entry in entries]).splitlines(),
+        *sweep_lines(document.get("sweep")),
+    ]
+    return "\n".join(lines)
 
 
 def render_probe_report(invocation: Invocation, document: Document) -> None:
     """Human rendering of `report` for a probe run: the same two tables."""
-    _render_probe(invocation, document.get("probe_summaries"))
+    _render_probe(invocation, document, key="probe_summaries")
 
 
 def render_report_document(invocation: Invocation, document: Document) -> None:
@@ -235,16 +272,34 @@ def _render_html_path(invocation: Invocation, document: Document) -> None:
     console.print(escape(f"HTML report: {escape_terminal_text(path)}"))
 
 
-def _render_probe(invocation: Invocation, value: object) -> None:
+def _render_probe(invocation: Invocation, document: Document, *, key: str) -> None:
     """The probe tables are plain text, so they render the same at any terminal width."""
-    from provibench.bench.probe_tables import render_probe
-
-    entries = [d for d in map(as_document, as_list(value) or []) if d]
-    summaries = [_probe_summary(entry) for entry in entries]
+    lines = probe_report_text(document, key=key).splitlines()
     stdout = invocation.streams.stdout
-    escaped = [escape_terminal_text(line) for line in render_probe(summaries).splitlines()]
+    escaped = [escape_terminal_text(line) for line in lines]
     stdout.write("\n".join(escaped) + "\n")
     stdout.flush()
+
+
+def message_lines(invocation: Invocation, text: str) -> None:
+    """A block of text as one message per line.
+
+    `Invocation.message` escapes control characters, a newline included, so a whole table
+    handed to it would land as a single line the reader cannot line up.
+    """
+    for line in text.splitlines():
+        invocation.message(line)
+
+
+def sweep_lines(block: object) -> list[str]:
+    """A recorded selection as the lines that follow the tables; none without a sweep."""
+    from provibench.bench.selection import SweepInfo, not_probed_lines, selection_line
+
+    document = as_document(block)
+    if document is None:
+        return []
+    sweep = SweepInfo.model_validate(document)
+    return [selection_line(sweep), *not_probed_lines(sweep)]
 
 
 def _probe_summary(entry: Document) -> ProbeSummary:

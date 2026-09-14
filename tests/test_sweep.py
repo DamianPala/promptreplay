@@ -1,8 +1,10 @@
-"""`sweep`: the endpoint expansion, the filters, the ordering, and the parallel fan-out.
+"""`sweep`: the endpoint expansion, the filters, selection criteria, ordering, fan-out.
 
 The only boundary mocked is the network `httpx.AsyncClient` opens, so these tests exercise
 the command, the spec building, the probe protocol and the aggregation together: the fake
-transport serves the endpoint list, the `/generation` lookup and the probe requests.
+transport serves the endpoint list, the ZDR list, the `/generation` lookup, the probe's
+requests and the availability pre-check, which it tells from a probe request the way the
+run does — a probe request carries the probe's nonce, the pre-check does not.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from typing import Any, cast
 import httpx
 import pytest
 
+from provibench.bench.selection import SweepInfo
 from provibench.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
 from tests.conftest import BenchPaths, Cli
 
@@ -60,17 +63,49 @@ _PRICING: dict[str, dict[str, str]] = {
         "completion": "0.0000006",
         "input_cache_read": "0.000000032",
     },
+    "relace/fp4": {"prompt": "0.0000009", "completion": "0.000001", "input_cache_read": "0"},
+    "openinference": {"prompt": "0.0000001", "completion": "0.0000002", "input_cache_read": "0"},
 }
 _ENV = {"OR_KEY": "secret", "DS_KEY": "secret"}
 
+# The account-level exclusion OpenRouter answers a pinned request with when the settings of
+# the key rule every candidate out; the reason line is what the run has to quote.
+_GUARDRAIL_404: dict[str, Any] = {
+    "type": "not_found_error",
+    "message": "0 endpoints out of 1 requested are available matching your guardrail "
+    "restrictions and data policy. We removed them for the following reasons (an endpoint "
+    "may have matched multiple reasons):\nPaid model training violation (account settings): "
+    "1 endpoint excluded; configurable at https://openrouter.ai/settings/privacy",
+    "error_type": "not_found",
+}
+_GUARDRAIL_REASON = "unavailable for this key: Paid model training violation (account settings)"
 
-def _endpoint(tag: str) -> dict[str, Any]:
+
+def _endpoint(tag: str, **extra: object) -> dict[str, Any]:
+    """One endpoint of the fake list: the shared prices plus whatever health it is given."""
     return {
         "provider_name": tag.split("/")[0].title(),
         "tag": tag,
         "quantization": "fp8",
         "context_length": 128000,
         "pricing": _PRICING[tag],
+        **extra,
+    }
+
+
+def _health(
+    uptime: float,
+    *,
+    status: int = 0,
+    latency: float | None = None,
+    throughput: float | None = None,
+) -> dict[str, Any]:
+    """The health fields of one endpoint; a percentile left out is one the API never sent."""
+    return {
+        "status": status,
+        "uptime_last_1d": uptime,
+        "latency_last_30m": latency,
+        "throughput_last_30m": throughput,
     }
 
 
@@ -167,64 +202,120 @@ def _stream(cached: int, prompt: int) -> httpx.Response:
     )
 
 
-def _transport(
-    *,
-    cached: Mapping[str, int] | None = None,
-    endpoints: list[dict[str, Any]] | None = None,
-    sent: list[dict[str, Any]] | None = None,
-    order: list[tuple[str, int]] | None = None,
-    calls: list[str] | None = None,
-    models: Mapping[str, str] | None = None,
-) -> Callable[[httpx.Request], httpx.Response]:
-    """The fake provider: endpoint list, generation lookup, and the probe requests.
+class _Provider:
+    """The fake OpenRouter: endpoint list, ZDR list, generation lookup, probes, pre-checks.
 
     `cached` is the cached-token count a spec's reads report, keyed by its pinned tag or,
     for a native spec, by the model it sends; a spec's first request — its cold write —
-    always reports zero, the way a fresh nonce makes it. Every message body is appended to
-    `sent`, every request's `(spec, turn)` to `order`, and every request's path to `calls`,
-    which is what a test asserting on the order requests went out in reads.
-    """
-    hits = dict(cached or {})
-    answers = dict(models or {})
-    seen: dict[str, int] = {}
+    always reports zero, the way a fresh nonce makes it. `unavailable` answers any request
+    for that tag — the availability check's or the probe's — with the response it maps to:
+    an account-level exclusion for a candidate, a failing endpoint for a spec the run
+    nevertheless paid for. Every message body is appended to `sent`, every probe request's
+    `(spec, turn)` to `order`, and every request's path to `calls`, which is what a test
+    asserting on the order requests went out in reads.
 
-    def serve(request: httpx.Request) -> httpx.Response:
-        if calls is not None:
-            calls.append(request.url.path)
-        if request.url.path.endswith("/endpoints"):
-            return httpx.Response(
-                200, json={"data": {"endpoints": _ENDPOINTS if endpoints is None else endpoints}}
-            )
-        if request.url.path.endswith("/generation"):
-            return httpx.Response(200, json={"data": {"id": "g1", "total_cost": 0.0001}})
+    A pre-check is a request without the probe's nonce. It is recorded on `prechecked` and
+    leaves the warm-up counter alone: it is a separate request rather than the cold write of
+    the rung whose body it borrows.
+    """
+
+    def __init__(
+        self,
+        *,
+        cached: Mapping[str, int] | None = None,
+        endpoints: list[dict[str, Any]] | None = None,
+        zdr: list[dict[str, Any]] | None = None,
+        unavailable: Mapping[str, dict[str, Any]] | None = None,
+        sent: list[dict[str, Any]] | None = None,
+        order: list[tuple[str, int]] | None = None,
+        prechecked: list[str] | None = None,
+        calls: list[str] | None = None,
+    ) -> None:
+        self.hits = dict(cached or {})
+        self.endpoints = _ENDPOINTS if endpoints is None else endpoints
+        self.zdr = zdr or []
+        self.blocked = dict(unavailable or {})
+        self.sent = sent
+        self.order = order
+        self.prechecked = prechecked
+        self.calls = calls
+        self.seen: dict[str, int] = {}
+
+    def serve(self, request: httpx.Request) -> httpx.Response:
+        """One request: a list, a lookup, a pre-check or a probe request."""
+        if self.calls is not None:
+            self.calls.append(request.url.path)
+        listed = self._listed(request)
+        if listed is not None:
+            return listed
         body = json.loads(request.content)
         key = _spec_key(body)
-        if sent is not None:
-            sent.append(body)
-        if order is not None:
-            order.append((key, _turn(body)))
-        count = seen.get(key, 0)
-        seen[key] = count + 1
-        hit = 0 if count == 0 else hits.get(key, 0)
-        prompt = 100
-        if body.get("stream"):
-            return _stream(hit, prompt)
-        # the endpoint answers with its own model name, the gateway with its own slug
-        gateway = "openrouter" in request.url.host
-        return httpx.Response(
-            200,
-            json={
-                "id": "m1",
-                "model": answers.get(key) or (_MODEL if gateway else str(body.get("model"))),
-                "usage": {
-                    "input_tokens": prompt - hit,
-                    "cache_read_input_tokens": hit,
-                    "output_tokens": 1,
-                },
-            },
-        )
+        if self.sent is not None:
+            self.sent.append(body)
+        if "provibench-probe:" in request.content.decode():
+            # a probe request: the first one per spec is its cold write, and a blocked tag
+            # fails there the way an excluded endpoint fails a real one
+            if key in self.blocked:
+                return httpx.Response(404, json=self.blocked[key])
+            return self._probe(request, body, key)
+        if self.prechecked is not None:
+            self.prechecked.append(key)
+        if key in self.blocked:
+            return httpx.Response(404, json=self.blocked[key])
+        return httpx.Response(200, json=_answer(request, body, 0))
 
-    return serve
+    def _listed(self, request: httpx.Request) -> httpx.Response | None:
+        """The three GETs a run makes, or `None` when this path is a message POST.
+
+        The endpoint list carries the health percentiles only for a request with a bearer
+        token, the way OpenRouter answers it: an unkeyed fetch gets `null` for both, so a
+        ranking that relies on them can only have been made from a keyed list.
+        """
+        path = request.url.path
+        if path.endswith("/endpoints/zdr"):
+            return httpx.Response(200, json={"data": self.zdr})
+        if path.endswith("/endpoints"):
+            keyed = bool(request.headers.get("authorization"))
+            endpoints = self.endpoints if keyed else [_unkeyed(e) for e in self.endpoints]
+            return httpx.Response(200, json={"data": {"endpoints": endpoints}})
+        if path.endswith("/generation"):
+            return httpx.Response(200, json={"data": {"id": "g1", "total_cost": 0.0001}})
+        return None
+
+    def _probe(self, request: httpx.Request, body: dict[str, Any], key: str) -> httpx.Response:
+        """A probe request: the first one per spec is the cold write and reads nothing back."""
+        if self.order is not None:
+            self.order.append((key, _turn(body)))
+        count = self.seen.get(key, 0)
+        self.seen[key] = count + 1
+        hit = 0 if count == 0 else self.hits.get(key, 0)
+        if body.get("stream"):
+            return _stream(hit, 100)
+        return httpx.Response(200, json=_answer(request, body, hit))
+
+
+def _unkeyed(endpoint: dict[str, Any]) -> dict[str, Any]:
+    """One endpoint as an unkeyed request sees it: both 30-minute percentiles are null."""
+    return {**endpoint, "latency_last_30m": None, "throughput_last_30m": None}
+
+
+def _transport(**kwargs: Any) -> Callable[[httpx.Request], httpx.Response]:
+    """`_Provider` as a transport handler, for `_install`."""
+    return _Provider(**kwargs).serve
+
+
+def _answer(request: httpx.Request, body: dict[str, Any], cached: int) -> dict[str, Any]:
+    """One served response; the endpoint answers with its own model, the gateway its slug."""
+    gateway = "openrouter" in request.url.host
+    return {
+        "id": "m1",
+        "model": _MODEL if gateway else str(body.get("model")),
+        "usage": {
+            "input_tokens": 100 - cached,
+            "cache_read_input_tokens": cached,
+            "output_tokens": 1,
+        },
+    }
 
 
 def _install(
@@ -247,11 +338,26 @@ def _yielding(handler: Callable[[httpx.Request], httpx.Response]) -> Callable[..
     return serve
 
 
-def _sweep(cli: Cli, bench_paths: BenchPaths, *args: str) -> Any:
+def _sweep(
+    cli: Cli,
+    bench_paths: BenchPaths,
+    *args: str,
+    unset: tuple[str, ...] = (),
+    tty: bool = False,
+) -> Any:
     trace = bench_paths.traces_dir / "t.jsonl"
     if not trace.exists():
         _write_trace(trace)
-    return cli.run("sweep", "t", _MODEL, *args, env={**bench_paths.env, **_ENV})
+    return cli.run(
+        "sweep",
+        "t",
+        _MODEL,
+        *args,
+        env={**bench_paths.env, **_ENV},
+        unset=unset,
+        tty_stdout=tty,
+        tty_stderr=tty,
+    )
 
 
 def _labels(summaries: Any) -> list[str]:
@@ -381,12 +487,21 @@ def test_sweep_records_the_sweep_block_and_the_endpoint_snapshot(
     run_dir = Path(str(outcome.document["run_dir"]))
     meta = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     assert meta["protocol"] == "probe"
-    assert meta["sweep"] == {
-        "model": _MODEL,
-        "target": "or",
-        "included": ["novita"],
-        "excluded": ["novita/fp8"],
-    }
+    sweep = meta["sweep"]
+    assert sweep["model"] == _MODEL
+    assert sweep["target"] == "or"
+    assert sweep["included"] == ["novita"]
+    assert sweep["excluded"] == ["novita/fp8"]
+    # the criteria this run did not use, and the snapshot the one it did use ranked
+    assert (sweep["sort"], sweep["top"], sweep["zdr"], sweep["check"]) == (
+        "price",
+        None,
+        False,
+        False,
+    )
+    assert sweep["dropped"] == []
+    assert [ranked["tag"] for ranked in sweep["ranking"]] == ["novita"]
+    assert sweep["ranking"][0]["price_input"] == pytest.approx(0.3)
     assert meta["endpoints"][_MODEL]  # the snapshot the estimate was priced from
     assert [spec["label"] for spec in meta["specs"]] == _labels(outcome.document["summaries"])
     assert outcome.document["sweep"] == meta["sweep"]
@@ -724,3 +839,496 @@ def test_sweep_fails_when_the_model_has_no_endpoints(
     assert outcome.error["kind"] == "operation_failed"
     assert _MODEL in str(outcome.error["message"])
     assert sent == []
+
+
+# --- selection: the stability floor, the sort keys, ZDR, `--top`, availability ------------
+
+
+def _run_json(outcome: Any) -> dict[str, Any]:
+    """A run's `run.json`, parsed."""
+    path = Path(str(outcome.document["run_dir"])) / "run.json"
+    parsed: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return parsed
+
+
+def _block(outcome: Any) -> dict[str, Any]:
+    """The sweep block a run recorded, as the command's document carries it."""
+    return SweepInfo.model_validate(_run_json(outcome)["sweep"]).to_document()
+
+
+def _specs(outcome: Any) -> set[str]:
+    """The labels the run directory holds, whichever order the measured price put them in."""
+    return {str(ref["label"]) for ref in _run_json(outcome)["specs"]}
+
+
+def _estimate_amounts(stderr: str) -> tuple[float, float]:
+    """What a run's estimate printed: the total, and the share the check was priced at."""
+    total = next(
+        float(line.split("|")[-1].strip())
+        for line in stderr.splitlines()
+        if line.startswith("total") and "|" in line
+    )
+    share = next(line for line in stderr.splitlines() if line.startswith("pre-check: ")).rsplit(
+        "$", 1
+    )[1]
+    return total, float(share)
+
+
+# Six endpoints with distinct 1-day uptimes, so `--sort uptime` has one obvious order and
+# a `--top 5` still has one candidate left out. Listed in a deliberately wrong order.
+_RANKED = [
+    _endpoint("novita", **_health(99.9)),
+    _endpoint("novita/fp8", **_health(98.5)),
+    _endpoint("siliconflow", **_health(99.5)),
+    _endpoint("gmicloud", **_health(99.0)),
+    _endpoint("openinference", **_health(97.5)),
+    _endpoint("relace/fp4", **_health(98.0)),
+]
+_SELECTED = ["novita", "siliconflow", "gmicloud", "novita/fp8", "relace/fp4"]
+
+
+def test_sweep_top_probes_the_n_best_in_ranking_order(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--sort uptime --top 5` probes five endpoints plus the native reference, in order."""
+    _write_targets(bench_paths.targets_path)
+    prechecked: list[str] = []
+    order: list[tuple[str, int]] = []
+    _install(monkeypatch, _transport(endpoints=_RANKED, prechecked=prechecked, order=order))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--sort", "uptime", "--top", "5"))
+    assert outcome.code == 0, outcome.stderr
+    assert _specs(outcome) == {
+        *(f"or:{_MODEL}@{tag}" for tag in _SELECTED),
+        f"deepseek:{_NATIVE}",
+    }
+    # the check ran in ranking order and stopped at the fifth kept candidate, so the sixth
+    # endpoint was never checked, let alone probed; the probe kept that order too
+    assert prechecked == _SELECTED
+    assert [key for key, turn in order if turn == 1] == [*_SELECTED, _NATIVE]
+    block = _block(outcome)
+    assert (block["sort"], block["top"], block["check"]) == ("uptime", 5, True)
+    assert [ranked["tag"] for ranked in block["ranking"]] == [
+        "novita",
+        "siliconflow",
+        "gmicloud",
+        "novita/fp8",
+        "relace/fp4",
+        "openinference",
+    ]
+    # the check is priced from its plan, so it counts every candidate, not the five it keeps
+    assert "pre-check: up to 6 requests," in outcome.stderr
+
+
+def test_sweep_price_ties_break_by_throughput_then_uptime(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default sort is price; equal prices go to the faster endpoint, then the busier one.
+
+    Every endpoint is priced the same and listed in a deliberately wrong order, and the
+    fake list serves the throughput percentiles only to a keyed request: this ordering can
+    only come out right if the sweep fetched the list with the target's key.
+    """
+    _write_targets(bench_paths.targets_path, aliases=False)
+    flat = {"prompt": "0.0000005", "completion": "0.0000005", "input_cache_read": "0"}
+    endpoints = [
+        _endpoint("siliconflow", pricing=flat, **_health(99.0, throughput=50.0)),
+        _endpoint("novita", pricing=flat, **_health(99.9, throughput=90.0)),
+        _endpoint("novita/fp8", pricing=flat, **_health(99.95)),
+        _endpoint("gmicloud", pricing=flat, **_health(99.9, throughput=90.0)),
+    ]
+    prechecked: list[str] = []
+    _install(monkeypatch, _transport(endpoints=endpoints, prechecked=prechecked))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--top", "4"))
+    assert outcome.code == 0, outcome.stderr
+    # novita and gmicloud tie on throughput and price, so their equal uptime leaves the
+    # order the API listed them in; siliconflow's 50 tok/s loses to their 90, and
+    # novita/fp8's unknown percentile loses to every known one
+    assert prechecked == ["novita", "gmicloud", "siliconflow", "novita/fp8"]
+    assert "tput p50" in outcome.stderr and "90.0" in outcome.stderr  # the keyed listing
+
+
+def test_sweep_sort_latency_and_throughput_use_the_percentiles(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path, aliases=False)
+    endpoints = [
+        _endpoint("novita", **_health(99.0, latency=300.0, throughput=10.0)),
+        _endpoint("gmicloud", **_health(99.0, latency=100.0, throughput=50.0)),
+        _endpoint("siliconflow", **_health(99.0, latency=200.0, throughput=30.0)),
+    ]
+
+    for sort in ("latency", "throughput"):
+        prechecked: list[str] = []
+        _install(monkeypatch, _transport(endpoints=endpoints, prechecked=prechecked))
+        outcome = _sweep(cli, bench_paths, *_one_rung("--sort", sort, "--top", "2"))
+        assert outcome.code == 0, outcome.stderr
+        # the fastest endpoint leads under either key: 100 ms and 50 tok/s belong to gmicloud
+        assert prechecked == ["gmicloud", "siliconflow"]
+
+
+def test_sweep_sort_by_percentile_without_the_key_names_the_flag_and_the_key(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--sort latency` ranks by data only a keyed request gets: no key, no ranking."""
+    _write_targets(bench_paths.targets_path)
+    calls: list[str] = []
+    _install(monkeypatch, _transport(endpoints=_RANKED, calls=calls))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--sort", "latency"), unset=("OR_KEY",))
+    assert outcome.code == 2
+    assert outcome.error["kind"] == "invalid_input"
+    message = str(outcome.error["message"])
+    assert "--sort latency" in message and "OR_KEY" in message
+    assert calls == []  # refused before the endpoint list was even fetched
+
+    # the key is set, and the API still returns no percentile for these endpoints
+    nulls = _sweep(cli, bench_paths, *_one_rung("--sort", "latency"))
+    assert nulls.code == 2
+    assert nulls.error["kind"] == "invalid_input"
+    message = str(nulls.error["message"])
+    assert "--sort latency" in message and "OR_KEY" in message and "novita" in message
+
+
+def test_sweep_price_sort_without_a_key_ranks_by_uptime(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A keyless list has no percentiles, and the price tie-break falls back to uptime.
+
+    The run itself cannot go ahead — a pinned request needs the key, which is the failure
+    at the end — but the listing and the ranking it is read from hold without one.
+    """
+    _write_targets(bench_paths.targets_path, aliases=False)
+    flat = {"prompt": "0.0000005", "completion": "0.0000005", "input_cache_read": "0"}
+    endpoints = [
+        _endpoint("novita", pricing=flat, **_health(98.0)),
+        _endpoint("siliconflow", pricing=flat, **_health(99.5)),
+        _endpoint("gmicloud", pricing=flat, **_health(99.0)),
+    ]
+    _install(monkeypatch, _transport(endpoints=endpoints))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung(), unset=("OR_KEY",))
+    assert outcome.code == 1
+    assert "OR_KEY" in str(outcome.error["message"])  # the run needs it; the ranking did not
+    rows = [
+        line
+        for line in outcome.stderr.splitlines()
+        if line.startswith(("novita", "siliconflow", "gmicloud")) and "|" in line
+    ]
+    # equal prices, so the 1-day uptime decides: 99.5, then 99.0, then 98.0
+    assert [row.split("|")[0].strip() for row in rows] == [
+        "siliconflow",
+        "gmicloud",
+        "novita",
+    ]
+    # and both percentile columns are the nulls the unkeyed API sent
+    assert all(row.rstrip().endswith("-") for row in rows)
+
+
+def test_sweep_stability_floor_drops_endpoints_and_include_brings_one_back(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The floor is always on; `--include` is the one way back in for a dropped tag."""
+    _write_targets(bench_paths.targets_path, aliases=False)
+    endpoints = [
+        _endpoint("novita", **_health(99.9)),
+        _endpoint("relace/fp4", **_health(99.9, status=-2)),
+        _endpoint("siliconflow", **_health(77.9)),
+        _endpoint("gmicloud", **_health(99.0)),
+    ]
+    _install(monkeypatch, _transport(endpoints=endpoints))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung())
+    assert outcome.code == 0, outcome.stderr
+    assert _specs(outcome) == {f"or:{_MODEL}@novita", f"or:{_MODEL}@gmicloud"}
+    assert "dropped: relace/fp4 (status -2), siliconflow (uptime 1d 77.9 %)" in outcome.stderr
+    assert [(drop["tag"], drop["reason"]) for drop in _block(outcome)["dropped"]] == [
+        ("relace/fp4", "status -2"),
+        ("siliconflow", "uptime 1d 77.9 %"),
+    ]
+
+    included = _sweep(cli, bench_paths, *_one_rung("--include", "relace"))
+    assert included.code == 0, included.stderr
+    assert _specs(included) == {f"or:{_MODEL}@relace/fp4"}
+    assert "dropped:" not in included.stderr
+
+
+def test_sweep_zdr_keeps_only_the_endpoints_on_the_list(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path, aliases=False)
+    zdr = [
+        {"model_id": _MODEL, "tag": "novita"},
+        {"model_id": _MODEL, "tag": "gmicloud"},
+        {"model_id": "other/model", "tag": "siliconflow"},  # another model's endpoint
+    ]
+    _install(monkeypatch, _transport(endpoints=_RANKED, zdr=zdr))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--zdr"))
+    assert outcome.code == 0, outcome.stderr
+    assert _specs(outcome) == {f"or:{_MODEL}@novita", f"or:{_MODEL}@gmicloud"}
+    assert "zdr=on" in outcome.stderr
+    assert "dropped: novita/fp8 (not ZDR), siliconflow (not ZDR), openinference (not ZDR)" in (
+        outcome.stderr
+    )
+    assert "relace/fp4 (not ZDR)" in outcome.stderr
+    assert _block(outcome)["zdr"] is True
+
+
+def test_sweep_availability_check_removes_a_candidate_without_a_summary_row(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 404 from the account's settings is a note, not a slot: `--top 2` still probes two."""
+    _write_targets(bench_paths.targets_path)
+    endpoints = [
+        _endpoint("novita", **_health(99.9)),
+        _endpoint("gmicloud", **_health(99.5)),
+        _endpoint("siliconflow", **_health(99.0)),
+        _endpoint("novita/fp8", **_health(98.5)),
+    ]
+    prechecked: list[str] = []
+    _install(
+        monkeypatch,
+        _transport(
+            endpoints=endpoints,
+            prechecked=prechecked,
+            unavailable={"gmicloud": _GUARDRAIL_404},
+        ),
+    )
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--sort", "uptime", "--top", "2"))
+    assert outcome.code == 0, outcome.stderr
+    assert prechecked == ["novita", "gmicloud", "siliconflow"]
+    assert _specs(outcome) == {
+        f"or:{_MODEL}@novita",
+        f"or:{_MODEL}@siliconflow",
+        f"deepseek:{_NATIVE}",
+    }
+    assert _GUARDRAIL_REASON in outcome.stderr
+    # the estimate prices the check from its plan, so it counts all four candidates, the
+    # one the check removed included: the run stops early only once `--top` have survived
+    assert "pre-check: up to 4 requests," in outcome.stderr
+    assert _block(outcome)["dropped"] == [
+        {
+            "tag": "gmicloud",
+            "spec": f"or:{_MODEL}@gmicloud",
+            "reason": _GUARDRAIL_REASON,
+            "checked": True,
+        }
+    ]
+
+
+def test_sweep_check_without_top_checks_every_candidate(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--check` alone is the pre-check without a cut: everything that answers is probed."""
+    _write_targets(bench_paths.targets_path, aliases=False)
+    prechecked: list[str] = []
+    _install(
+        monkeypatch,
+        _transport(
+            endpoints=_RANKED,
+            prechecked=prechecked,
+            unavailable={"novita/fp8": _GUARDRAIL_404},
+        ),
+    )
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--check"))
+    assert outcome.code == 0, outcome.stderr
+    # every candidate is checked, and the default sort still decides the order: cheapest first
+    assert prechecked == [
+        "openinference",
+        "siliconflow",
+        "novita",
+        "gmicloud",
+        "novita/fp8",
+        "relace/fp4",
+    ]
+    assert _specs(outcome) == {
+        *(
+            f"or:{_MODEL}@{tag}"
+            for tag in ("openinference", "siliconflow", "novita", "gmicloud", "relace/fp4")
+        ),
+    }
+    assert _block(outcome)["check"] is True
+
+
+def test_sweep_availability_check_counts_in_the_estimate_and_the_budget(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The estimate prices the check from its plan, and `--budget` reads that one total."""
+    _write_targets(bench_paths.targets_path)
+    sent: list[dict[str, Any]] = []
+    _install(monkeypatch, _transport(endpoints=_RANKED, sent=sent))
+
+    refused = _sweep(cli, bench_paths, *_one_rung("--top", "4", "--budget", "0.0001"))
+    assert refused.code == 2
+    assert refused.error["kind"] == "invalid_input"
+    assert "exceeds --budget" in str(refused.error["message"])
+    assert sent == []  # nothing is sent before the budget has been checked
+
+    within = _sweep(cli, bench_paths, *_one_rung("--top", "4", "--budget", "1"))
+    assert within.code == 0, within.stderr
+    # turn 1 records 100 prompt tokens, so the plan's six candidate checks are 600 tokens
+    assert "pre-check: up to 6 requests, 600 tokens," in within.stderr
+
+
+def test_sweep_nothing_is_sent_when_the_confirmation_is_declined(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check is planned before the confirmation and sent after it, never before it."""
+    _write_targets(bench_paths.targets_path)
+    _write_trace(bench_paths.traces_dir / "t.jsonl")
+    sent: list[dict[str, Any]] = []
+    prechecked: list[str] = []
+    _install(monkeypatch, _transport(endpoints=_RANKED, sent=sent, prechecked=prechecked))
+
+    outcome = cli.run(
+        "sweep",
+        "t",
+        _MODEL,
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--no-throughput",  # no --yes: the prompt is the confirmation
+        "--top",
+        "2",
+        stdin="n\n",
+        tty_stdin=True,
+        tty_stderr=True,
+        env={**bench_paths.env, **_ENV},
+    )
+    assert outcome.code == 2
+    assert outcome.error["kind"] == "confirmation_required"
+    assert prechecked == [] and sent == []  # nothing at all went out
+    # the question names the check the estimate priced, and it is asked before any of it
+    assert "the availability check runs first, up to 6 candidate(s)" in outcome.stderr
+    assert "pre-check: up to 6 requests," in outcome.stderr
+
+
+def test_sweep_budget_refusal_names_the_check_that_tipped_it(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A budget the specs alone fit says the availability check is what it cannot cover."""
+    _write_targets(bench_paths.targets_path, aliases=False)
+    sent: list[dict[str, Any]] = []
+    _install(monkeypatch, _transport(endpoints=_RANKED, sent=sent))
+
+    priced = _sweep(cli, bench_paths, *_one_rung("--top", "2", "--budget", "1"))
+    assert priced.code == 0, priced.stderr
+    total, share = _estimate_amounts(priced.stderr)
+    specs_only = total - share
+    assert 0 < share < total  # the plan is a real share of what the run costs
+    sent.clear()
+
+    tipped = _sweep(
+        cli, bench_paths, *_one_rung("--top", "2", "--budget", f"{specs_only + share / 2:.6f}")
+    )
+    assert tipped.code == 2
+    assert "of it the availability check" in str(tipped.error["message"])
+
+    plain = _sweep(cli, bench_paths, *_one_rung("--top", "2", "--budget", f"{specs_only / 2:.6f}"))
+    assert plain.code == 2
+    assert "of it the availability check" not in str(plain.error["message"])
+    assert sent == []  # refused before anything went out, both times
+
+
+def test_sweep_failure_output_keeps_the_selection_lines(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sweep that lost a request prints its tables *and* how its endpoints were chosen.
+
+    The reader of a partial run is the one who most needs to know which candidates the
+    check removed before the requests that failed, and a failing run never reaches the
+    renderer that would otherwise have printed it.
+    """
+    _write_targets(bench_paths.targets_path)
+    _install(
+        monkeypatch,
+        _transport(
+            endpoints=_RANKED,
+            # the candidate the check removes, and the reference whose request then fails
+            unavailable={"novita/fp8": _GUARDRAIL_404, _NATIVE: _GUARDRAIL_404},
+        ),
+    )
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--check"), tty=True)
+    assert outcome.code == 1
+    assert "hit %" in outcome.stderr  # the tables the text failure path prints
+    assert "selection: sort=price, top=-, zdr=off; dropped: novita/fp8" in outcome.stderr
+    assert f"or:{_MODEL}@novita/fp8: not probed, {_GUARDRAIL_REASON}" in outcome.stderr
+
+
+def test_report_shows_the_selection_of_a_sweep_offline(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`report` prints the criteria, the drops and the ranking from the run directory."""
+    _write_targets(bench_paths.targets_path)
+    _install(monkeypatch, _transport(endpoints=_RANKED, unavailable={"gmicloud": _GUARDRAIL_404}))
+    outcome = _sweep(cli, bench_paths, *_one_rung("--sort", "uptime", "--top", "3"))
+    assert outcome.code == 0, outcome.stderr
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"report went to the network: {request.url}")
+
+    _install(monkeypatch, refuse)
+    run_dir = str(outcome.document["run_dir"])
+    documented = cli.run("report", run_dir, env={**bench_paths.env, **_ENV})
+    assert documented.code == 0, documented.stderr
+    assert documented.document["sweep"] == outcome.document["sweep"]
+
+    printed = cli.run("report", run_dir, tty_stdout=True, env={**bench_paths.env, **_ENV})
+    assert printed.code == 0, printed.stderr
+    assert (
+        f"selection: sort=uptime, top=3, zdr=off; dropped: gmicloud ({_GUARDRAIL_REASON})"
+        in printed.stdout
+    )
+    assert f"or:{_MODEL}@gmicloud: not probed, {_GUARDRAIL_REASON}" in printed.stdout
+
+    # the file shared around carries the same lines, from the same document
+    html_path = bench_paths.runs_dir.parent / "report.html"
+    written = cli.run("report", run_dir, "--html", str(html_path), env={**bench_paths.env, **_ENV})
+    assert written.code == 0, written.stderr
+    html = html_path.read_text(encoding="utf-8")
+    assert "selection: sort=uptime, top=3, zdr=off" in html
+    assert f"or:{_MODEL}@gmicloud: not probed, {_GUARDRAIL_REASON}" in html
+
+
+def test_report_of_a_probe_by_hand_has_no_selection(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A probe whose specs were named by hand chose nothing, so nothing is reported."""
+    _write_targets(bench_paths.targets_path)
+    _write_trace(bench_paths.traces_dir / "t.jsonl")
+    prechecked: list[str] = []
+    _install(monkeypatch, _transport(endpoints=_RANKED, prechecked=prechecked))
+    probe = cli.run(
+        "probe",
+        "t",
+        f"or:{_MODEL}@novita",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--no-throughput",
+        "--yes",
+        env={**bench_paths.env, **_ENV},
+    )
+    assert probe.code == 0, probe.stderr
+    assert "sweep" not in probe.document
+    assert prechecked == []  # no availability check without --top or --check
+
+    run_dir = str(probe.document["run_dir"])
+    documented = cli.run("report", run_dir, env={**bench_paths.env, **_ENV})
+    assert documented.code == 0, documented.stderr
+    assert documented.document["sweep"] is None
+
+    printed = cli.run("report", run_dir, tty_stdout=True, env={**bench_paths.env, **_ENV})
+    assert printed.code == 0, printed.stderr
+    assert "selection:" not in printed.stdout

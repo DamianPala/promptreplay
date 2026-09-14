@@ -19,6 +19,14 @@ import click
 
 from provibench.commands.inspect import resolve_trace_path
 from provibench.commands.probe_flags import ProbeRequest, options_for, probe_options
+from provibench.commands.probe_phases import (
+    Checked,
+    confirm,
+    planned_specs,
+    recorded_sweep,
+    run_check,
+)
+from provibench.commands.probe_phases import estimates as planned_estimates
 from provibench.commands.run_specs import (
     check_budget,
     endpoint_index,
@@ -26,15 +34,14 @@ from provibench.commands.run_specs import (
     parse_specs,
     select_conversation,
     spec_price_map,
-    unpriced_labels,
 )
 from provibench.commands.summary_view import (
     PROBE_SUMMARY,
+    message_lines,
+    probe_report_text,
     probe_summary_to_document,
-    probe_tables_text,
     render_probe_run,
 )
-from provibench.core.confirm import require_confirmation
 from provibench.core.context import Invocation
 from provibench.core.documents import Document, JsonSchema, array, boolean, integer, obj, string
 from provibench.core.errors import InvalidInput, OperationFailed
@@ -42,10 +49,10 @@ from provibench.core.registry import Command, require_invocation
 from provibench.core.spec import CommandSpec, Effects
 
 if TYPE_CHECKING:
-    from provibench.bench.estimate import SpecEstimate
     from provibench.bench.probe import ProbeOptions, ProbeResult, ProbeRun
     from provibench.bench.probe_summary import ProbeSummary
     from provibench.bench.targets import RunSpec
+    from provibench.bench.trace import TraceEntry
 
 _ERROR_TRUNCATE = 120
 
@@ -120,8 +127,13 @@ def probe(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
 
 
 def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
-    """Estimate, confirm, run and persist one probe-shaped run, and return its document."""
-    from provibench.bench.estimate import probe_estimate, render_estimate
+    """Estimate, confirm, check availability, probe and persist one run, and return its doc.
+
+    Nothing is sent before the confirmation: the estimate prices the availability check from
+    the plan (`request.pre_check`), `--budget` is compared against that one total, and only
+    a confirmed run visits the candidates.
+    """
+    from provibench.bench.estimate import precheck_cost, render_estimate
     from provibench.bench.probe import run_probe
     from provibench.bench.probe_drift import apply_drift
     from provibench.bench.probe_runs import write_probe_run
@@ -142,17 +154,27 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     for note in lookup_notes:
         invocation.message(note)
     prices = spec_price_map(request.specs, index)
-    estimates = [
-        probe_estimate(spec, selected, options, prices.get(spec.label)) for spec in request.specs
-    ]
-    invocation.message(render_estimate(estimates))
+    plan = request.pre_check
+    pre_check = None if plan is None else precheck_cost(plan.candidates, selected, options, prices)
+    estimates = planned_estimates(request, selected, options, prices)
+    message_lines(invocation, render_estimate(estimates, pre_check=pre_check))
     check_budget(
         estimates,
         request.budget,
+        pre_check=pre_check,
         hint="Raise --budget, or make the run smaller: drop a spec or a rung, lower "
         "--repeats, or skip the streamed request with --no-throughput",
     )
-    _confirm(invocation, estimates, options, request.specs, yes=request.yes)
+    confirm(
+        invocation,
+        estimates,
+        options,
+        planned_specs(request),
+        yes=request.yes,
+        pre_check=pre_check,
+    )
+
+    checked = _checked(request, selected, options, invocation)
 
     def on_progress(record: ProbeResult) -> None:
         invocation.message(_progress_line(record))
@@ -160,7 +182,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     try:
         run = asyncio.run(
             run_probe(
-                request.specs,
+                checked.specs,
                 selected,
                 options,
                 invocation.env,
@@ -177,9 +199,9 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         summarize_probe(
             spec.label, run.records[spec.label], prices=prices.get(spec.label), notes=notes
         )
-        for spec in request.specs
+        for spec in checked.specs
     ]
-    specs: Sequence[RunSpec] = request.specs
+    specs: Sequence[RunSpec] = checked.specs
     if request.by_price:
         # Both the tables and the run directory take the measured order, so a later
         # `report` of this run reads it exactly as the sweep that produced it did.
@@ -187,6 +209,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         specs = _in_order(specs, summaries)
     summaries = apply_drift(summaries, specs)
 
+    sweep = recorded_sweep(request.sweep, checked)
     runs_dir = Path(invocation.setting("runs_dir") or ".")
     run_dir = write_probe_run(
         runs_dir,
@@ -197,7 +220,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         endpoints=index,
         prices=prices,
         notes=[*lookup_notes, *parallel],
-        sweep=request.sweep,
+        sweep=sweep,
     )
     document: Document = {
         "run_dir": str(run_dir),
@@ -207,12 +230,25 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         "summaries": [probe_summary_to_document(summary) for summary in summaries],
         "changed": True,
     }
-    if request.sweep is not None:
+    if sweep is not None:
         # A sweep publishes the same document plus what it expanded from, so a failing
-        # spec reports the model and filters it was part of along with its numbers.
-        document["sweep"] = dict(request.sweep.model_dump())
+        # spec reports the model, the criteria and the drops it was part of along with
+        # its numbers.
+        document["sweep"] = sweep.to_document()
     _fail_on_partial(invocation, run, summaries, document, run_dir)
     return document
+
+
+def _checked(
+    request: ProbeRequest,
+    selected: Sequence[TraceEntry],
+    options: ProbeOptions,
+    invocation: Invocation,
+) -> Checked:
+    """The availability phase, or every spec when the run planned no check."""
+    if request.pre_check is None:
+        return Checked(list(request.specs), [])
+    return run_check(invocation, request.pre_check, request.specs, selected, options)
 
 
 def _parallel_note(parallel: int) -> list[str]:
@@ -247,41 +283,6 @@ def _in_order(specs: Sequence[RunSpec], summaries: Sequence[ProbeSummary]) -> li
     return [by_label[summary.label] for summary in summaries]
 
 
-def _requests(options: ProbeOptions) -> int:
-    """How many requests one spec sends: cold and warm per rung, plus the extras."""
-    per_spec = sum(1 + count for count in options.repeats)
-    if options.throughput:
-        per_spec += len(options.repeats)
-    if options.ttl_s:
-        per_spec += len(options.ttl_s)
-    return per_spec
-
-
-def _confirm(
-    invocation: Invocation,
-    estimates: Sequence[SpecEstimate],
-    options: ProbeOptions,
-    specs: Sequence[RunSpec],
-    *,
-    yes: bool,
-) -> None:
-    from provibench.bench.estimate import estimate_total
-
-    total = estimate_total(estimates)
-    worst = "an unknown amount" if total is None else f"up to ${total:.4f} at worst, no cache hit"
-    requests = len(specs) * _requests(options)
-    question = (
-        f"Send {requests} probe request(s) to {len(specs)} spec(s) over turn(s) "
-        f"{options.rungs}, spending {worst}"
-    )
-    if options.ttl_s:
-        question += f"; TTL re-reads at {options.ttl_s}s on the first rung"
-    unpriced = unpriced_labels(estimates)
-    if unpriced:
-        question += f"; no listed price for {', '.join(unpriced)}"
-    require_confirmation(invocation, question=question, yes=yes)
-
-
 def _fail_on_partial(
     invocation: Invocation,
     run: ProbeRun,
@@ -310,9 +311,7 @@ def _fail_on_partial(
     if invocation.machine_readable:
         context = dict(document)
     else:
-        # A multi-line message would be escaped into one line, so each line goes separately.
-        for line in probe_tables_text(document).splitlines():
-            invocation.message(line)
+        message_lines(invocation, probe_report_text(document))
 
     def hook() -> None:
         raise OperationFailed(

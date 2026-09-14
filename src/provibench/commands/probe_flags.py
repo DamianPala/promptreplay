@@ -22,8 +22,9 @@ from provibench.core.errors import InvalidInput
 
 if TYPE_CHECKING:
     from provibench.bench.openrouter import Endpoint
+    from provibench.bench.precheck import CheckPlan
     from provibench.bench.probe import ProbeOptions
-    from provibench.bench.probe_runs import SweepInfo
+    from provibench.bench.selection import SweepInfo
     from provibench.bench.targets import RunSpec
     from provibench.bench.trace import TraceEntry
 
@@ -37,10 +38,11 @@ class ProbeRequest:
     """One probe-shaped run: the trace, the specs, and the flags that shape the protocol.
 
     `probe` fills `specs` from its arguments and `sweep` expands them from an endpoint list
-    first; every other field comes from the flags both commands declare. `endpoints` and
-    `sweep` belong to a sweep: the endpoint snapshot it already fetched (so the estimate is
-    priced from the list the specs were built from, not a second fetch), and what
-    `run.json` records about the expansion.
+    first; every other field comes from the flags both commands declare. `endpoints`,
+    `pre_check` and `sweep` belong to a sweep: the endpoint snapshot it already fetched (so
+    the estimate is priced from the list the specs were built from, not a second fetch), the
+    availability check it planned (priced in the estimate, run after the confirmation), and
+    what `run.json` records about the expansion.
     """
 
     trace: str
@@ -60,6 +62,8 @@ class ProbeRequest:
     by_price: bool = False
     """Order the summaries — and the run directory — by measured effective price."""
     endpoints: Mapping[str, list[Endpoint]] | None = None
+    pre_check: CheckPlan | None = None
+    """The availability check to run after the confirmation; `None` when the run does not."""
     sweep: SweepInfo | None = None
 
 

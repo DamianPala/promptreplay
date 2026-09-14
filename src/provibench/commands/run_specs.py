@@ -12,13 +12,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from provibench.core.context import Invocation
-from provibench.core.errors import InvalidInput, NotFound
+from provibench.core.errors import InvalidInput, NotFound, OperationFailed
 
 if TYPE_CHECKING:
-    from provibench.bench.estimate import SpecEstimate, SpecPrices
+    from provibench.bench.estimate import PreCheckCost, SpecEstimate, SpecPrices
     from provibench.bench.openrouter import Endpoint
     from provibench.bench.targets import RunSpec, Target
     from provibench.bench.trace import TraceEntry
+
+_ZDR_TIMEOUT_S = 30.0
 
 
 def load_targets(invocation: Invocation) -> dict[str, Target]:
@@ -53,13 +55,44 @@ def endpoint_index(run_specs: Sequence[RunSpec]) -> tuple[dict[str, list[Endpoin
     return fetch_model_endpoints(models)
 
 
-def fetch_model_endpoints(models: Sequence[str]) -> tuple[dict[str, list[Endpoint]], list[str]]:
-    """The OpenRouter endpoint lists of these models, plus one note per failed lookup."""
+def fetch_model_endpoints(
+    models: Sequence[str], *, api_key: str | None = None
+) -> tuple[dict[str, list[Endpoint]], list[str]]:
+    """The OpenRouter endpoint lists of these models, plus one note per failed lookup.
+
+    `api_key` makes the list carry the health percentiles, which OpenRouter returns only for
+    a keyed request; a sweep passes it whenever its target has one, because the listing's p50
+    columns and the default price sort's throughput tie-break read them too.
+    """
     import asyncio
 
     from provibench.bench.estimate import fetch_endpoint_index
 
-    return asyncio.run(fetch_endpoint_index(models))
+    return asyncio.run(fetch_endpoint_index(models, api_key=api_key))
+
+
+def fetch_zdr_tags(model: str) -> set[str]:
+    """The Zero Data Retention endpoint tags of one model, or `operation_failed`.
+
+    The ZDR list covers every model at once and needs no API key; it is fetched per sweep
+    because a sweep is where the answer is used, and one request is cheaper to keep simple
+    than a cache of a list that changes with other people's provider settings.
+    """
+    import asyncio
+
+    import httpx
+
+    from provibench.bench.openrouter import fetch_zdr_endpoints
+
+    async def fetch() -> set[str]:
+        async with httpx.AsyncClient(timeout=_ZDR_TIMEOUT_S) as client:
+            endpoints = await fetch_zdr_endpoints(client)
+        return {endpoint.tag for endpoint in endpoints if endpoint.model_id == model}
+
+    try:
+        return asyncio.run(fetch())
+    except (httpx.HTTPError, ValueError) as exc:
+        raise OperationFailed(f"The Zero Data Retention list could not be fetched: {exc}") from exc
 
 
 def gateway_target(name: str | None, targets: Mapping[str, Target]) -> Target:
@@ -87,26 +120,18 @@ def gateway_target(name: str | None, targets: Mapping[str, Target]) -> Target:
     return target
 
 
-def sweep_specs(
+def filtered_endpoints(
     model: str,
-    gateway: Target,
-    targets: Mapping[str, Target],
     endpoints: Sequence[Endpoint],
     *,
     include: Sequence[str] = (),
     exclude: Sequence[str] = (),
-) -> list[RunSpec]:
-    """One spec per surviving OpenRouter endpoint, then one per native target that carries it.
+) -> list[Endpoint]:
+    """The endpoints the tag filters select, in the order the endpoint list gave them.
 
-    An endpoint becomes a pinned spec (`@<tag>`), which is the form `probe` takes by hand,
-    so a sweep and a hand-written probe of the same endpoint are the same measurement. The
-    filters are prefixes of the tag (`--include novita` keeps `novita/fp8`), and a tag no
-    endpoint has is an input error rather than a silently empty run. Native targets are
-    not filtered: they carry the model through `[targets.<name>.aliases]`, which is an
-    explicit statement of which of their models the slug means.
+    The filters are prefixes of the tag (`--include novita` keeps `novita/fp8`), and a tag no
+    endpoint has is an input error rather than a silently thinner run.
     """
-    from provibench.bench.targets import RunSpec
-
     kept = _kept_tags([endpoint.tag for endpoint in endpoints], include=include, exclude=exclude)
     if not kept:
         untagged = untagged_count(endpoints)
@@ -115,9 +140,25 @@ def sweep_specs(
             f"The endpoint list of {model!r} is empty after filtering{lost}",
             hint="Drop a --exclude, or list the endpoints with: provibench endpoints MODEL",
         )
+    first: dict[str, Endpoint] = {}
+    for endpoint in endpoints:
+        first.setdefault(endpoint.tag, endpoint)
+    return [first[tag] for tag in kept]
+
+
+def native_specs(model: str, targets: Mapping[str, Target]) -> list[RunSpec]:
+    """One spec per `kind = "anthropic"` target whose aliases map `model` to its own name.
+
+    A native target is selected by the model, not by a tag: it carries the slug through
+    `[targets.<name>.aliases]`, which is an explicit statement of which of its models the
+    slug means, and its row is the reference the measured endpoints are read against.
+    """
+    from provibench.bench.targets import RunSpec
+
     return [
-        *(RunSpec(target=gateway, model=model, providers=[tag]) for tag in kept),
-        *_native_specs(model, targets),
+        RunSpec(target=target, model=target.aliases[model])
+        for target in targets.values()
+        if target.kind == "anthropic" and model in target.aliases
     ]
 
 
@@ -129,17 +170,6 @@ def untagged_count(endpoints: Sequence[Endpoint]) -> int:
     missing or an empty run blame the filters.
     """
     return sum(1 for endpoint in endpoints if not endpoint.tag)
-
-
-def _native_specs(model: str, targets: Mapping[str, Target]) -> list[RunSpec]:
-    """One spec per `kind = "anthropic"` target whose aliases map `model` to its own name."""
-    from provibench.bench.targets import RunSpec
-
-    return [
-        RunSpec(target=target, model=target.aliases[model])
-        for target in targets.values()
-        if target.kind == "anthropic" and model in target.aliases
-    ]
 
 
 def _kept_tags(tags: Sequence[str], *, include: Sequence[str], exclude: Sequence[str]) -> list[str]:
@@ -165,7 +195,7 @@ def _selected(tags: Sequence[str], patterns: Sequence[str], *, flag: str) -> set
 
 
 def spec_price_map(
-    run_specs: Sequence[RunSpec], index: dict[str, list[Endpoint]]
+    run_specs: Sequence[RunSpec], index: Mapping[str, list[Endpoint]]
 ) -> dict[str, SpecPrices]:
     """The listed price of every spec that has one, keyed by label."""
     from provibench.bench.estimate import spec_prices
@@ -183,12 +213,20 @@ def unpriced_labels(estimates: Sequence[SpecEstimate]) -> list[str]:
     return [estimate.label for estimate in estimates if estimate.usd is None]
 
 
-def check_budget(estimates: Sequence[SpecEstimate], budget: float | None, *, hint: str) -> None:
+def check_budget(
+    estimates: Sequence[SpecEstimate],
+    budget: float | None,
+    *,
+    hint: str,
+    pre_check: PreCheckCost | None = None,
+) -> None:
     """Refuse a budget the estimate cannot cover, before anything is sent.
 
     An unpriced spec makes the total unknowable, so `--budget` is refused outright rather
     than checked against the priced part of it; the hint is the caller's own advice for a
-    total that is merely too big.
+    total that is merely too big. The availability check is part of that total — it is the
+    run's own spend, priced from the plan — so a refusal says how much of it the check is
+    when dropping the check would fit.
     """
     from provibench.bench.estimate import estimate_total
 
@@ -200,12 +238,14 @@ def check_budget(estimates: Sequence[SpecEstimate], budget: float | None, *, hin
             f"--budget cannot be checked: no listed price for {', '.join(unpriced)}",
             hint="Add a prices table for that model to targets.toml, or drop --budget",
         )
-    total = estimate_total(estimates)
-    if total is not None and total > budget:
-        raise InvalidInput(
-            f"The worst-case estimate ${total:.4f} exceeds --budget ${budget:.4f}",
-            hint=hint,
-        )
+    total = estimate_total(estimates, pre_check=pre_check)
+    if total is None or total <= budget:
+        return
+    message = f"The worst-case estimate ${total:.4f} exceeds --budget ${budget:.4f}"
+    if pre_check is not None and pre_check.usd is not None and total - pre_check.usd <= budget:
+        # the specs alone fit: the availability check is what tips the total over
+        message += f", ${pre_check.usd:.4f} of it the availability check"
+    raise InvalidInput(message, hint=hint)
 
 
 def select_conversation(

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import BaseModel, Field
 
-from provibench.bench.labels import column_labels
+from provibench.bench.labels import column_labels, text_table
 from provibench.bench.openrouter import normalize_provider
 from provibench.bench.probe_models import ProbeOptions
 from provibench.bench.probe_stream import STREAM_MAX_TOKENS
@@ -56,11 +56,27 @@ class SpecEstimate(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
-async def fetch_endpoint_index(models: Sequence[str]) -> tuple[EndpointIndex, list[str]]:
+class PreCheckCost(BaseModel):
+    """What the availability pre-check sends: one smallest-rung request per candidate.
+
+    Priced from the plan, before the check runs: every candidate it will visit is one
+    request, and the run is priced as if all of them were sent.
+    """
+
+    requests: int
+    tokens: int
+    usd: float | None = None
+
+
+async def fetch_endpoint_index(
+    models: Sequence[str], *, api_key: str | None = None
+) -> tuple[EndpointIndex, list[str]]:
     """The OpenRouter endpoint list per distinct model, plus one note per failed lookup.
 
     The endpoint list is both the price source for the estimate and the drift snapshot a
-    probe run stores, so a failure is reported and carried on rather than fatal.
+    probe run stores, so a failure is reported and carried on rather than fatal. `api_key`
+    makes the response carry the health percentiles a `--sort throughput|latency` needs; it
+    rides along only when there is one, so the unkeyed call stays a two-argument one.
     """
     index: EndpointIndex = {}
     notes: list[str] = []
@@ -70,7 +86,10 @@ async def fetch_endpoint_index(models: Sequence[str]) -> tuple[EndpointIndex, li
     async with httpx.AsyncClient(timeout=_ENDPOINTS_TIMEOUT_S) as client:
         for model in dict.fromkeys(models):
             try:
-                index[model] = await fetch_endpoints(client, model)
+                if api_key is None:
+                    index[model] = await fetch_endpoints(client, model)
+                else:
+                    index[model] = await fetch_endpoints(client, model, api_key=api_key)
             except (httpx.HTTPError, ValueError) as exc:
                 notes.append(f"endpoint lookup for {model} failed: {exc}")
     return index, notes
@@ -120,7 +139,8 @@ def probe_estimate(
     That is the cold write and the warm reads, the throughput request's prompt plus its
     output budget when it is on, and the TTL re-reads of the first rung. Output tokens are
     priced at the model's output rate, because generation is not prompt tokens and does not
-    share their price.
+    share their price. The availability pre-check is not a spec's request but the run's, so
+    it is priced once by `precheck_cost` and added to the total.
     """
     rungs = options.rungs or []
     requests: list[tuple[int, int]] = []
@@ -136,6 +156,30 @@ def probe_estimate(
         if options.ttl_s and rung == rungs[0]:
             requests.extend((rung + 1, 1) for _ in options.ttl_s)
     return _estimate(spec, entries, requests, prices, output_tokens=output_tokens)
+
+
+def precheck_cost(
+    specs: Sequence[RunSpec],
+    entries: Sequence[TraceEntry],
+    options: ProbeOptions,
+    prices: Mapping[str, SpecPrices],
+) -> PreCheckCost:
+    """What the availability check will send: one smallest-rung request per candidate.
+
+    Priced from the plan, because the estimate is rendered before the check runs: every
+    candidate is visited (the check only stops early once `--top` are kept), each at its own
+    listed input price. An unpriced candidate leaves the amount unknown (`None`), which the
+    total and `--budget` see; guessing a price here would be worse than saying so.
+    """
+    rung = min(options.rungs or [1])
+    recorded = _recorded_tokens(entries[rung - 1]) or 0
+    amounts = [_usd(recorded, 0, prices.get(spec.label)) for spec in specs]
+    known = all(amount is not None for amount in amounts)
+    return PreCheckCost(
+        requests=len(specs),
+        tokens=recorded * len(specs),
+        usd=sum(amount for amount in amounts if amount is not None) if known else None,
+    )
 
 
 def replay_estimate(
@@ -200,19 +244,36 @@ def _recorded_tokens(entry: TraceEntry) -> int | None:
     return entry.response.usage.prompt_total
 
 
-def estimate_total(estimates: Sequence[SpecEstimate]) -> float | None:
-    """The sum of every known worst case, or `None` when no spec could be priced."""
+def estimate_total(
+    estimates: Sequence[SpecEstimate], *, pre_check: PreCheckCost | None = None
+) -> float | None:
+    """The sum of every known worst case plus the pre-check plan, or `None` when unpriced.
+
+    The check is priced from its plan — every candidate will be visited — so it is the run's
+    own cost rather than a spec's, and it belongs to the number `--budget` is compared with.
+    An unpriced spec or an unpriced plan leaves the total unknown, as it was before.
+    """
     amounts = [estimate.usd for estimate in estimates if estimate.usd is not None]
-    return sum(amounts) if amounts else None
+    if not amounts:
+        return None
+    if pre_check is None:
+        return sum(amounts)
+    if pre_check.usd is None:
+        return None
+    return sum(amounts) + pre_check.usd
 
 
-def render_estimate(estimates: Sequence[SpecEstimate]) -> str:
+def render_estimate(
+    estimates: Sequence[SpecEstimate], *, pre_check: PreCheckCost | None = None
+) -> str:
     """A fixed-width table of the estimates and their total; `n/a` where unknown.
 
     The spec column is the one the probe tables draw: a shared `target:model` moves into a
     caption above the table and the rows keep their `@provider` tails whole, so a sweep's
     16 endpoints are told apart here too — a label cut in the middle reads as another
-    endpoint, and this is the table a reader checks before paying for the run.
+    endpoint, and this is the table a reader checks before paying for the run. A run that
+    will check availability says so, and the total is what `--budget` is compared against:
+    the spec rows plus the check the plan priced.
     """
     caption, labels = column_labels(
         [estimate.label for estimate in estimates], label_width=_LABEL_WIDTH
@@ -220,27 +281,36 @@ def render_estimate(estimates: Sequence[SpecEstimate]) -> str:
     rows = [
         _estimate_row(estimate, label) for estimate, label in zip(estimates, labels, strict=True)
     ]
-    total = estimate_total(estimates)
+    total = estimate_total(estimates, pre_check=pre_check)
     rows.append(
         [
             "total",
-            f"{sum(e.tokens for e in estimates):,}"
-            if all(e.tokens_known for e in estimates)
-            else "n/a",
+            _total_tokens(estimates, pre_check),
             "",
             "",
             f"{total:.4f}" if total is not None else "n/a",
         ]
     )
-    widths = [
-        max([len(_HEADERS[index]), *(len(row[index]) for row in rows)])
-        for index in range(len(_HEADERS))
-    ]
-    lines = [_join(_HEADERS, widths), _join(["-" * width for width in widths], widths)]
-    lines.extend(_join(row, widths) for row in rows)
+    lines = text_table(_HEADERS, rows)
+    if pre_check is not None:
+        lines.append(_pre_check_line(pre_check))
     lines.append(_NOTE)
     lines.extend(f"note: {note}" for estimate in estimates for note in estimate.notes)
     return "\n".join([caption, *lines] if caption is not None else lines)
+
+
+def _total_tokens(estimates: Sequence[SpecEstimate], pre_check: PreCheckCost | None) -> str:
+    """The token column of the total row, with the check's requests counted in."""
+    if not all(estimate.tokens_known for estimate in estimates):
+        return "n/a"
+    tokens = sum(estimate.tokens for estimate in estimates)
+    return f"{tokens + pre_check.tokens:,}" if pre_check is not None else f"{tokens:,}"
+
+
+def _pre_check_line(cost: PreCheckCost) -> str:
+    """The check the estimate priced: how many candidates it will visit, and what that costs."""
+    usd = f"${cost.usd:.4f}" if cost.usd is not None else "$n/a"
+    return f"pre-check: up to {cost.requests} requests, {cost.tokens:,} tokens, {usd}"
 
 
 def _estimate_row(estimate: SpecEstimate, label: str) -> list[str]:
@@ -252,7 +322,3 @@ def _estimate_row(estimate: SpecEstimate, label: str) -> list[str]:
         estimate.prices.source if estimate.prices is not None else "n/a",
         f"{estimate.usd:.4f}" if estimate.usd is not None else "n/a",
     ]
-
-
-def _join(cells: Sequence[str], widths: Sequence[int]) -> str:
-    return " | ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True))
