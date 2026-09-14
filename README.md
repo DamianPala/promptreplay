@@ -114,12 +114,14 @@ tables leave out: the served provider names (`served`), every model the response
 
 `probe` measures the specs you name; `sweep` names them for you. It answers "which reseller
 should I use for this model this week" in one command: it lists the model's OpenRouter
-endpoints, probes one spec per endpoint, adds a spec for every native target that carries
-the model, and orders the table by the effective price it measured.
+endpoints, picks candidates by the criteria below, probes them, adds a spec for every native
+target that carries the model, and orders the table by the effective price it measured.
+Everything after the candidate list is the probe: the same estimate and `--budget`, the same
+confirmation, the same `runs/<trace>/<timestamp>/` record and the same two tables.
 
 ```sh
 provibench sweep sample deepseek/deepseek-v4.1-flash --parallel 4 --budget 3
-provibench sweep sample deepseek/deepseek-v4.1-flash --exclude siliconflow --yes
+provibench sweep sample deepseek/deepseek-v4.1-flash --top 5 --sort uptime --zdr --yes
 provibench sweep sample deepseek/deepseek-v4.1-flash --yes --json >> sweeps.ndjson
 ```
 
@@ -138,11 +140,58 @@ slug to the name that target serves it under:
 ```
 
 `--target NAME` picks which `kind = "openrouter"` target is swept (the first one in
-`targets.toml` by default). Everything after the spec list is the probe: the same estimate
-and `--budget`, the same confirmation, the same `runs/<trace>/<timestamp>/` record — plus a
-`sweep` block naming the model, the target and the filters — and the same two tables. A
-sweep is the one run that sorts them: by effective $/M ascending, ties to the higher hit
-rate, so the first row is the endpoint to use and the rest are the alternatives.
+`targets.toml` by default). The native specs are the reference the rows are read against;
+they are never filtered, cut or pre-checked, because a tag is not how they were selected.
+
+### Which endpoints it picks
+
+The listing is a pre-filter, not a verdict: it says which endpoints were worth paying to
+measure and why the others were not, and the effective $/M in the report decides between
+them. The criteria are, in order:
+
+1. **Stability floor**, always on: an endpoint with a negative `status`, or under 97 %
+   uptime over the last day, is dropped and named in the listing with its reason
+   (`dropped: relace/fp4 (status -2), siliconflow/fp8 (uptime 1d 77.9 %)`). An endpoint that
+   did not report a status or an uptime is not degraded, it is unmeasured, so it stays.
+   `--include TAG` keeps an endpoint past the floor.
+2. **`--zdr`** intersects the list with OpenRouter's [Zero Data Retention
+   endpoints](https://openrouter.ai/docs/features/zdr); the ones left out are listed as
+   `not ZDR`.
+3. **`--sort`** ranks what is left: `price` (default) is the listed prompt price ascending,
+   ties going to the endpoint with the higher throughput p50 and then the better 1-day
+   uptime; `uptime` is 1-day uptime descending, ties to the cheaper endpoint;
+   `throughput` is throughput p50 descending; `latency` is latency p50 ascending. The two
+   percentile keys need the target's API key — OpenRouter returns those fields only for a
+   keyed request — and a candidate the API has no value for is an input error rather than
+   an endpoint quietly ranked last.
+4. **`--top N`** keeps the N best after the availability check below. Native targets are
+   never cut and count outside N, and a candidate that fails the check does not consume a
+   slot: the next one in the ranking is probed instead.
+
+### The availability check
+
+`--top` (and `--check` on its own) sends one `max_tokens 1` request per candidate, in
+ranking order, **after you confirm the run**: the smallest rung's cold body without a nonce,
+so it costs about one warm read each. An endpoint the account's settings exclude answers
+that request with a 404 instead of failing three colds later, and the run reports it as
+`not probed, unavailable for this key: Paid model training violation (account settings)`
+with no summary row; the candidate that would have taken its `--top` slot is the next one
+in the ranking. Nothing is sent before the confirmation, so the check is priced in the
+estimate you agree to: the line `pre-check: up to 5 requests, 61,000 tokens, $0.0100` is
+part of that total, `--budget` is compared against it, and a refusal says how much of the
+total the check is when dropping the check would fit. The estimate's spec rows are the
+endpoints `--top` would probe, so a candidate promoted by a removal is the one part of the
+run its total does not cover.
+
+### Reading a sweep
+
+The run records how it chose (`run.json`'s `sweep` block: the criteria, the ranking it
+ranked from, and every endpoint it dropped with the reason), so `report` prints a
+`selection: sort=price, top=5, zdr=off; dropped: …` line under its tables with no network —
+in the terminal and in the `--html` file.
+
+A sweep is the one run that sorts its tables: by effective $/M ascending, ties to the higher
+hit rate, so the first row is the endpoint to use and the rest are the alternatives.
 
 `--parallel N` probes up to N specs at once. Specs do not share a cache — they are different
 providers — so nothing leaks between them, and one spec is always sequential because its

@@ -15,6 +15,7 @@ _NORMALIZE = re.compile(r"[^a-z0-9]")
 
 _ENDPOINTS_URL = "https://openrouter.ai/api/v1/models/{model}/endpoints"
 _GENERATION_URL = "https://openrouter.ai/api/v1/generation"
+_ZDR_URL = "https://openrouter.ai/api/v1/endpoints/zdr"
 
 
 def normalize_provider(name: str) -> str:
@@ -23,6 +24,13 @@ def normalize_provider(name: str) -> str:
 
 
 class Endpoint(BaseModel):
+    """One endpoint of a model, as `/models/{model}/endpoints` reports it.
+
+    `latency_ms_30m` and `throughput_30m` are the median (`p50`) of the percentile object
+    OpenRouter returns for a request carrying the API key; without a key both are `null`,
+    which is why a `--sort latency` sweep asks for the key.
+    """
+
     provider_name: str
     tag: str
     quantization: str | None = None
@@ -36,6 +44,13 @@ class Endpoint(BaseModel):
     supports_implicit_caching: bool | None = None
 
 
+class ZdrEndpoint(BaseModel):
+    """One entry of the Zero Data Retention list: which model, and which of its endpoints."""
+
+    model_id: str
+    tag: str
+
+
 def _price_per_million(pricing: dict[str, Any], key: str) -> float:
     raw = pricing.get(key)
     if raw is None:
@@ -44,6 +59,20 @@ def _price_per_million(pricing: dict[str, Any], key: str) -> float:
         return float(raw) * 1e6
     except (TypeError, ValueError):
         return 0.0
+
+
+def _p50(value: object) -> float | None:
+    """The median of a health field: a bare number, or the `{p50, p75, p90, p99}` object.
+
+    OpenRouter answers these fields with a plain number for an unauthenticated request and
+    with the full percentile object once the key is present; the ranking reads p50 because
+    that is the request a user is most likely to get.
+    """
+    if isinstance(value, dict):
+        value = cast("dict[str, Any]", value).get("p50")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
 
 
 def parse_endpoints(payload: dict[str, Any]) -> list[Endpoint]:
@@ -72,8 +101,8 @@ def parse_endpoints(payload: dict[str, Any]) -> list[Endpoint]:
                 prices=prices,
                 uptime_30m=entry.get("uptime_last_30m"),
                 uptime_1d=entry.get("uptime_last_1d"),
-                latency_ms_30m=entry.get("latency_last_30m"),
-                throughput_30m=entry.get("throughput_last_30m"),
+                latency_ms_30m=_p50(entry.get("latency_last_30m")),
+                throughput_30m=_p50(entry.get("throughput_last_30m")),
                 status=entry.get("status"),
                 supports_implicit_caching=entry.get("supports_implicit_caching"),
             )
@@ -81,10 +110,34 @@ def parse_endpoints(payload: dict[str, Any]) -> list[Endpoint]:
     return endpoints
 
 
-async def fetch_endpoints(client: httpx.AsyncClient, model: str) -> list[Endpoint]:
-    resp = await client.get(_ENDPOINTS_URL.format(model=model))
+def parse_zdr_endpoints(payload: dict[str, Any]) -> list[ZdrEndpoint]:
+    """The `/endpoints/zdr` list: every ZDR endpoint of every model, flat."""
+    endpoints: list[ZdrEndpoint] = []
+    for raw in cast("list[object]", payload.get("data") or []):
+        if not isinstance(raw, dict):
+            continue
+        entry = cast("dict[str, Any]", raw)
+        endpoints.append(
+            ZdrEndpoint(model_id=str(entry.get("model_id") or ""), tag=str(entry.get("tag") or ""))
+        )
+    return endpoints
+
+
+async def fetch_endpoints(
+    client: httpx.AsyncClient, model: str, *, api_key: str | None = None
+) -> list[Endpoint]:
+    """The model's endpoints; with `api_key` the response also carries the health percentiles."""
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+    resp = await client.get(_ENDPOINTS_URL.format(model=model), headers=headers)
     resp.raise_for_status()
     return parse_endpoints(resp.json())
+
+
+async def fetch_zdr_endpoints(client: httpx.AsyncClient) -> list[ZdrEndpoint]:
+    """The Zero Data Retention list; it covers every model and needs no API key."""
+    resp = await client.get(_ZDR_URL)
+    resp.raise_for_status()
+    return parse_zdr_endpoints(resp.json())
 
 
 class Generation(BaseModel):

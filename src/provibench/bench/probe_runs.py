@@ -19,22 +19,12 @@ from provibench.bench.estimate import SpecPrices
 from provibench.bench.openrouter import Endpoint
 from provibench.bench.probe_models import ProbeOptions, ProbeResult, ProbeRun
 from provibench.bench.replay import RunRef
+from provibench.bench.selection import SweepInfo
 from provibench.bench.targets import RunSpec
 
-
-class SweepInfo(BaseModel):
-    """What a `sweep` covered: the model slug, the gateway target, and the tag filters.
-
-    Recorded so a reader of one run directory can tell which endpoints the run chose for
-    itself — a sweep of `deepseek/deepseek-v4.1-flash` with `--exclude siliconflow` is a
-    different measurement from the same command without it, and the spec list alone does
-    not say which filter produced it.
-    """
-
-    model: str
-    target: str
-    included: list[str] = Field(default_factory=list)
-    excluded: list[str] = Field(default_factory=list)
+__all__ = ["ProbeRunMeta", "SweepInfo", "load_probe_run", "read_protocol", "write_probe_run"]
+"""`SweepInfo` lives in `bench.selection` with the criteria it records; it is re-exported
+here because a run directory is where a reader meets it."""
 
 
 class ProbeRunMeta(BaseModel):

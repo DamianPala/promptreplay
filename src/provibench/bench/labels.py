@@ -7,8 +7,11 @@ the whole column at once: which shared prefix moves into a caption above the tab
 each row then shows on its own. `column_labels` makes that decision for the probe tables and
 for the estimate table, so a spec reads the same in either place.
 
+`text_table` is the other half of that: the columns-and-rows layout the estimate, the
+selection listing and the probe tables all draw, in one place so the three cannot drift.
+
 (`targets.py` imports nothing here and this module imports nothing from the package: a
-table's labels are strings, and both the estimate and the probe tables need them.)
+table's labels are strings, and every table in the tool needs them.)
 """
 
 from __future__ import annotations
@@ -16,8 +19,29 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 _ELLIPSIS = "…"
+_SEPARATOR = " | "
 
-__all__ = ["column_labels", "elide", "named", "rendered"]
+__all__ = ["column_labels", "elide", "named", "rendered", "text_table"]
+
+
+def text_table(columns: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
+    """A fixed-width table: the header, a rule of the same widths, then one line per row.
+
+    Every cell is padded to the widest in its column, so a reader compares a cell by looking
+    at the column rather than counting characters. A table with no rows is its header and
+    the rule, which is what a listing with nothing left to show looks like.
+    """
+    widths = [
+        max([len(columns[index]), *(len(row[index]) for row in rows)])
+        for index in range(len(columns))
+    ]
+    lines = [_join(columns, widths), _join(["-" * width for width in widths], widths)]
+    lines.extend(_join(row, widths) for row in rows)
+    return lines
+
+
+def _join(cells: Sequence[str], widths: Sequence[int]) -> str:
+    return _SEPARATOR.join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True))
 
 
 def column_labels(labels: Sequence[str], *, label_width: int) -> tuple[str | None, list[str]]:

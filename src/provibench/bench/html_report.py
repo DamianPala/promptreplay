@@ -23,6 +23,7 @@ from provibench.bench.html_svg import Point, grouped_bars, horizontal_bars, line
 from provibench.bench.probe_charts import cost_rows, not_charted, rung_groups, series
 from provibench.bench.probe_summary import ProbeSummary, summary_from_document
 from provibench.bench.probe_tables import TableBlock, probe_blocks, probe_note_lines
+from provibench.bench.selection import SweepInfo, not_probed_lines, selection_line
 from provibench.bench.summary import SUMMARY_COLUMNS, cache_mode_note, summary_row
 from provibench.core.documents import Document, as_document, as_list
 
@@ -135,10 +136,23 @@ def _probe_sections(document: Document) -> list[str]:
     charts = _probe_charts(summaries, labels)
     if charts:
         sections.append(f'<section class="charts"><h2>Cache and cost</h2>{charts}</section>')
-    notes = probe_note_lines(summaries)
+    notes = [*probe_note_lines(summaries), *_selection_lines(document)]
     if notes:
         sections.append(_notes(notes))
     return sections
+
+
+def _selection_lines(document: Document) -> list[str]:
+    """A sweep's selection as note lines, or nothing for a probe whose specs were named.
+
+    The report is the artifact that gets shared, so the criteria the run chose by and the
+    endpoints they dropped belong in the file next to the numbers they explain.
+    """
+    block = as_document(document.get("sweep"))
+    if block is None:
+        return []
+    sweep = SweepInfo.model_validate(block)
+    return [selection_line(sweep), *not_probed_lines(sweep)]
 
 
 def _replay_sections(document: Document) -> list[str]:

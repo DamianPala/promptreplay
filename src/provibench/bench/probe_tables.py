@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from provibench.bench.labels import column_labels, elide, named, rendered
+from provibench.bench.labels import column_labels, elide, named, rendered, text_table
 from provibench.bench.probe_summary import ProbeSummary, RungSummary, TtlRead
 
 _HIT_FULL = 0.98
@@ -316,20 +316,10 @@ def _tok_s(value: float | None) -> str:
 
 def _table(columns: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
     """The header, the rule, then one line per row; a table with no rows is only a header."""
-    widths = [
-        max([len(columns[index]), *(len(row[index]) for row in rows)])
-        for index in range(len(columns))
-    ]
-    lines = [_join(columns, widths), _join(["-" * width for width in widths], widths)]
-    lines.extend(_join(row, widths) for row in rows)
-    return "\n".join(lines)
+    return "\n".join(text_table(columns, rows))
 
 
 def _md_table(columns: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
     lines = ["| " + " | ".join(columns) + " |", "|" + "---|" * len(columns)]
     lines.extend("| " + " | ".join(row) + " |" for row in rows)
     return "\n".join(lines)
-
-
-def _join(cells: Sequence[str], widths: Sequence[int]) -> str:
-    return " | ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True))
