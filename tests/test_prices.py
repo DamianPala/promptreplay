@@ -175,6 +175,19 @@ def test_prices_lists_the_native_targets_own_models_with_the_table_source(
     )
 
 
+def test_prices_keeps_model_name_whole_at_eighty_columns(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path, override=True)
+    install_price_cache(cli)
+    monkeypatch.setenv("COLUMNS", "80")
+
+    outcome = cli.run("prices", "deepseek-flash", "deepseek-chat", tty=True, env=bench_paths.env)
+
+    assert outcome.code == 0, outcome.stderr
+    assert "deepseek-flash" in outcome.stdout
+
+
 def test_prices_prices_a_model_from_litellm_when_the_override_is_gone(
     cli: Cli, bench_paths: BenchPaths
 ) -> None:

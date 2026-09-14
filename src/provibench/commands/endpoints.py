@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import click
 
+from provibench.commands.prices import PRICE_COLUMNS
 from provibench.core.context import Invocation
 from provibench.core.documents import (
     Document,
@@ -88,10 +89,7 @@ _COLUMNS = (
     "provider",
     "quant",
     "context",
-    "$/M in",
-    "$/M out",
-    "$/M cache read",
-    "$/M cache write",
+    *PRICE_COLUMNS,
     "uptime 30m",
     "uptime 1d",
     "latency ms",
@@ -128,9 +126,9 @@ def render_endpoints(invocation: Invocation, document: Document) -> None:
             cell(entry.get("quantization")),
             cell(entry.get("context_length")),
             money(prices.get("input")),
-            money(prices.get("output")),
             money(prices.get("cache_read")),
             money(prices.get("cache_write")),
+            money(prices.get("output")),
             rate(entry.get("uptime_30m")),
             rate(entry.get("uptime_1d")),
             rate(entry.get("latency_ms_30m")),

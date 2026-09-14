@@ -65,8 +65,10 @@ _CACHE_FIELDS = {
 }
 _OUTPUT = obj(_CACHE_FIELDS, required=list(_CACHE_FIELDS))
 
-_COLUMNS = ("target", "model", "source", "$/M in", "$/M cache read", "$/M cache write", "$/M out")
-"""The four prices `Prices` holds, in the order the other tables print them."""
+PRICE_COLUMNS = ("in", "cache\nread", "cache\nwrite", "out")
+"""The four price headers shared by the `prices` and `endpoints` tables."""
+
+_COLUMNS = ("target", "model", "source", *PRICE_COLUMNS)
 
 _NOT_PRICED = "n/a"
 """No `targets.toml` entry and no LiteLLM key: the run is priced in tokens only."""
@@ -85,7 +87,9 @@ def render_prices(invocation: Invocation, document: Document) -> None:
         return f"{value:.3f}" if isinstance(value, int | float) else "-"
 
     console = invocation.stdout_console()
-    caption = f"price table: {document.get('cache_path')}, fetched {document.get('cache_age')}"
+    caption = (
+        f"price table ($/M): {document.get('cache_path')}, fetched {document.get('cache_age')}"
+    )
     console.print(escape_terminal_text(caption), highlight=False)
 
     table = Table(box=box.SIMPLE, header_style="bold")
