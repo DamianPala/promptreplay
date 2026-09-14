@@ -42,7 +42,7 @@ def parse_duration(text: str) -> int:
     match = DURATION_PATTERN.match(text)
     if match is None:
         raise InvalidInput(
-            f"Invalid duration {text!r}: use a positive integer followed by {_DURATION_UNITS}",
+            f"Invalid duration {text!r}: use a positive integer followed by s, m, h, or d",
         )
     try:
         seconds = int(match.group(1)) * _UNIT_SECONDS[match.group(2)]

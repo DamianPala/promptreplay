@@ -10,9 +10,9 @@ Every run goes back through the loader that owns its protocol (`load_probe_run` 
 probe, `load_run` for a full replay) and then through the same summarising the report
 does, so a number printed here cannot disagree with the number `report` prints for that
 run. What this module adds is the run-level context the reports leave implicit: the date
-stamp, the trace, and the endpoint snapshot the run recorded.
+stamp, the trace, the protocol, and the endpoint facts the run's snapshot recorded.
 
-A full replay carries no endpoint snapshot and no streamed throughput request, so its rows
+A full replay records no per-spec price and no streamed throughput request, so its rows
 read `-` where a probe's carry a listed price, a TTFT and a tok/s; the run still lists.
 """
 
@@ -72,7 +72,7 @@ class RunRow(BaseModel):
     gen_tok_s: float | None = None
     errors: int = 0
     listed_input: float | None = None
-    """The endpoint's listed input price at run time, from the run's snapshot."""
+    """The listed input price at run time, from the run's `prices` block."""
     listed_cache_read: float | None = None
     listed_source: str = NO_PRICE_SOURCE
     quantization: str | None = None
@@ -92,10 +92,12 @@ class RunNumbers(BaseModel):
 
 
 class Series(BaseModel):
-    """One spec's runs: the hit rate of each, oldest first, for the sparkline block."""
+    """One spec, trace and protocol's runs for a distinct sparkline."""
 
     spec: str
     provider: str
+    trace: str
+    protocol: str
     runs: int
     hit_rates: list[float | None] = Field(default_factory=list[float | None])
     """One entry per run of the spec, in date order; `None` where a run measured none."""
@@ -106,7 +108,8 @@ def created_at(created: str) -> float | None:
 
     The stamp is written by the run itself and is UTC (`%Y%m%d-%H%M%S`); a directory whose
     stamp was edited by hand, or a format from an older version, still reads as a run — it
-    just cannot be aged, so `--since` keeps it.
+    just cannot be aged, so `--since` keeps it. It sorts as the oldest run, so it is
+    leftmost in its sparkline.
     """
     try:
         return datetime.strptime(created, _STAMP_FORMAT).replace(tzinfo=UTC).timestamp()
@@ -137,14 +140,13 @@ def scan_runs(
     *,
     model: str | None = None,
     trace: str | None = None,
-    since_s: int | None = None,
-    now: float | None = None,
 ) -> list[RunNumbers]:
     """Every run under `runs_dir` the filters keep, oldest first.
 
     A run is kept when the model filter selects at least one of its specs — the other
-    specs are dropped from it, because `history MODEL` is about that model — when its
-    trace is the one asked for, and when it is not older than `--since`.
+    specs are dropped from it, because `history MODEL` is about that model — and when
+    its trace is the one asked for. Age filtering is separate so the command can tell
+    "no run was ever recorded" from "no run this recent".
     """
     kept = [run for run in map(read_run, _run_dirs(runs_dir)) if run.rows]
     if model is not None:
@@ -163,11 +165,11 @@ def scan_runs(
         kept = [run for run in kept if run.rows]
     if trace is not None:
         kept = [run for run in kept if run.trace == trace]
-    return sorted(keep_fresh(kept, since_s=since_s, now=now), key=_run_order)
+    return sorted(kept, key=_run_order)
 
 
 def keep_fresh(
-    runs: Sequence[RunNumbers], *, since_s: int | None = None, now: float | None = None
+    runs: Sequence[RunNumbers], *, since_s: int | None = None, now: float
 ) -> list[RunNumbers]:
     """The runs not older than `since_s`, in the order given.
 
@@ -177,7 +179,7 @@ def keep_fresh(
     """
     if since_s is None:
         return list(runs)
-    cutoff = (0.0 if now is None else now) - since_s
+    cutoff = now - since_s
     return [run for run in runs if _fresh(run, cutoff)]
 
 
@@ -190,22 +192,24 @@ def rows_in_order(runs: Iterable[RunNumbers]) -> list[RunRow]:
 
 
 def history_series(runs: Sequence[RunNumbers]) -> list[Series]:
-    """One series per spec, in the order `rows_in_order` prints those specs.
+    """One series per spec, trace and protocol, in table order.
 
     Runs of one spec in date order, with a `None` where a run measured no hit rate, so the
-    sparkline can skip it without the run count going missing.
+    sparkline can preserve the missing run without the run count going missing.
     """
-    grouped: dict[str, list[RunRow]] = {}
+    grouped: dict[tuple[str, str, str], list[RunRow]] = {}
     for row in rows_in_order(runs):
-        grouped.setdefault(row.spec, []).append(row)
+        grouped.setdefault((row.spec, row.trace, row.protocol), []).append(row)
     return [
         Series(
-            spec=spec,
+            spec=key[0],
             provider=rows[0].provider,
+            trace=key[1],
+            protocol=key[2],
             runs=len(rows),
             hit_rates=[row.hit_rate for row in rows],
         )
-        for spec, rows in grouped.items()
+        for key, rows in grouped.items()
     ]
 
 
@@ -248,6 +252,7 @@ def _probe_row(
     summary: ProbeSummary,
     snapshot: EndpointSnapshot | None,
 ) -> RunRow:
+    # the listed price is read off the summary `report` prints, so the two cannot differ
     return RunRow(
         trace=trace,
         created=created,
@@ -262,9 +267,9 @@ def _probe_row(
         ttft_ms=summary.ttft_ms,
         gen_tok_s=summary.gen_tok_s,
         errors=summary.errors,
-        listed_input=None if snapshot is None else snapshot.price_input,
-        listed_cache_read=None if snapshot is None else snapshot.price_cache_read,
-        listed_source=NO_PRICE_SOURCE if snapshot is None else snapshot.source,
+        listed_input=summary.input_price,
+        listed_cache_read=summary.cache_read_price,
+        listed_source=summary.price_source,
         quantization=None if snapshot is None else snapshot.quantization,
         context_length=None if snapshot is None else snapshot.context_length,
         uptime_1d=None if snapshot is None else snapshot.uptime_1d,

@@ -16,7 +16,7 @@ from pathlib import Path
 
 from provibench.core.errors import NotFound
 
-__all__ = ["LATEST", "PREVIOUS", "newest_run_dir", "resolve_run_dir", "run_dirs"]
+__all__ = ["resolve_run_dir"]
 
 LATEST = "latest"
 PREVIOUS = "previous"
@@ -50,9 +50,10 @@ def resolve_run_dir(
     trace_dir = runs_dir / run
     newest = newest_run_dir(trace_dir.glob("*")) if trace_dir.is_dir() else None
     if newest is None:
+        names = f"{LATEST!r}/{PREVIOUS!r}" if previous else repr(LATEST)
         raise NotFound(
             f"No run found for {run!r}",
-            hint=f"Pass a run directory, a trace name under {runs_dir}, or {LATEST!r}",
+            hint=f"Pass a run directory, a trace name under {runs_dir}, or {names}",
         )
     return newest
 

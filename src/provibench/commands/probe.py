@@ -229,7 +229,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         key,
         run,
         specs,
-        endpoints=endpoint_snapshot(specs, index, prices),
+        endpoints=endpoint_snapshot(specs, index),
         prices=prices,
         notes=[*lookup_notes, *parallel],
         sweep=sweep,

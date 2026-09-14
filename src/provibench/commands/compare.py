@@ -33,14 +33,16 @@ from provibench.core.spec import CommandSpec, Effects
     help="Compare two runs of one trace, spec by spec.\n\n"
     "RUN_A and RUN_B each name a run directory, a trace (its newest run), or latest and "
     "previous — the two newest runs of --trace, or of the trace the newest run belongs to. "
-    "Every spec both runs measured gets a row with the metric as A -> B and the change "
-    "between them; the listed prices are compared from the endpoint snapshot each run "
-    "recorded, where both have one; a spec only one run measured is named under the table. "
+    "Every spec both runs measured gets a row with the metric as A → B and the change "
+    "between them; the listed prices are compared from the prices block each run recorded, "
+    "where both have one; a spec only one run measured is named under the table. "
     "Runs of different traces or protocols are refused unless --force, because their "
     "numbers are not the same measurement.",
 )
-@click.argument("run_a", help="The earlier run: a directory, a trace name, or latest/previous")
-@click.argument("run_b", help="The later run, named the same ways")
+@click.argument(
+    "run_a", help="The baseline; deltas are B minus A: a directory, trace name, or latest/previous"
+)
+@click.argument("run_b", help="The comparison run, named the same ways")
 @click.option(
     "--trace",
     default=None,

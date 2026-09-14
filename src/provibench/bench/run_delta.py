@@ -47,7 +47,7 @@ class SpecDelta(BaseModel):
 
 
 class PriceDelta(BaseModel):
-    """One spec whose endpoint both runs' snapshots priced: the two prompt-side prices.
+    """One spec both runs recorded a listed price for: the two prompt-side prices.
 
     A cache benchmark is about the cache-read price as much as the input one — a provider
     that raises its cache-read rate changes what a warm run costs — so both are carried.
@@ -73,7 +73,7 @@ def compare_runs(a: RunNumbers, b: RunNumbers) -> Comparison:
     """The delta per spec of two runs, in the order the first of them measured them.
 
     A spec only one of the runs measured cannot be subtracted at all, so it is named apart
-    instead of paired, and so is a spec one of the snapshots never priced.
+    instead of paired, and so is a spec only one of the runs recorded a price for.
     """
     here = {row.spec: row for row in b.rows}
     pairs = [(row, here[row.spec]) for row in a.rows if row.spec in here]

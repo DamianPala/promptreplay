@@ -109,19 +109,22 @@ What the columns mean:
 | `ttl` | One cell per `--ttl` offset: `60s:1` means the cache was still there at 60 s, `300s:0` that it was not, `60s:1 (+6)` that the read went out six seconds late |
 | `cached cold` | What the cold write read back; anything above 0 means the rung was not really cold |
 
-When every spec shares one `target:model`, the tables move it into a `specs:` line above them
-and the `spec` column shows just the provider tails (`@novita`, `@gmicloud`); a spec of
-another model keeps its whole name: that row is the reference the `@tags` are compared
-against, so it wins the width it needs to stay readable. The tables are planned to fit 120
-columns without shortening two rows into the same name; a rung that carries a late `--ttl`
-read is allowed to run longer, because that marker is worth the columns, and so is a table
-whose reference row had to be wider than the budget.
+When every spec shares one `target:model`, the tables move it into a `specs:` line above
+them and the `spec` column shows just the provider tails (`@novita`, `@gmicloud`); a spec
+of another model keeps its whole name: that row is the reference the `@tags` are compared
+against, so it wins the width it needs to stay readable. The tables are planned to fit
+120 columns without shortening two rows into the same name; a rung that carries a late
+`--ttl` read is allowed to run longer, because that marker is worth the columns, and so
+is a table whose reference row had to be wider than the budget. `history` is the one table
+outside that budget: its trace and protocol columns say which recording and which
+measurement a row is, and that is worth more than the width they take.
 
 A run is persisted under `runs/<trace>/<timestamp>/` as the options, the endpoint snapshot —
-one record per spec: the endpoint it pinned, with its listed input and cache-read price,
-quantization, context length, uptime 1d and status at the time — the prices it was priced
-with, and one `<spec>.jsonl` per spec; `report` re-reads it with no network. `--json` prints the same summaries for scripts, including the fields the terminal
-tables leave out: the served provider names (`served`), every model the responses named
+one record per spec: the endpoint it pinned, with its quantization, context length, uptime 1d
+and status at the time — the `prices` block it was priced with, and one `<spec>.jsonl` per
+spec; `report` re-reads it with no network. `--json` prints the same summaries for scripts,
+including the fields the terminal tables leave out: the served provider names (`served`),
+every model the responses named
 (`models_seen`), and the raw per-rung records the columns are folded from.
 
 ## Sweep
@@ -262,7 +265,7 @@ the run directories are the record and a cron line is the whole setup:
 
 ```sh
 # every Monday at 09:03, a fresh sweep of the model you actually use
-3 9 * * 1 cd ~/bench && provibench sweep sample deepseek/deepseek-v4.1-flash --yes --budget 1
+3 9 * * 1 cd ~/bench && provibench sweep sample deepseek/deepseek-v4.1-flash --top 3 --yes --budget 1
 ```
 
 `cd` matters: the runs dir defaults to `./runs`, so the sweep has to run from the same
@@ -274,40 +277,44 @@ happened in.
 provibench history deepseek/deepseek-v4.1-flash             # every run of the model
 provibench history deepseek/deepseek-v4.1-flash --since 14d # the last two weeks only
 provibench compare previous latest                           # what changed since last week
-provibench compare sample/20260912-090301 sample/20260919-090302  # two named directories
+provibench compare runs/sample/20260912-090301 runs/sample/20260919-090302  # two named directories
 ```
 
-`history` prints one row per run and provider — date, spec, hit %, effective $/M, TTFT,
-tok/s, errors, and the listed $/M from the endpoint snapshot that run recorded — ordered by
-provider and then by date. Under the table one sparkline per spec draws its hit rate across
-the runs it has, oldest on the left, with the run count. `MODEL` is the model the runs'
-specs carry, so a native spec is asked about by the name its own endpoint serves
+`history` prints one row per run and provider — date, trace, protocol, spec, hit %, effective
+$/M, TTFT, tok/s, errors, and the listed $/M from that run's `prices` block — ordered by
+provider and then by date. Under the table one sparkline per spec, trace and protocol draws
+its hit rate across the runs it has, oldest on the left, with the run count. `MODEL` is the
+model the runs' specs carry, so a native spec is asked about by the name its own endpoint serves
 (`deepseek-flash`); with no `MODEL`, every model in the runs dir lists.
 
 ```
-specs: or:deepseek/deepseek-v4.1-flash@<provider>
-date             | spec    | hit % | eff $/M | TTFT ms | tok/s | errors | in $/M
-2026-09-12 09:03 | @novita | 96.4  | 0.037   | 412     | 38.1  | 0       | 0.300
-2026-09-19 09:03 | @novita | 41.2  | 0.187   | 508     | 31.6  | 1       | 0.240
+specs: openrouter:deepseek/deepseek-v4.1-flash@<provider>
+date             | trace  | protocol | spec    | hit % | eff $/M | TTFT ms | tok/s | errors | in $/M
+---------------- | ------ | -------- | ------- | ----- | ------- | ------- | ----- | ------ | ------
+2026-09-12 09:03 | sample | probe    | @novita | 100.0 | 0.030   | 400     | 40.0  | 0      | 0.300
+2026-09-19 09:03 | sample | probe    | @novita | 0.0   | 0.240   | 400     | 40.0  | 0      | 0.240
+2026-09-12 09:03 | sample | probe    | @relace | 100.0 | 0.030   | 400     | 40.0  | 0      | 0.300
+2026-09-19 09:03 | sample | probe    | @relace | 100.0 | 0.030   | 400     | 40.0  | 0      | 0.200
 
 @novita  █▁  2 run(s)
+@relace  ██  2 run(s)
 ```
 
 `compare RUN_A RUN_B` names each run the way `report` does — a directory, a trace name (its
 newest run), or `latest`/`previous` — and prints one row per spec both runs measured with
 the metric as `A → B` and the change between them: hit rate, effective $/M, TTFT and
-tok/s. The listed prices are compared from the two endpoint snapshots, a spec only one run
+tok/s. The listed prices are compared from the two `prices` blocks, a spec only one run
 measured is named under the table, and runs of different traces or protocols are refused
 (`invalid_input`) unless `--force`, because a full replay's per-turn totals and a probe's
 warm-read hit rate are not the same measurement. The delta is `B − A` of the arguments
 given, so `compare previous latest` reads forward in time.
 
 Every run records what its endpoints said about themselves at the time (`run.json`'s
-`endpoints` block: listed input and cache-read price, quantization, context length, uptime
-1d and status, per gateway spec; a native spec records its price and where it came from).
-That block is what makes a history row's listed price the price of *that* week, and it is
-also how `compare` can say that a price moved. A run written before the block existed still
-lists and still compares — its listed price reads `-`.
+`endpoints` block: quantization, context length, uptime 1d and status, per gateway spec).
+The `prices` block carries the listed input and cache-read prices and their source, which
+is what makes a history row's listed price the price of *that* week and lets `compare` say
+that a price moved. A run that recorded no price still lists and compares — its listed price
+reads `-`.
 
 ## Sharing a trace
 

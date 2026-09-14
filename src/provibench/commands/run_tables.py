@@ -31,24 +31,45 @@ _TOK_S_DIGITS = 1
 _RUNS = "run(s)"
 """What the sparkline block counts: one run is as ordinary here as thirty."""
 _ARROW = " → "
-_HISTORY_COLUMNS = ("date", "spec", "hit %", "eff $/M", "TTFT ms", "tok/s", "errors", "in $/M")
+_HISTORY_COLUMNS = (
+    "date",
+    "trace",
+    "protocol",
+    "spec",
+    "hit %",
+    "eff $/M",
+    "TTFT ms",
+    "tok/s",
+    "errors",
+    "in $/M",
+)
 _COMPARE_COLUMNS = ("spec", "hit %", "eff $/M", "TTFT ms", "tok/s")
 _LISTED_COLUMNS = ("spec", "listed $/M in", "listed cache read $/M")
-_NO_SNAPSHOT = "listed prices: neither run recorded an endpoint snapshot"
+_NO_SNAPSHOT = "listed prices: no spec was priced in both runs"
 
 
 def history_text(document: Document) -> str:
-    """The history table, then one sparkline line per spec."""
+    """The history table, then one sparkline line per spec, trace and protocol."""
     rows = _rows(document, "rows")
     series = _rows(document, "series")
     caption, labels = _labels([str(entry.get("spec")) for entry in series])
+    traces = {str(entry.get("trace")) for entry in series}
+    protocols = {str(entry.get("protocol")) for entry in series}
     lines = [
         *([caption] if caption is not None else []),
         *_table(_HISTORY_COLUMNS, [_history_cells(row, labels) for row in rows]),
     ]
     if series:
         lines.append("")
-        lines.extend(_series_line(entry, labels) for entry in series)
+        named = [
+            _series_line(
+                entry, labels, show_trace=len(traces) > 1, show_protocol=len(protocols) > 1
+            )
+            for entry in series
+        ]
+        # the names are padded to one width so every sparkline starts in the same column
+        width = max(len(name) for name, _ in named)
+        lines.extend(f"{name.ljust(width)}  {bars}" for name, bars in named)
     return "\n".join(lines)
 
 
@@ -115,6 +136,8 @@ def _labels(specs: Sequence[str]) -> tuple[str | None, dict[str, str]]:
 def _history_cells(row: Document, labels: dict[str, str]) -> list[str]:
     return [
         _stamp(row.get("created")),
+        str(row.get("trace")),
+        str(row.get("protocol")),
         _label(row, labels),
         _number(row.get("hit_rate"), _PCT_DIGITS, scale=100.0),
         _number(row.get("eff_per_m_prompt"), _USD_DIGITS),
@@ -143,20 +166,30 @@ def _listed_cells(row: Document, labels: dict[str, str]) -> list[str]:
     ]
 
 
-def _series_line(entry: Document, labels: dict[str, str]) -> str:
-    """One spec's sparkline and its run count, labelled as its rows are.
+def _series_line(
+    entry: Document,
+    labels: dict[str, str],
+    *,
+    show_trace: bool,
+    show_protocol: bool,
+) -> tuple[str, str]:
+    """One spec's name, and its sparkline with its run count, labelled as its rows are.
 
-    A run that measured no hit rate has `null` in the series, and the sparkline skips it:
-    a missing measurement is not a zero, and drawing it as one would invent a collapse.
+    A run that measured no hit rate has `null` in the series. It gets a placeholder so the
+    bars remain aligned with the run count and the time axis. The name comes back apart
+    from the bars because the caller pads the names of the whole block to one width.
     """
     from provibench.bench.summary import sparkline
 
     spec = str(entry.get("spec"))
     rates = as_list(entry.get("hit_rates")) or []
-    values = [float(value) for value in rates if isinstance(value, int | float)]
-    return (
-        f"{labels.get(spec, spec)}  {sparkline(values) or '-'}  {_count(entry.get('runs'))} {_RUNS}"
-    )
+    bars = [sparkline([float(value)]) if isinstance(value, int | float) else "·" for value in rates]
+    name = labels.get(spec, spec)
+    if show_trace:
+        name += f"  trace={entry.get('trace')}"
+    if show_protocol:
+        name += f"  protocol={entry.get('protocol')}"
+    return name, f"{''.join(bars) or '-'}  {_count(entry.get('runs'))} {_RUNS}"
 
 
 def _label(row: Document, labels: dict[str, str]) -> str:

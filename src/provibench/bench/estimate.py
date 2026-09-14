@@ -84,6 +84,28 @@ class UpperBound(BaseModel):
     usd: float
 
 
+def match_endpoint(spec: RunSpec, endpoints: Sequence[Endpoint]) -> Endpoint | None:
+    """Return the endpoint a gateway spec prices, or none for native specs.
+
+    A pinned spec names one endpoint by tag or provider name. An unpinned gateway
+    spec uses the most expensive endpoint, because that is the estimate's worst case.
+    """
+    if spec.target.kind != "openrouter":
+        return None
+    if spec.providers:
+        wanted = {normalize_provider(name) for name in spec.providers}
+        return next(
+            (
+                endpoint
+                for endpoint in endpoints
+                if normalize_provider(endpoint.tag) in wanted
+                or normalize_provider(endpoint.provider_name) in wanted
+            ),
+            None,
+        )
+    return max(endpoints, key=lambda endpoint: endpoint.prices.input, default=None)
+
+
 async def fetch_endpoint_index(
     models: Sequence[str], *, api_key: str | None = None
 ) -> tuple[EndpointIndex, list[str]]:
@@ -127,20 +149,7 @@ def spec_prices(
     if spec.target.kind != "openrouter":
         found = resolve_target(spec.target, spec.model, table)
         return None if found is None else SpecPrices(prices=found[0], source=found[1])
-    endpoints = index.get(spec.model, [])
-    if spec.providers:
-        wanted = {normalize_provider(name) for name in spec.providers}
-        match = next(
-            (
-                endpoint
-                for endpoint in endpoints
-                if normalize_provider(endpoint.tag) in wanted
-                or normalize_provider(endpoint.provider_name) in wanted
-            ),
-            None,
-        )
-    else:
-        match = max(endpoints, key=lambda endpoint: endpoint.prices.input, default=None)
+    match = match_endpoint(spec, index.get(spec.model, []))
     if match is None:
         return None
     return SpecPrices(

@@ -741,9 +741,13 @@ def test_probe_prices_an_openrouter_spec_from_the_endpoint_snapshot(
     assert snapshot["tag"] == "novita"
     assert snapshot["quantization"] == "fp8"
     assert snapshot["context_length"] == 128000
-    assert snapshot["price_input"] == pytest.approx(0.3)
-    assert snapshot["price_cache_read"] == pytest.approx(0.03)
-    assert snapshot["source"] == "openrouter-endpoint"
+    assert "price_input" not in snapshot
+    assert "price_cache_read" not in snapshot
+    assert "source" not in snapshot
+    prices = meta["prices"]["or:model-a@novita"]
+    assert prices["prices"]["input"] == pytest.approx(0.3)
+    assert prices["prices"]["cache_read"] == pytest.approx(0.03)
+    assert prices["source"] == "openrouter-endpoint"
 
 
 def test_report_summarises_a_probe_run_without_the_network(

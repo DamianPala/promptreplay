@@ -33,9 +33,11 @@ from provibench.core.spec import CommandSpec, Effects
     "holds is listed. Runs come from the configured runs dir (runs/<trace>/<timestamp>/), "
     "newest last within a provider; --trace keeps one trace's runs, --since drops the ones "
     "older than a duration (30s, 5m, 2h, 7d). Each row is what that run measured, next to "
-    "the listed price its endpoint snapshot recorded at the time, and '-' where a run "
-    "recorded none. The block under the table draws one sparkline per spec: its hit rate "
-    "across the runs it has, oldest on the left, with the number of runs.",
+    "the listed price its prices block recorded at the time, and '-' where a run "
+    "recorded none; the trace and protocol columns say which recording and which "
+    "measurement (probe or full replay) a row belongs to. The block under the table draws "
+    "one sparkline per spec, trace and protocol: its hit rate across the runs it has, "
+    "oldest on the left, with the number of runs.",
 )
 @click.argument(
     "model",
@@ -78,12 +80,13 @@ def _nothing_found(runs_dir: Path, *, model: str | None, trace: str | None) -> N
             f"No runs under {runs_dir}",
             hint="Run one first: provibench probe TRACE SPEC, or provibench sweep TRACE MODEL",
         )
-    if model is not None:
-        known = ", ".join(models_in(everything)) or "(none)"
+    if trace is not None and trace not in {run.trace for run in everything}:
+        known = ", ".join(sorted({run.trace for run in everything})) or "(none)"
         return NotFound(
-            f"No runs of {model!r} under {runs_dir}", hint=f"Models in the runs dir: {known}"
+            f"No runs of trace {trace!r} under {runs_dir}", hint=f"Traces in the runs dir: {known}"
         )
-    known = ", ".join(sorted({run.trace for run in everything})) or "(none)"
+    # a known trace with no model filter cannot have emptied the scan, so a model is set here
+    known = ", ".join(models_in(everything)) or "(none)"
     return NotFound(
-        f"No runs of trace {trace!r} under {runs_dir}", hint=f"Traces in the runs dir: {known}"
+        f"No runs of {model!r} under {runs_dir}", hint=f"Models in the runs dir: {known}"
     )

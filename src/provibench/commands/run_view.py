@@ -7,7 +7,8 @@ documents are the source of truth, so a script and a reader see the same numbers
 The numbers stay what the runs measured: a hit rate is a fraction and an effective price
 is USD per 1M prompt tokens, in the units a script subtracts. A table prints the fraction
 as a per cent because that is how two of them are compared at a glance, and the delta it
-shows is the difference of the fractions — the same number `--json` carries.
+shows is the difference of the displayed values in points for hit rate, and in document
+units for the other metrics.
 """
 
 from __future__ import annotations
@@ -65,6 +66,8 @@ _SERIES = _all(
     {
         "spec": string(),
         "provider": string(),
+        "trace": string(),
+        "protocol": string(),
         "runs": integer(),
         "hit_rates": array(nullable_number()),
     }
@@ -191,10 +194,12 @@ def row_document(row: RunRow) -> Document:
 
 
 def series_document(series: Series) -> Document:
-    """One spec's sparkline data: its hit rate per run, oldest first."""
+    """One spec, trace and protocol's hit rate per run, oldest first."""
     return {
         "spec": series.spec,
         "provider": series.provider,
+        "trace": series.trace,
+        "protocol": series.protocol,
         "runs": series.runs,
         "hit_rates": list(series.hit_rates),
     }

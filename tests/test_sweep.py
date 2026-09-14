@@ -533,9 +533,11 @@ def test_sweep_records_the_sweep_block_and_the_endpoint_snapshot(
     # the snapshot the estimate was priced from, one record per probed spec
     assert meta["endpoints"][f"or:{_MODEL}@novita"]["tag"] == "novita"
     native = meta["endpoints"][f"deepseek:{_NATIVE}"]
-    # a native spec has no endpoint of the gateway's listing: its price and its source
+    # a native spec has no endpoint of the gateway's listing
     assert native["tag"] is None and native["quantization"] is None
-    assert native["source"] == "table" and native["price_input"] > 0
+    assert "source" not in native and "price_input" not in native
+    native_price = meta["prices"][f"deepseek:{_NATIVE}"]
+    assert native_price["source"] == "table" and native_price["prices"]["input"] > 0
     assert [spec["label"] for spec in meta["specs"]] == _labels(outcome.document["summaries"])
     assert outcome.document["sweep"] == meta["sweep"]
 

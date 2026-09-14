@@ -115,7 +115,7 @@ def report(
 ) -> Document:
     invocation = require_invocation(ctx)
     runs_dir = Path(invocation.setting("runs_dir") or ".")
-    run_dir = _resolve_run_dir(run, runs_dir, invocation.cwd)
+    run_dir = resolve_run_dir(run, runs_dir, invocation.cwd)
 
     from provibench.bench.probe_runs import read_protocol
 
@@ -253,8 +253,3 @@ def _output_target(invocation: Invocation, path: str, force: bool, *, option: st
         )
     target.parent.mkdir(parents=True, exist_ok=True)
     return target
-
-
-def _resolve_run_dir(run: str, runs_dir: Path, cwd: Path) -> Path:
-    """RUN resolved the way `report` names runs: a directory, a trace, or `latest`."""
-    return resolve_run_dir(run, runs_dir, cwd)
