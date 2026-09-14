@@ -1,4 +1,4 @@
-"""`report`: resolving RUN (a path, a trace name, or 'latest') and the --md side effect."""
+"""`report`: resolving RUN and writing one selected rendering to one result destination."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def test_report_accepts_a_run_directory_path_directly(cli: Cli, bench_paths: Ben
     assert doc["run_dir"] == str(run_dir)
     assert doc["trace"] == "t"
     assert doc["conversation"] == "c1"
-    assert doc["markdown_path"] is None
+    assert doc["output_file"] is None
     assert doc["changed"] is False
     [summary] = [d for d in map(as_document, as_list(doc["summaries"]) or []) if d]
     assert summary["label"] == "t:model-a"
@@ -90,13 +90,22 @@ def test_report_unknown_run_is_not_found(cli: Cli, bench_paths: BenchPaths) -> N
     assert empty_runs_dir.error["kind"] == "not_found"
 
 
-def test_report_md_writes_markdown_and_reports_changed(cli: Cli, bench_paths: BenchPaths) -> None:
+def test_report_output_file_writes_markdown_and_keeps_stdout_empty(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
     run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
     md_path = cli.root / "out" / "report.md"
-    outcome = cli.run("report", str(run_dir), "--md", str(md_path), env=bench_paths.env)
+    outcome = cli.run(
+        "report",
+        str(run_dir),
+        "--format",
+        "md",
+        "--output-file",
+        str(md_path),
+        env=bench_paths.env,
+    )
     assert outcome.code == 0, outcome.stderr
-    assert outcome.document["markdown_path"] == str(md_path)
-    assert outcome.document["changed"] is True
+    assert outcome.stdout == ""
     assert md_path.is_file()
     assert md_path.read_text(encoding="utf-8").startswith("| label |")
 
@@ -105,90 +114,112 @@ def test_report_md_relative_path_resolves_against_injected_cwd(
     cli: Cli, bench_paths: BenchPaths
 ) -> None:
     run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
-    outcome = cli.run("report", str(run_dir), "--md", "relative-report.md", env=bench_paths.env)
+    outcome = cli.run(
+        "report",
+        str(run_dir),
+        "--format",
+        "md",
+        "--output-file",
+        "relative-report.md",
+        env=bench_paths.env,
+    )
     assert outcome.code == 0, outcome.stderr
     assert (cli.root / "relative-report.md").is_file()
-    assert outcome.document["markdown_path"] == str(cli.root / "relative-report.md")
+    assert outcome.stdout == ""
 
 
 # --- the HTML report ----------------------------------------------------------
 
 
-def test_report_html_writes_one_self_contained_file(cli: Cli, bench_paths: BenchPaths) -> None:
+def test_report_output_file_writes_one_self_contained_html_file(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
     run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
     html_path = cli.root / "out" / "report.html"
     outcome = cli.run(
-        "report", str(run_dir), "--html", str(html_path), "--force", env=bench_paths.env
+        "report",
+        str(run_dir),
+        "--format",
+        "html",
+        "--output-file",
+        str(html_path),
+        env=bench_paths.env,
     )
     assert outcome.code == 0, outcome.stderr
-    assert outcome.document["html"] == str(html_path)
-    assert outcome.document["changed"] is True
+    assert outcome.stdout == ""
     text = html_path.read_text(encoding="utf-8")
     assert text.startswith("<!DOCTYPE html>")
     assert "<script" not in text and "http://" not in text and "https://" not in text
     assert "<td>t:model-a</td>" in text
 
 
-def test_report_without_html_reports_no_path(cli: Cli, bench_paths: BenchPaths) -> None:
+def test_report_without_output_file_reports_no_path(cli: Cli, bench_paths: BenchPaths) -> None:
     run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
     outcome = cli.run("report", str(run_dir), env=bench_paths.env)
     assert outcome.code == 0, outcome.stderr
-    assert outcome.document["html"] is None
+    assert outcome.document["output_file"] is None
     assert outcome.document["changed"] is False
 
 
-def test_report_html_refuses_to_overwrite_without_force(cli: Cli, bench_paths: BenchPaths) -> None:
+def test_report_output_file_replaces_an_existing_file(cli: Cli, bench_paths: BenchPaths) -> None:
+    """A report is derived from the run alone, so a repeat rewrites the same file (R1)."""
     run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
     html_path = cli.root / "report.html"
     html_path.write_text("mine", encoding="utf-8")
-    outcome = cli.run("report", str(run_dir), "--html", str(html_path), env=bench_paths.env)
-    assert outcome.code == 1
-    assert outcome.error["kind"] == "precondition_failed"
-    assert "--force" in str(outcome.error["hint"])
-    assert html_path.read_text(encoding="utf-8") == "mine"
+    args = ["report", str(run_dir), "--format", "html", "--output-file", str(html_path)]
 
-    forced = cli.run(
-        "report", str(run_dir), "--html", str(html_path), "--force", env=bench_paths.env
-    )
-    assert forced.code == 0, forced.stderr
-    assert html_path.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
+    outcome = cli.run(*args, env=bench_paths.env)
+    assert outcome.code == 0, outcome.stderr
+    first = html_path.read_text(encoding="utf-8")
+    assert first.startswith("<!DOCTYPE html>")
+
+    again = cli.run(*args, env=bench_paths.env)
+    assert again.code == 0, again.stderr
+    assert html_path.read_text(encoding="utf-8") == first
 
 
-def test_report_html_and_md_write_both_files_and_a_relative_path_resolves(
+def test_report_format_json_is_the_json_document(cli: Cli, bench_paths: BenchPaths) -> None:
+    """`--format json` names what `--json` selects, as the format_defaults index declares."""
+    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
+    named = cli.run("report", str(run_dir), "--format", "json", env=bench_paths.env)
+    flagged = cli.run("report", str(run_dir), "--json", env=bench_paths.env)
+    assert named.code == 0, named.stderr
+    assert named.document == flagged.document
+
+    both = cli.run("report", str(run_dir), "--json", "--format", "md", env=bench_paths.env)
+    assert both.code == 2
+    assert both.error["kind"] == "invalid_input"
+    assert "--json" in str(both.error["message"]) and "--format md" in str(both.error["message"])
+
+
+def test_report_formats_print_the_same_totals_for_one_run(
     cli: Cli, bench_paths: BenchPaths
 ) -> None:
-    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
-    outcome = cli.run(
-        "report",
-        str(run_dir),
-        "--md",
-        "r.md",
-        "--html",
-        "r.html",
-        env=bench_paths.env,
-    )
-    assert outcome.code == 0, outcome.stderr
-    assert outcome.document["markdown_path"] == str(cli.root / "r.md")
-    assert outcome.document["html"] == str(cli.root / "r.html")
-    assert (cli.root / "r.md").is_file() and (cli.root / "r.html").is_file()
-
-
-def test_md_and_html_print_the_same_totals_for_one_run(cli: Cli, bench_paths: BenchPaths) -> None:
     """Both written forms go through `summary_row`, so a cell cannot differ between them."""
     run_dir = _write_run(
         bench_paths.runs_dir, "t", "20260101-000000", prompt_total=20_000, cached=12_000
     )
     md_path, html_path = cli.root / "r.md", cli.root / "r.html"
-    outcome = cli.run(
+    markdown = cli.run(
         "report",
         str(run_dir),
-        "--md",
+        "--format",
+        "md",
+        "--output-file",
         str(md_path),
-        "--html",
+        env=bench_paths.env,
+    )
+    html = cli.run(
+        "report",
+        str(run_dir),
+        "--format",
+        "html",
+        "--output-file",
         str(html_path),
         env=bench_paths.env,
     )
-    assert outcome.code == 0, outcome.stderr
+    assert markdown.code == 0, markdown.stderr
+    assert html.code == 0, html.stderr
     markdown = md_path.read_text(encoding="utf-8")
     html = html_path.read_text(encoding="utf-8")
     assert "| 20,000 |" in markdown and "<td>20,000</td>" in html
@@ -196,44 +227,25 @@ def test_md_and_html_print_the_same_totals_for_one_run(cli: Cli, bench_paths: Be
     assert "80000" not in markdown
 
 
-def test_report_md_refuses_to_overwrite_without_force(cli: Cli, bench_paths: BenchPaths) -> None:
+def test_report_json_output_file_contains_the_success_document(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
     run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
-    md_path = cli.root / "r.md"
-    md_path.write_text("mine", encoding="utf-8")
-    outcome = cli.run("report", str(run_dir), "--md", str(md_path), env=bench_paths.env)
-    assert outcome.code == 1
-    assert outcome.error["kind"] == "precondition_failed"
-    assert "--md" in str(outcome.error["hint"])
-    assert md_path.read_text(encoding="utf-8") == "mine"
-
-    forced = cli.run("report", str(run_dir), "--md", str(md_path), "--force", env=bench_paths.env)
-    assert forced.code == 0, forced.stderr
-    assert md_path.read_text(encoding="utf-8").startswith("| label |")
-
-
-def test_a_refused_html_target_writes_no_markdown_either(cli: Cli, bench_paths: BenchPaths) -> None:
-    """A command that refuses one target writes neither, so a failed run leaves no half-report."""
-    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
-    md_path, html_path = cli.root / "r.md", cli.root / "r.html"
-    html_path.write_text("mine", encoding="utf-8")
+    output_path = cli.root / "report.json"
     outcome = cli.run(
-        "report", str(run_dir), "--md", str(md_path), "--html", str(html_path), env=bench_paths.env
-    )
-    assert outcome.code == 1
-    assert outcome.error["kind"] == "precondition_failed"
-    assert "--html" in str(outcome.error["hint"])
-    assert html_path.read_text(encoding="utf-8") == "mine"
-    assert not md_path.exists()
-
-
-def test_report_html_prints_the_path_in_human_output(cli: Cli, bench_paths: BenchPaths) -> None:
-    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
-    html_path = cli.root / "r.html"
-    outcome = cli.run(
-        "report", str(run_dir), "--html", str(html_path), tty_stdout=True, env=bench_paths.env
+        "report", str(run_dir), "--json", "--output-file", str(output_path), env=bench_paths.env
     )
     assert outcome.code == 0, outcome.stderr
-    assert f"HTML report: {html_path}" in outcome.stdout
+    assert outcome.stdout == ""
+    document = json.loads(output_path.read_text(encoding="utf-8"))
+    assert document["output_file"] == str(output_path)
+
+
+def test_report_rejects_json_and_named_format_together(cli: Cli, bench_paths: BenchPaths) -> None:
+    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
+    outcome = cli.run("report", str(run_dir), "--json", "--format", "html", env=bench_paths.env)
+    assert outcome.code == 2
+    assert outcome.error["kind"] == "invalid_input"
 
 
 def test_probe_report_html_carries_the_tables_and_the_charts(
@@ -260,9 +272,16 @@ def test_probe_report_html_carries_the_tables_and_the_charts(
         },
     )
     html_path = cli.root / "probe.html"
-    outcome = cli.run("report", str(run_dir), "--html", str(html_path), env=bench_paths.env)
+    outcome = cli.run(
+        "report",
+        str(run_dir),
+        "--format",
+        "html",
+        "--output-file",
+        str(html_path),
+        env=bench_paths.env,
+    )
     assert outcome.code == 0, outcome.stderr
-    assert outcome.document["run_hex"] == "abc123def456"
     text = html_path.read_text(encoding="utf-8")
     assert "specs: or:model@&lt;provider&gt;" in text
     assert "<td>@novita</td>" in text and "<td>@gmicloud</td>" in text
@@ -500,7 +519,15 @@ def test_probe_report_shows_the_ttl_column_only_when_it_ran(
     row = [cell.strip() for cell in rung_table[2].split("|")]
     assert row[header.index("ttl")] == "60s:1 300s:0"
 
-    marked = cli.run("report", str(run_dir), "--md", str(cli.root / "r.md"), env=bench_paths.env)
+    marked = cli.run(
+        "report",
+        str(run_dir),
+        "--format",
+        "md",
+        "--output-file",
+        str(cli.root / "r.md"),
+        env=bench_paths.env,
+    )
     assert marked.code == 0, marked.stderr
     text = (cli.root / "r.md").read_text(encoding="utf-8")
     assert text.startswith("| spec |")

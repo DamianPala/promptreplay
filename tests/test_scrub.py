@@ -1,4 +1,4 @@
-"""`scrub`: what the copy contains, what the report says, and how --out is guarded."""
+"""`scrub`: what the copy contains, what the report says, and how OUT is guarded."""
 
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ def test_scrub_writes_a_clean_copy_and_reports_what_it_removed(
     _fixture(trace)
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(out))
+    outcome = _run(cli, bench_paths, "t", str(out))
 
     assert outcome.code == 0, outcome.stderr
     document = outcome.document
@@ -146,6 +146,30 @@ def test_scrub_writes_a_clean_copy_and_reports_what_it_removed(
     ]
 
 
+def test_scrub_output_file_writes_the_result_document_and_keeps_stdout_empty(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    trace = bench_paths.traces_dir / "t.jsonl"
+    _fixture(trace)
+    product = cli.root / "clean.jsonl"
+    result_path = cli.root / "summary.json"
+
+    outcome = _run(
+        cli,
+        bench_paths,
+        "t",
+        str(product),
+        "--output-file",
+        str(result_path),
+    )
+
+    assert outcome.code == 0, outcome.stderr
+    assert outcome.stdout == ""
+    document = json.loads(result_path.read_text(encoding="utf-8"))
+    assert document["out"] == str(product)
+    assert document["output_file"] == str(result_path)
+
+
 def _rules(document: Document) -> list[Document]:
     return [row for row in map(as_document, as_list(document["rules"]) or []) if row is not None]
 
@@ -156,8 +180,8 @@ def test_scrub_is_byte_identical_for_the_same_input(cli: Cli, bench_paths: Bench
     first = cli.root / "first.jsonl.gz"
     second = cli.root / "second.jsonl.gz"
 
-    assert _run(cli, bench_paths, "t", "--out", str(first)).code == 0
-    assert _run(cli, bench_paths, "t", "--out", str(second)).code == 0
+    assert _run(cli, bench_paths, "t", str(first)).code == 0
+    assert _run(cli, bench_paths, "t", str(second)).code == 0
 
     assert first.read_bytes() == second.read_bytes()
     assert first.read_bytes()[:2] == b"\x1f\x8b"
@@ -175,7 +199,7 @@ def test_scrub_reads_a_gzipped_trace(cli: Cli, bench_paths: BenchPaths) -> None:
     )
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t.jsonl.gz", "--out", str(out))
+    outcome = _run(cli, bench_paths, "t.jsonl.gz", str(out))
 
     assert outcome.code == 0, outcome.stderr
     assert outcome.document["entries_in"] == 1
@@ -192,7 +216,7 @@ def test_scrub_turns_keeps_the_main_conversation_and_reports_the_drop(
     append_entry(trace, _entry(4, "main", "q" * 500))
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(out), "--turns", "2")
+    outcome = _run(cli, bench_paths, "t", str(out), "--turns", "2")
 
     assert outcome.code == 0, outcome.stderr
     assert outcome.document["entries_in"] == 4
@@ -212,7 +236,7 @@ def test_scrub_turns_without_conversations_keeps_the_first_entries_in_file_order
     )
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(out), "--turns", "2")
+    outcome = _run(cli, bench_paths, "t", str(out), "--turns", "2")
 
     assert outcome.code == 0, outcome.stderr
     assert outcome.document["selection"] == "order"
@@ -243,7 +267,7 @@ def test_scrub_user_replaces_whole_words(cli: Cli, bench_paths: BenchPaths) -> N
     )
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(out), "--user", "operator")
+    outcome = _run(cli, bench_paths, "t", str(out), "--user", "operator")
 
     assert outcome.code == 0, outcome.stderr
     rules = {str(row["rule"]): row["count"] for row in _rules(outcome.document)}
@@ -269,7 +293,7 @@ def test_scrub_rewrites_the_encoded_project_path(cli: Cli, bench_paths: BenchPat
     append_entry(trace, _entry(2, "main", "z"))
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(out))
+    outcome = _run(cli, bench_paths, "t", str(out))
 
     assert outcome.code == 0, outcome.stderr
     written = read_trace_text(out)
@@ -287,7 +311,7 @@ def test_scrub_merging_keys_in_one_entry_is_an_input_error(
         encoding="utf-8",
     )
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(cli.root / "clean.jsonl"))
+    outcome = _run(cli, bench_paths, "t", str(cli.root / "clean.jsonl"))
 
     assert outcome.code == 2
     assert outcome.error["kind"] == "invalid_input"
@@ -314,7 +338,6 @@ def test_scrub_replace_applies_literally(cli: Cli, bench_paths: BenchPaths) -> N
         cli,
         bench_paths,
         "t",
-        "--out",
         str(out),
         "--replace",
         "acme-corp=example",
@@ -336,7 +359,7 @@ def test_scrub_allow_email_keeps_the_address(cli: Cli, bench_paths: BenchPaths) 
     _fixture(trace)
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(out), "--allow-email", _EMAIL)
+    outcome = _run(cli, bench_paths, "t", str(out), "--allow-email", _EMAIL)
 
     assert outcome.code == 0, outcome.stderr
     written = read_trace_text(out)
@@ -350,13 +373,13 @@ def test_scrub_refuses_to_overwrite_without_force(cli: Cli, bench_paths: BenchPa
     out = cli.root / "clean.jsonl"
     out.write_text("keep me\n", encoding="utf-8")
 
-    refused = _run(cli, bench_paths, "t", "--out", str(out))
+    refused = _run(cli, bench_paths, "t", str(out))
 
     assert refused.code == 1
     assert refused.error["kind"] == "precondition_failed"
     assert out.read_text(encoding="utf-8") == "keep me\n"
 
-    forced = _run(cli, bench_paths, "t", "--out", str(out), "--force")
+    forced = _run(cli, bench_paths, "t", str(out), "--force")
     assert forced.code == 0, forced.stderr
     assert _HOME not in read_trace_text(out)
 
@@ -365,7 +388,7 @@ def test_scrub_out_must_differ_from_the_trace(cli: Cli, bench_paths: BenchPaths)
     trace = bench_paths.traces_dir / "t.jsonl"
     _fixture(trace)
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(trace), "--force")
+    outcome = _run(cli, bench_paths, "t", str(trace), "--force")
 
     assert outcome.code == 2
     assert outcome.error["kind"] == "invalid_input"
@@ -376,7 +399,7 @@ def test_scrub_creates_the_output_directory(cli: Cli, bench_paths: BenchPaths) -
     _fixture(trace)
     out = cli.root / "nested" / "deeper" / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(out))
+    outcome = _run(cli, bench_paths, "t", str(out))
 
     assert outcome.code == 0, outcome.stderr
     assert out.is_file()
@@ -396,7 +419,7 @@ def test_scrub_nothing_to_remove_still_exits_zero(cli: Cli, bench_paths: BenchPa
     )
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(out))
+    outcome = _run(cli, bench_paths, "t", str(out))
 
     assert outcome.code == 0, outcome.stderr
     assert outcome.document["changed"] is False
@@ -419,7 +442,7 @@ def test_scrub_reports_no_change_when_only_the_formatting_differs(
     trace.write_text(f"{json.dumps(entry)}\n", encoding="utf-8")
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(out))
+    outcome = _run(cli, bench_paths, "t", str(out))
 
     assert outcome.code == 0, outcome.stderr
     assert outcome.document["bytes_in"] != outcome.document["bytes_out"]
@@ -433,7 +456,6 @@ def test_scrub_human_table_lists_the_rules(cli: Cli, bench_paths: BenchPaths) ->
     outcome = cli.run(
         "scrub",
         "t",
-        "--out",
         str(cli.root / "clean.jsonl"),
         tty=True,
         env=bench_paths.env,
@@ -448,7 +470,7 @@ def test_scrub_human_table_lists_the_rules(cli: Cli, bench_paths: BenchPaths) ->
 
 
 def test_scrub_missing_trace_is_not_found(cli: Cli, bench_paths: BenchPaths) -> None:
-    outcome = _run(cli, bench_paths, "nope", "--out", str(cli.root / "clean.jsonl"))
+    outcome = _run(cli, bench_paths, "nope", str(cli.root / "clean.jsonl"))
 
     assert outcome.code == 1
     assert outcome.error["kind"] == "not_found"
@@ -458,7 +480,7 @@ def test_scrub_unparsable_line_names_the_line(cli: Cli, bench_paths: BenchPaths)
     trace = bench_paths.traces_dir / "t.jsonl"
     trace.write_text('{"seq": 1}\nnot json\n', encoding="utf-8")
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(cli.root / "clean.jsonl"))
+    outcome = _run(cli, bench_paths, "t", str(cli.root / "clean.jsonl"))
 
     assert outcome.code == 2
     assert outcome.error["kind"] == "invalid_input"
@@ -476,7 +498,7 @@ def test_scrub_copies_entries_it_does_not_recognise(cli: Cli, bench_paths: Bench
     )
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(out))
+    outcome = _run(cli, bench_paths, "t", str(out))
 
     assert outcome.code == 0, outcome.stderr
     assert _lines(out) == [
@@ -488,9 +510,7 @@ def test_scrub_bad_replacement_is_a_usage_error(cli: Cli, bench_paths: BenchPath
     trace = bench_paths.traces_dir / "t.jsonl"
     _fixture(trace)
 
-    outcome = _run(
-        cli, bench_paths, "t", "--out", str(cli.root / "clean.jsonl"), "--replace", "oops"
-    )
+    outcome = _run(cli, bench_paths, "t", str(cli.root / "clean.jsonl"), "--replace", "oops")
 
     assert outcome.code == 2
     assert outcome.error["kind"] == "invalid_input"
@@ -499,7 +519,7 @@ def test_scrub_bad_replacement_is_a_usage_error(cli: Cli, bench_paths: BenchPath
 def test_scrub_resolves_the_packaged_sample(cli: Cli, bench_paths: BenchPaths) -> None:
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "sample", "--out", str(out))
+    outcome = _run(cli, bench_paths, "sample", str(out))
 
     assert outcome.code == 0, outcome.stderr
     assert outcome.document["entries_in"] == 30
@@ -516,7 +536,7 @@ def test_scrub_reports_the_payload_sizes(cli: Cli, bench_paths: BenchPaths, suff
         write_trace_text(trace, read_trace_text(plain))
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "t", "--out", str(out))
+    outcome = _run(cli, bench_paths, "t", str(out))
 
     assert outcome.code == 0, outcome.stderr
     # Both sizes describe the uncompressed trace payload, so a .gz input is comparable.

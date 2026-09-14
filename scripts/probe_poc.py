@@ -11,7 +11,7 @@ fails is skipped: there is nothing cached to warm, so it does not score.
 
     uv run python scripts/probe_poc.py TRACE SPEC [SPEC ...] \
         [--rungs 1,13,30] [--repeats 5,2,2] [--gap 1.0] [--timeout 300] \
-        [--targets PATH] [--out FILE.json]
+        [--targets PATH] [--output-file FILE.json]
 
 Exit code 0 when every request got a 2xx, 1 otherwise (the JSON output is written
 either way); 2 for invalid input, a missing API key, or an impossible rung. A partial
@@ -191,7 +191,7 @@ class RungAggregate(BaseModel):
 
 
 class ProbeRun(BaseModel):
-    """The `--out` document."""
+    """The `--output-file` document."""
 
     run_hex: str
     trace: str
@@ -660,7 +660,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--gap", type=float, default=1.0, help="seconds between warm requests")
     parser.add_argument("--timeout", type=float, default=300.0, help="request timeout, seconds")
     parser.add_argument("--targets", default=None, help="targets.toml path")
-    parser.add_argument("--out", default=None, help="write the JSON report to this file")
+    parser.add_argument("--output-file", default=None, help="write the JSON report to this file")
     return parser
 
 
@@ -711,8 +711,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     finally:
         # An interrupt or unexpected failure still writes the records already paid for.
-        if args.out is not None and state.outcomes:
-            _write_report(Path(args.out), state.build(config))
+        if args.output_file is not None and state.outcomes:
+            _write_report(Path(args.output_file), state.build(config))
 
     run = state.build(config)
     print(render_report(run.rungs))

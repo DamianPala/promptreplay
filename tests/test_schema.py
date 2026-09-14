@@ -115,6 +115,22 @@ def test_details_match_the_runtime_parser(cli: Cli) -> None:
             assert descriptor["description"] == (argument.help or "")
 
 
+def test_every_command_descriptor_has_name_description_and_type(cli: Cli) -> None:
+    """I1a descriptors must not leave an accepted input undocumented."""
+    for path, _ in listed_commands(build_cli()):
+        detail = cli.run("schema", *path.split()).document
+        for section in ("args", "flags"):
+            descriptors = [
+                descriptor
+                for descriptor in map(as_document, as_list(detail[section]) or [])
+                if descriptor
+            ]
+            for descriptor in descriptors:
+                assert descriptor["name"]
+                assert descriptor["description"]
+                assert descriptor["type"]
+
+
 def _descriptor_name(option: click.Option) -> str:
     long_names = [opt.lstrip("-") for opt in option.opts if opt.startswith("--")]
     return long_names[0] if long_names else option.opts[0].lstrip("-")
@@ -204,7 +220,7 @@ _SUCCESS_ARGV: dict[str, list[str]] = {
     "replay": ["fixture", "--run", "t:model-a", "--yes"],
     "report": ["fixture-run"],
     # --force: the schema check runs every command twice, with --json in each position.
-    "scrub": ["fixture", "--out", "scrubbed.jsonl", "--force"],
+    "scrub": ["fixture", "scrubbed.jsonl", "--force"],
     "sweep": ["probe-fixture", "fake/model", "--yes"],
 }
 

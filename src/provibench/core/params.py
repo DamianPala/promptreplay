@@ -75,6 +75,34 @@ class DurationType(click.ParamType[int]):
 DURATION = DurationType()
 
 
+class TimeoutType(click.ParamType[float]):
+    """A standard duration with backwards-compatible decimal seconds."""
+
+    name = "duration"
+
+    @override
+    def convert(
+        self, value: object, param: click.Parameter | None, ctx: click.Context | None
+    ) -> float:
+        text = str(value)
+        if DURATION_PATTERN.fullmatch(text):
+            return float(parse_duration(text))
+        try:
+            seconds = float(text)
+        except ValueError:
+            self.fail(
+                "use a positive integer followed by s, m, h, or d, or decimal seconds",
+                param,
+                ctx,
+            )
+        if not isfinite(seconds) or seconds < 0.1:
+            self.fail("use at least 0.1 seconds", param, ctx)
+        return seconds
+
+
+TIMEOUT = TimeoutType()
+
+
 def limit_type() -> click.IntRange:
     """The accepted `--limit` range; values outside it are usage errors."""
     return click.IntRange(LIMIT_MIN, LIMIT_MAX)

@@ -6,7 +6,7 @@ rich, imported inside the functions that need it, so `--json` never loads it.
 
 import shlex
 from collections.abc import Iterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from provibench.core.context import Invocation
 from provibench.core.documents import Document, as_document, as_list, sanitize_document
@@ -22,19 +22,31 @@ def emit_result(invocation: Invocation, spec: CommandSpec, result: Result) -> No
     """Write `result` to stdout in the invocation's selected format."""
     if result is None:
         return
+    if invocation.output_file is not None:
+        target = invocation.output_file
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("w", encoding="utf-8") as output, invocation.rendering_to(output):
+            _emit_result(invocation, spec, result)
+        return
+    _emit_result(invocation, spec, result)
+
+
+def _emit_result(invocation: Invocation, spec: CommandSpec, result: Result) -> None:
+    """Emit a result to the invocation's current stdout stream."""
     if isinstance(result, dict):
         _emit_document(invocation, spec, result)
         return
+    records = cast(Iterator[Document], result)
     stdout = invocation.streams.stdout
     match invocation.format:
         case Format.NDJSON | Format.JSON:
-            for record in result:
+            for record in records:
                 write_document(stdout, record)  # sanitizes internally
         case Format.PLAIN:
-            for record in result:
+            for record in records:
                 write_plain_line(stdout, sanitize_document(record)[spec.plain_field or ""])
         case _:
-            _render_records(invocation, spec, (sanitize_document(record) for record in result))
+            _render_records(invocation, spec, (sanitize_document(record) for record in records))
 
 
 def _emit_document(invocation: Invocation, spec: CommandSpec, document: Document) -> None:

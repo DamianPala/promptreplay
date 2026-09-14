@@ -115,6 +115,8 @@ def build_detail(command: Command, name: str) -> Document:
         detail["stream"] = True
     if spec.output is not None:
         detail["output"] = spec.output
+    if spec.output_description is not None:
+        detail["output_description"] = spec.output_description
     # O2a: a stream command's implied `ndjson` name is not a difference from the tool-wide
     # defaults, so only an explicit departure from the implied defaults is declared.
     implied = STREAM_FORMAT_DEFAULTS if spec.stream else TOOL_FORMAT_DEFAULTS

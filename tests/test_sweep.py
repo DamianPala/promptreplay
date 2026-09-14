@@ -1425,7 +1425,15 @@ def test_report_shows_the_selection_of_a_sweep_offline(
 
     # the file shared around carries the same lines, from the same document
     html_path = bench_paths.runs_dir.parent / "report.html"
-    written = cli.run("report", run_dir, "--html", str(html_path), env={**bench_paths.env, **_ENV})
+    written = cli.run(
+        "report",
+        run_dir,
+        "--format",
+        "html",
+        "--output-file",
+        str(html_path),
+        env={**bench_paths.env, **_ENV},
+    )
     assert written.code == 0, written.stderr
     html = html_path.read_text(encoding="utf-8")
     assert "selection: sort=uptime, top=3, zdr=off" in html

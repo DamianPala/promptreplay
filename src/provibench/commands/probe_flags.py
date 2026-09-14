@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 import click
 
 from provibench.core.errors import InvalidInput
+from provibench.core.params import TIMEOUT, parse_duration
 
 if TYPE_CHECKING:
     from provibench.bench.openrouter import Endpoint
@@ -30,7 +31,8 @@ if TYPE_CHECKING:
 
 _DEFAULT_REPEATS = "6,2,2"
 _DEFAULT_GAP_S = 1.0
-_DEFAULT_TIMEOUT_S = 300.0
+_DEFAULT_TIMEOUT = "300s"
+_DEFAULT_TIMEOUT_S = float(parse_duration(_DEFAULT_TIMEOUT))
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,10 +154,11 @@ def probe_options[FC: Callable[..., Any]](command: FC) -> FC:
             ),
             click.option(
                 "--timeout",
-                type=click.FloatRange(0.1),
-                default=_DEFAULT_TIMEOUT_S,
+                type=TIMEOUT,
+                default=_DEFAULT_TIMEOUT,
                 show_default=True,
-                help="Request timeout, seconds",
+                metavar="DURATION",
+                help="Request timeout: a duration such as 30s or 5m, or decimal seconds",
             ),
             click.option(
                 "--budget",

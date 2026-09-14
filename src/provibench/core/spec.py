@@ -30,6 +30,7 @@ class CommandSpec:
 
     effects: Effects
     output: JsonSchema | None = None
+    output_description: str | None = None
     confirm: bool = False
     interactive: bool = False
     stream: bool = False

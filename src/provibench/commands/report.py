@@ -1,8 +1,7 @@
-"""`report`: summarise an existing run, probe or full replay, as text, markdown or HTML.
+"""`report`: summarise an existing run, probe or full replay in a chosen format.
 
-The HTML is rendered from the same document this command prints under `--json`, so the
-file and the terminal cannot disagree; `bench.html_report` does the rendering and this
-module only decides where the file goes.
+The report is rendered from the same document this command prints under `--json`, so the
+file and the terminal cannot disagree; `bench.html_report` does the HTML rendering.
 
 `provibench.bench.*` pulls in httpx and pydantic; its symbols are imported only inside
 the callback, so building the CLI (schema, --help, completion) stays cheap.
@@ -34,7 +33,6 @@ from provibench.core.documents import (
     obj,
     string,
 )
-from provibench.core.errors import PreconditionFailed
 from provibench.core.registry import Command, require_invocation
 from provibench.core.spec import CommandSpec, Effects
 
@@ -66,8 +64,7 @@ _OUTPUT = obj(
         "summaries": array(SUMMARY),
         "probe_summaries": array(PROBE_SUMMARY),
         "sweep": nullable_object(SWEEP_BLOCK_PROPERTIES, required=list(SWEEP_BLOCK_PROPERTIES)),
-        "markdown_path": nullable_string(),
-        "html": nullable_string(),
+        "output_file": nullable_string(),
         "changed": boolean(),
     },
     required=[
@@ -81,8 +78,7 @@ _OUTPUT = obj(
         "summaries",
         "probe_summaries",
         "sweep",
-        "markdown_path",
-        "html",
+        "output_file",
         "changed",
     ],
 )
@@ -91,27 +87,47 @@ _OUTPUT = obj(
 @click.command(
     "report",
     cls=Command,
-    spec=CommandSpec(effects=Effects.IDEMPOTENT, output=_OUTPUT, render=render_report_document),
+    spec=CommandSpec(
+        effects=Effects.IDEMPOTENT,
+        output=_OUTPUT,
+        output_description=(
+            "output_file is set when --output-file writes the selected rendering or JSON "
+            "document; that file contains exactly what stdout would have received."
+        ),
+        render=render_report_document,
+    ),
     help="Summarise an existing run.\n\n"
     "RUN is a run directory, a trace name (the newest run under <runs-dir>/<name>), or "
     "'latest' (the newest run across every trace). A probe run is summarised as hit rate, "
     "prefix fraction and effective price per spec, a full replay as its per-turn totals. "
-    "With --md, the same report is also written as markdown; with --html, as one "
-    "self-contained HTML file with the same tables and a chart.",
+    "Use --format text, md, html, or json to choose the rendering. With --output-file, that "
+    "rendering is written to the path, replacing what was there, and stdout stays empty; a "
+    "report is derived from the run directory alone, so writing it again is the same report. "
+    "For a file, md or html read best: text is the terminal table at the terminal's width.",
 )
-@click.argument("run")
-@click.option("--md", "md_path", default=None, help="Write the report as markdown to this path")
+@click.argument("run", help="Run directory, trace name, or 'latest'")
 @click.option(
-    "--html",
-    "html_path",
+    "--format",
+    "format_name",
+    type=click.Choice(["text", "md", "html", "json"]),
+    default=None,
+    metavar="NAME",
+    help="Report rendering: text, md, html, or json (what --json selects); without it, text "
+    "on a terminal and JSON otherwise",
+)
+@click.option(
+    "--output-file",
+    type=click.Path(),
     default=None,
     metavar="PATH",
-    help="Write the report as one self-contained HTML file to this path",
+    help="Write the selected rendering to this path instead of stdout, replacing the file",
 )
-@click.option("--force", is_flag=True, help="Overwrite an existing --md or --html file")
 @click.pass_context
 def report(
-    ctx: click.Context, run: str, md_path: str | None, html_path: str | None, force: bool
+    ctx: click.Context,
+    run: str,
+    format_name: str | None,
+    output_file: str | None,
 ) -> Document:
     invocation = require_invocation(ctx)
     runs_dir = Path(invocation.setting("runs_dir") or ".")
@@ -119,25 +135,19 @@ def report(
 
     from provibench.bench.probe_runs import read_protocol
 
-    # Both targets are refused before either is written: the markdown goes out while the
-    # document is built, so checking the HTML only at the end would leave one of the two
-    # files behind on a command that failed.
-    if html_path is not None:
-        _output_target(invocation, html_path, force, option="html")
+    output_path = _output_target(invocation) if output_file else None
     if read_protocol(run_dir) == "probe":
-        document = _probe_report(invocation, run_dir, md_path, force)
+        document = _probe_report(run_dir)
     else:
-        document = _full_report(invocation, run_dir, md_path, force)
-    document["html"] = _write_html(invocation, html_path, force, document)
-    document["changed"] = bool(document["changed"]) or document["html"] is not None
+        document = _full_report(run_dir)
+    document["output_file"] = str(output_path) if output_path is not None else None
+    document["changed"] = bool(document["changed"]) or output_path is not None
     return document
 
 
-def _full_report(
-    invocation: Invocation, run_dir: Path, md_path: str | None, force: bool
-) -> Document:
+def _full_report(run_dir: Path) -> Document:
     from provibench.bench.replay import load_run
-    from provibench.bench.summary import cache_mode_note, render_markdown, summarize
+    from provibench.bench.summary import cache_mode_note, summarize
 
     meta, results = load_run(run_dir)
     notes = [cache_mode_note(meta.options.warm)]
@@ -145,7 +155,6 @@ def _full_report(
         summarize(ref.label, results[ref.label], ref.providers, notes) for ref in meta.runs
     ]
     entries = [summary_to_document(summary) for summary in summaries]
-    markdown_path = _write_markdown(invocation, md_path, render_markdown(entries), force)
     return {
         "run_dir": str(run_dir),
         "trace": meta.trace,
@@ -157,19 +166,15 @@ def _full_report(
         "summaries": entries,
         "probe_summaries": [],
         "sweep": None,
-        "markdown_path": markdown_path,
-        "html": None,
-        "changed": markdown_path is not None,
+        "output_file": None,
+        "changed": False,
     }
 
 
-def _probe_report(
-    invocation: Invocation, run_dir: Path, md_path: str | None, force: bool
-) -> Document:
+def _probe_report(run_dir: Path) -> Document:
     from provibench.bench.probe_drift import apply_drift
     from provibench.bench.probe_runs import load_probe_run
     from provibench.bench.probe_summary import summarize_probe
-    from provibench.bench.probe_tables import probe_markdown
     from provibench.bench.summary import cache_mode_note
 
     meta, records = load_probe_run(run_dir)
@@ -183,7 +188,6 @@ def _probe_report(
         ],
         meta.specs,
     )
-    markdown_path = _write_markdown(invocation, md_path, probe_markdown(summaries), force)
     return {
         "run_dir": str(run_dir),
         "trace": meta.trace,
@@ -197,9 +201,8 @@ def _probe_report(
         # The selection the run chose its endpoints by, so the report can print it with no
         # network; `None` for a probe whose specs were given by hand.
         "sweep": None if meta.sweep is None else meta.sweep.to_document(),
-        "markdown_path": markdown_path,
-        "html": None,
-        "changed": markdown_path is not None,
+        "output_file": None,
+        "changed": False,
     }
 
 
@@ -214,42 +217,14 @@ def _replay_options(options: "ReplayOptions") -> Document:
     }
 
 
-def _write_html(
-    invocation: Invocation, html_path: str | None, force: bool, document: Document
-) -> str | None:
-    """Render the report as one HTML file, refusing to replace one that is already there."""
-    if html_path is None:
-        return None
-    from provibench.bench.html_report import render_html
+def _output_target(invocation: Invocation) -> Path:
+    """Resolve the report result path; an existing file is replaced.
 
-    target = _output_target(invocation, html_path, force, option="html")
-    target.write_text(render_html(document), encoding="utf-8")
-    return str(target)
-
-
-def _write_markdown(
-    invocation: Invocation, md_path: str | None, text: str, force: bool
-) -> str | None:
-    if md_path is None:
-        return None
-    target = _output_target(invocation, md_path, force, option="md")
-    target.write_text(text + "\n", encoding="utf-8")
-    return str(target)
-
-
-def _output_target(invocation: Invocation, path: str, force: bool, *, option: str) -> Path:
-    """Resolve a written report's path, or refuse to replace one that is already there.
-
-    Both written forms take the same `--force`: a report is regenerated from the same run,
-    so silently replacing either file is the same surprise.
+    A report is a function of the run directory alone, so a repeat writes the same bytes and
+    the command can keep its `idempotent` claim (R1) without a `--force` gate.
     """
-    target = Path(path)
-    if not target.is_absolute():
-        target = invocation.cwd / target
-    if target.exists() and not force:
-        raise PreconditionFailed(
-            f"{target} already exists",
-            hint=f"Pass --force to overwrite the --{option} output",
-        )
+    target = invocation.output_file
+    if target is None:
+        raise RuntimeError("--output-file was not resolved before report callback")
     target.parent.mkdir(parents=True, exist_ok=True)
     return target

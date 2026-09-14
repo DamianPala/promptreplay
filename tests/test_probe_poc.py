@@ -421,7 +421,7 @@ def test_main_writes_the_json_report_and_exits_zero(
             "0",
             "--targets",
             str(targets_path),
-            "--out",
+            "--output-file",
             str(out_path),
         ]
     )
@@ -470,7 +470,7 @@ def test_main_exits_one_and_still_writes_output_when_a_request_fails(
             "0",
             "--targets",
             str(targets_path),
-            "--out",
+            "--output-file",
             str(out_path),
         ]
     )
@@ -516,7 +516,7 @@ def test_main_keeps_partial_records_when_the_run_fails_unexpectedly(
                 "0",
                 "--targets",
                 str(targets_path),
-                "--out",
+                "--output-file",
                 str(out_path),
             ]
         )

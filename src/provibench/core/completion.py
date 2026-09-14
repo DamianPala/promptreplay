@@ -74,6 +74,10 @@ def completion_command(program: str) -> Command:
             },
             required=["shell", "changed"],
         ),
+        output_description=(
+            "Without --install, the generated script is in script. With --install, path is "
+            "the installed file and changed says whether it was written."
+        ),
         format_defaults=FormatDefaults(tty=Format.TEXT, non_tty=Format.TEXT),
         render=render_completion,
     )

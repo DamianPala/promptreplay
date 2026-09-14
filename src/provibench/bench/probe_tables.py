@@ -296,7 +296,7 @@ def _ttl_sequence(rung: RungSummary) -> str:
 
 
 def _ttl_cell(read: TtlRead) -> str:
-    cell = f"{read.offset}s:{int(read.hit)}"
+    cell = f"{read.offset_s}s:{int(read.hit)}"
     if read.lateness_s > _TTL_LATE_S:
         return f"{cell} (+{read.lateness_s:.0f})"
     return cell

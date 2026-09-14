@@ -26,6 +26,25 @@ def _entry(seq: int, conversation: str = "c1", text: str = "hi") -> TraceEntry:
     )
 
 
+def test_record_timeout_reaches_the_proxy_in_seconds(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--timeout 5m` arrives as seconds; without the flag the proxy waits unbounded."""
+    seen: list[object] = []
+
+    def fake_serve(upstream: str, trace_path: Path, host: str, port: int, **kwargs: object) -> None:
+        seen.append(kwargs.get("timeout_s"))
+        append_entry(trace_path, _entry(1, "c1"))
+
+    monkeypatch.setattr("provibench.bench.proxy.serve", fake_serve)
+    base = ["record", "--upstream", "https://up.test"]
+    assert cli.run(*base, "--name", "a", "--timeout", "5m", env=bench_paths.env).code == 0
+    assert cli.run(*base, "--name", "b", env=bench_paths.env).code == 0
+    assert seen == [300.0, None]
+    bad = cli.run(*base, "--name", "c", "--timeout", "nope", env=bench_paths.env)
+    assert bad.code == 2 and bad.error["kind"] == "invalid_input"
+
+
 def test_record_starts_the_proxy_and_summarises_by_conversation(
     cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:

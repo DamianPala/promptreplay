@@ -79,7 +79,15 @@ def output_fields() -> tuple[dict[str, JsonSchema], list[str]]:
     "probe",
     cls=Command,
     spec=CommandSpec(
-        effects=Effects.NON_IDEMPOTENT, confirm=True, output=_OUTPUT, render=render_probe_run
+        effects=Effects.NON_IDEMPOTENT,
+        confirm=True,
+        output=_OUTPUT,
+        output_description=(
+            "The successful result contains the persisted run directory and one summary per "
+            "probed spec. If any request or rung fails, the same result is available under "
+            "error.context and the command exits non-zero."
+        ),
+        render=render_probe_run,
     ),
     help="Probe a trace's prompt-cache behaviour on a few of its turns.\n\n"
     "For each rung (a turn k) it sends turn k once, cold, then turn k+1 a few times to "
@@ -88,8 +96,8 @@ def output_fields() -> tuple[dict[str, JsonSchema], list[str]]:
     "prompt tokens only, and far fewer than replaying the whole trace; the confirmation "
     "shows the worst-case cost of the run before anything is sent.",
 )
-@click.argument("trace")
-@click.argument("specs", nargs=-1, required=True)
+@click.argument("trace", help="Trace path, name under traces_dir, or 'sample'")
+@click.argument("specs", nargs=-1, required=True, help="One or more target:model[@provider] specs")
 @probe_options
 @click.pass_context
 def probe(  # noqa: PLR0913 (click binds one parameter per flag; there is no group to extract)

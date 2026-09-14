@@ -139,8 +139,7 @@ def probe_document() -> Document:
         },
         "summaries": [],
         "probe_summaries": [probe_summary_to_document(summary) for summary in summaries],
-        "markdown_path": None,
-        "html": None,
+        "output_file": None,
         "changed": False,
     }
 
@@ -163,8 +162,7 @@ def replay_document() -> Document:
         "options": {"max_tokens": 1, "delay_s": 0.0, "strip_thinking": False, "timeout_s": 60.0},
         "summaries": [summary_to_document(summary) for summary in summaries],
         "probe_summaries": [],
-        "markdown_path": None,
-        "html": None,
+        "output_file": None,
         "changed": False,
     }
 
@@ -211,6 +209,24 @@ def test_both_tables_keep_the_terminal_columns_and_short_labels() -> None:
         assert f'<th scope="col">{column}</th>' in rung_table
     assert "<td>20,410</td>" not in spec_table  # the numbers stay as the terminal formats them
     assert "<td>20410</td>" in rung_table
+
+
+def test_html_report_reads_legacy_ttl_offset_field() -> None:
+    document = probe_document()
+    summaries = as_list(document["probe_summaries"]) or []
+    summary = as_document(summaries[0])
+    assert summary is not None
+    rungs = as_list(summary["rungs"]) or []
+    rung = as_document(rungs[0])
+    assert rung is not None
+    ttl_reads = as_list(rung["ttl"]) or []
+    ttl = as_document(ttl_reads[0])
+    assert ttl is not None
+    ttl["offset"] = ttl.pop("offset_s")
+
+    html = render_html(document)
+
+    assert "60s:1" in html
 
 
 def test_each_probe_table_carries_its_own_heading() -> None:

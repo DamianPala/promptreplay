@@ -70,7 +70,8 @@ HELP = (
 )
 EPILOG = (
     f"Machine-readable interface: {PROGRAM} schema, then {PROGRAM} schema <command path>.\n\n"
-    "Add --json to any command for JSON output; it is the default when stdout is not a terminal."
+    "Add --json to any command for JSON output; it is the default when stdout is not a terminal.\n"
+    "A non-empty NO_INPUT disables prompts; use --yes for commands that require consent."
 )
 
 

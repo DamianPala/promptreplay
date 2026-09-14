@@ -12,6 +12,7 @@ import click
 
 from provibench.core.documents import Document, array, boolean, integer, obj, string
 from provibench.core.errors import InvalidInput
+from provibench.core.params import TIMEOUT
 from provibench.core.registry import Command, require_invocation
 from provibench.core.spec import CommandSpec, Effects
 
@@ -38,16 +39,31 @@ _OUTPUT = obj(
     "Starts a recording proxy in front of --upstream and appends every "
     "POST .../v1/messages exchange to <traces-dir>/<name>.jsonl. Point the harness at "
     "the proxy (for example ANTHROPIC_BASE_URL=http://127.0.0.1:8787) and press Ctrl-C "
-    "to stop; the trace is then summarised by conversation.",
+    "to stop; the trace is then summarised by conversation. While it waits it logs one line "
+    "per recorded request and no periodic heartbeat, even under --verbose.",
 )
 @click.option("--name", required=True, help="Trace name; written to <traces-dir>/<name>.jsonl")
 @click.option("--upstream", required=True, help="Upstream base URL to forward requests to")
 @click.option("--host", default="127.0.0.1", help="Address to listen on")
 @click.option("--port", type=click.IntRange(1, 65535), default=8787, help="Port to listen on")
 @click.option("--append", is_flag=True, help="Append to an existing trace file instead of refusing")
+@click.option(
+    "--timeout",
+    type=TIMEOUT,
+    default=None,
+    metavar="DURATION",
+    help="Stop after this duration; the wait is unbounded by default",
+)
 @click.pass_context
 def record(
-    ctx: click.Context, *, name: str, upstream: str, host: str, port: int, append: bool
+    ctx: click.Context,
+    *,
+    name: str,
+    upstream: str,
+    host: str,
+    port: int,
+    append: bool,
+    timeout: float | None,
 ) -> Document:
     from provibench.bench.proxy import serve
     from provibench.bench.trace import group_conversations, load_trace
@@ -68,7 +84,7 @@ def record(
         "(point the harness at it; Ctrl-C to stop)"
     )
     with contextlib.suppress(KeyboardInterrupt):
-        serve(upstream, trace_path, host, port, log=invocation.message)
+        serve(upstream, trace_path, host, port, log=invocation.message, timeout_s=timeout)
 
     entries = load_trace(trace_path) if trace_path.exists() else []
     groups = group_conversations(entries)

@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failing three cold requests
 - `sweep --parallel N` to probe several specs at once, recorded in the run's notes because
   it moves the latency numbers
-- `report --html PATH`: one self-contained page with the same tables, hit-rate bars per
+- `report --format html --output-file PATH`: one self-contained page with the same tables, hit-rate bars per
   rung, effective prompt price bars and the full-replay cache curve, in dark mode, with no
   scripts and no external resources
 - `scrub`: write a shareable copy of a trace with home paths, the encoded Claude Code
@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what the patterns cannot know, and `--turns N` to keep a cheaper prefix
 - Packaged sample trace — the first 30 turns of a real Claude Code session on DeepSeek V4.1
   Flash — accepted as `sample` by `inspect`, `replay` and `scrub`
-- Traces load from gzipped files, and `scrub --out` writes them
+- Traces load from gzipped files, and `scrub TRACE OUT` writes them
 - Runs persist their protocol, nonce, prices and an endpoint snapshot, so `report`
   re-renders a run with no network, in the terminal, markdown or HTML
 - The endpoint snapshot is per spec and dated: every probe and sweep records the listed
@@ -52,14 +52,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `compare RUN_A RUN_B`: the per-spec delta between two runs of one trace, with the listed
   price change taken from the two endpoint snapshots, `latest`/`previous` naming, and an
   `invalid_input` refusal across traces or protocols unless `--force`
-- `--force` for `report`'s `--md` and `--html` and for `scrub --out`, which are otherwise
-  refused when the target exists
+- `--force` for scrub's OUT or `--output-file`, which are otherwise refused when the target
+  exists; `report --output-file` replaces its file, since a report is derived from the run alone
 - Native prices from LiteLLM's community table, cached under `$XDG_CACHE_HOME` and refetched
   weekly or on `provibench prices --update`; `targets.toml` `prices` entries override it, and
   every estimate names its price source (`table`, `litellm` or `openrouter-endpoint`)
 
 ### Changed
 
+- Report now selects text, Markdown, or HTML with `--format` and writes one selected result to
+  `--output-file`; scrub takes its trace product as positional OUT and uses the same flag for
+  its result document. TTL summaries expose `offset_s`.
 - The size-rung probe is the default measurement; full `replay` remains for the per-turn
   cache curve and the whole-session cost
 - `report` reads a persisted run instead of re-summarising live state, and accepts a run

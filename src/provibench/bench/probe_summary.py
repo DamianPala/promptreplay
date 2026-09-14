@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from statistics import fmean, median
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from provibench.bench.estimate import SpecPrices
 from provibench.bench.probe_errors import skip_note
@@ -27,7 +27,7 @@ from provibench.core.documents import Document, as_document, as_list
 class TtlRead(BaseModel):
     """One `--ttl` re-read: how long after the warm reads, and what came back."""
 
-    offset: int
+    offset_s: int = Field(validation_alias=AliasChoices("offset_s", "offset"))
     hit: bool
     fraction: float | None = None
     offset_actual_s: float | None = None
@@ -36,7 +36,9 @@ class TtlRead(BaseModel):
     @property
     def lateness_s(self) -> float:
         """How much later than asked for the read went out."""
-        return 0.0 if self.offset_actual_s is None else max(self.offset_actual_s - self.offset, 0.0)
+        return (
+            0.0 if self.offset_actual_s is None else max(self.offset_actual_s - self.offset_s, 0.0)
+        )
 
 
 class RungSummary(BaseModel):
@@ -238,7 +240,7 @@ def _stream_ttft(record: ProbeResult | None) -> float | None:
 
 def _ttl_read(record: ProbeResult, prefix: int) -> TtlRead:
     return TtlRead(
-        offset=record.attempt,
+        offset_s=record.attempt,
         hit=is_served(record) and cached_of(record) > 0,
         fraction=_fraction(cached_of(record), prefix) if is_served(record) else None,
         offset_actual_s=record.offset_actual_s,

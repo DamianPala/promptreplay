@@ -795,9 +795,17 @@ def test_report_summarises_a_probe_run_without_the_network(
     assert "hit %" in rendered.stdout and "cached cold" in rendered.stdout
 
     md_path = cli.root / "probe.md"
-    marked = cli.run("report", str(run_dir), "--md", str(md_path), env=bench_paths.env)
+    marked = cli.run(
+        "report",
+        str(run_dir),
+        "--format",
+        "md",
+        "--output-file",
+        str(md_path),
+        env=bench_paths.env,
+    )
     assert marked.code == 0, marked.stderr
-    assert marked.document["changed"] is True
+    assert marked.stdout == ""
     assert md_path.read_text(encoding="utf-8").startswith("| spec |")
 
 
@@ -965,7 +973,7 @@ def test_probe_ttl_re_reads_the_first_rung_at_each_offset(
     [summary] = [d for d in map(as_document, as_list(outcome.document["summaries"]) or []) if d]
     [first_rung, second_rung] = [d for d in map(as_document, as_list(summary["rungs"]) or []) if d]
     reads = [d for d in map(as_document, as_list(first_rung["ttl"]) or []) if d]
-    assert [read["offset"] for read in reads] == [5, 10]
+    assert [read["offset_s"] for read in reads] == [5, 10]
     assert all(read["hit"] is True for read in reads)
     assert as_list(second_rung["ttl"]) == []
 

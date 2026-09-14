@@ -38,7 +38,7 @@ Each slice ends with: ruff, ruff format, pyright, pytest green; a review verdict
 
 ### 1. `scrub` + clean sample trace
 
-- `provibench scrub TRACE --out PATH [--replace OLD=NEW]...`: rewrites a trace with `metadata` removed, home paths replaced (`/home/<user>` → `/home/user`), a built-in secret pattern list (API keys, bearer tokens, emails outside an allow-list) reported and masked; prints a report of every replacement count. Deterministic, byte-stable except for the replaced spans.
+- `provibench scrub TRACE OUT [--replace OLD=NEW]...`: rewrites a trace with `metadata` removed, home paths replaced (`/home/<user>` → `/home/user`), a built-in secret pattern list (API keys, bearer tokens, emails outside an allow-list) reported and masked; prints a report of every replacement count. Deterministic, byte-stable except for the replaced spans.
 - Recording done 2026-09-14 (`traces/acpc-coverage-raw.jsonl`, 46 turns, 13,7 MB raw, 4,0 MB gzip; see `status.md`). Slice 1 scrubs it, keeps the first 30 main-conversation turns (prompt 20k → 93k tokens, Σ 1,8 M prompt tokens, 7,3 MB raw, 2,2 MB gzip; worst case 0,54 USD per provider at 0,30 USD/M with no cache, ~0,10 USD typical), and packages that as `src/provibench/data/sample.jsonl.gz`; `load_trace` accepts `.gz`. Replay cost grows quadratically with turns because every turn resends the whole history, and truncation is lossless since each turn is a self-contained request. The README quickstart uses `probe sample` (~0,17 USD worst case per provider on the default rungs). The full 46-turn trace stays local for our own headline runs.
 - `replay sample ...` and `inspect sample` resolve the packaged trace by name.
 - Acceptance: scan of the packaged trace finds no operator instruction files, no home paths, no identifiers; `uvx provibench inspect sample` works on a fresh install.
@@ -46,7 +46,7 @@ Each slice ends with: ruff, ruff format, pyright, pytest green; a review verdict
 ### 2. `convert` to chat-completions + OpenAI-kind replay
 
 - `bench/convert.py`: Anthropic body → chat-completions body per the mapping spec in `docs/research/anthropic-to-openai-converters.md`; returns the body plus a loss report (dropped cache markers, thinking blocks, signatures, metadata, context management, `is_error` flags).
-- `provibench convert TRACE --out PATH [--reasoning-content]` writes a second trace file with `wire = "chat-completions"` in each entry.
+- `provibench convert TRACE OUT [--reasoning-content]` writes a second trace file with `wire = "chat-completions"` in each entry.
 - `targets.toml` gains `kind = "openai"` (and `kind = "openrouter"` learns to send chat-completions when the trace wire is chat-completions); replay parses OpenAI usage (`prompt_tokens_details.cached_tokens`, DeepSeek `prompt_cache_hit_tokens`, OpenRouter `provider`).
 - Acceptance: converted sample replays against `openrouter` and `deepseek` (OpenAI wire) with the same turn count; loss report appears in `run.json` and the report table notes.
 
@@ -92,7 +92,7 @@ Commands:
 ### 5. HTML report
 
 - `report RUN` (terminal and `--json`) for a probe run: one line per provider with hit %, prefix %, eff $/M next to the listed price, cold/warm prefill ms on the first rung, TTFT ms, tok/s, errors, drift (served provider, tokenization delta vs native, fingerprint mismatch); below it the per-rung table (prompt size, hit sequence, cold/warm ms, tok/s, TTL results when present). Full-replay runs keep today's per-turn table.
-- `report RUN --html PATH`: single self-contained file with the same two tables and one chart per run (probe: hit rate per rung per provider; full: cache curve per spec); light and dark; no external assets.
+- `report RUN --format html --output-file PATH`: single self-contained file with the same two tables and one chart per run (probe: hit rate per rung per provider; full: cache curve per spec); light and dark; no external assets.
 - Acceptance: opens offline; screenshot-friendly at 1200 px wide; the terminal report of the PoC-equivalent run fits 120 columns.
 
 ### 5b. Runs over time: `history` and `compare`

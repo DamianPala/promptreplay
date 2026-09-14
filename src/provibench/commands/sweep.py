@@ -46,7 +46,16 @@ _OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=[*_REQUIRED, "swee
     "sweep",
     cls=Command,
     spec=CommandSpec(
-        effects=Effects.NON_IDEMPOTENT, confirm=True, output=_OUTPUT, render=render_probe_run
+        effects=Effects.NON_IDEMPOTENT,
+        confirm=True,
+        output=_OUTPUT,
+        output_description=(
+            "The successful result contains the persisted run directory, the measured summary "
+            "for each surviving spec, and sweep selection details. If any request or rung "
+            "fails, the same result is available under error.context and the command exits "
+            "non-zero."
+        ),
+        render=render_probe_run,
     ),
     help="Probe the OpenRouter endpoints of MODEL that pass the selection criteria, plus the "
     "native targets that carry it.\n\n"
@@ -62,8 +71,8 @@ _OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=[*_REQUIRED, "swee
     "directory and tables. The listing only picks candidates; the effective $/M the report "
     "measures is the verdict.",
 )
-@click.argument("trace")
-@click.argument("model")
+@click.argument("trace", help="Trace path, name under traces_dir, or 'sample'")
+@click.argument("model", help="OpenRouter model slug to sweep")
 @click.option(
     "--target",
     default=None,

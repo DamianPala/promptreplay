@@ -185,7 +185,7 @@ SUMMARY_COLUMNS = (
     "p50 ms",
     "p95 ms",
 )
-"""The full-replay table's columns: the terminal, `report --md` and `report --html` share them."""
+"""The full-replay table's columns: terminal, Markdown, and HTML share them."""
 
 
 def summary_row(entry: Document) -> list[str]:
@@ -239,8 +239,8 @@ def _limit(value: object, digits: int) -> str:
 def render_markdown(entries: Sequence[Document]) -> str:
     """The summary table as markdown, with every cell `summary_row` produced.
 
-    The input is the same `--json` shape the terminal renders from, so `report --md` and
-    `report --html` on one run cannot print different numbers for it.
+    The input is the same `--json` shape the terminal renders from, so Markdown and HTML
+    on one run cannot print different numbers for it.
     """
     lines = [
         "| " + " | ".join(SUMMARY_COLUMNS) + " |",

@@ -27,6 +27,7 @@ from provibench.core.documents import (
     as_list,
     boolean,
     integer,
+    nullable_string,
     obj,
     string,
 )
@@ -43,6 +44,7 @@ _OUTPUT = obj(
     {
         "trace": string(),
         "out": string(),
+        "output_file": nullable_string(),
         "entries_in": integer(),
         "entries_out": integer(),
         "entries_dropped": integer(),
@@ -56,6 +58,7 @@ _OUTPUT = obj(
     required=[
         "trace",
         "out",
+        "output_file",
         "entries_in",
         "entries_out",
         "entries_dropped",
@@ -109,21 +112,30 @@ def render_scrub(invocation: Invocation, document: Document) -> None:
 @click.command(
     "scrub",
     cls=Command,
-    spec=CommandSpec(effects=Effects.IDEMPOTENT, output=_OUTPUT, render=render_scrub),
+    spec=CommandSpec(
+        effects=Effects.IDEMPOTENT,
+        output=_OUTPUT,
+        output_description=(
+            "The scrubbed trace is written to positional OUT. When --output-file is given, "
+            "the result summary is written there and stdout stays empty."
+        ),
+        render=render_scrub,
+    ),
     help="Write a shareable copy of a trace, with home paths, secrets and metadata removed.\n\n"
     "TRACE is either an existing path, a name under traces_dir, or 'sample' (the packaged "
-    "example). The copy goes to --out, gzip-compressed when that path ends in .gz, and the "
+    "example). The copy goes to OUT, gzip-compressed when that path ends in .gz, and the "
     "report lists what each rule replaced. Project-specific names cannot be recognised: "
     "remove those with --replace OLD=NEW, and operator names with --user NAME.",
 )
 @click.argument("trace", help="Trace path, a name under traces_dir, or 'sample'")
 @click.option(
-    "--out",
-    "out_path",
-    required=True,
+    "--output-file",
+    type=click.Path(),
+    default=None,
     metavar="PATH",
-    help="Where to write the scrubbed trace; a .gz path is compressed",
+    help="Write the result summary to this path",
 )
+@click.argument("out", metavar="OUT", type=click.Path(), help="Where to write the scrubbed trace")
 @click.option(
     "--replace",
     "replace_specs",
@@ -151,13 +163,14 @@ def render_scrub(invocation: Invocation, document: Document) -> None:
     metavar="ADDR",
     help="E-mail address to keep; repeatable",
 )
-@click.option("--force", is_flag=True, help="Overwrite an existing --out")
+@click.option("--force", is_flag=True, help="Overwrite existing OUT or --output-file")
 @click.pass_context
-def scrub(
+def scrub(  # noqa: PLR0913 (click binds one parameter per flag)
     ctx: click.Context,
     *,
     trace: str,
-    out_path: str,
+    out: str,
+    output_file: str | None,
     replace_specs: tuple[str, ...],
     users: tuple[str, ...],
     turns: int | None,
@@ -175,10 +188,11 @@ def scrub(
 
     invocation = require_invocation(ctx)
     trace_path = resolve_trace_path(trace, invocation)
-    destination = _resolve_out(out_path, invocation)
+    output_path = _prepare_output_file(invocation, output_file, force)
+    destination = _resolve_out(out, invocation)
     if destination.resolve() == trace_path.resolve():
         raise InvalidInput(
-            "--out must differ from TRACE", hint="Pass another output path for the copy"
+            "OUT must differ from TRACE", hint="Pass another output path for the copy"
         )
     if destination.exists() and not force:
         raise PreconditionFailed(
@@ -212,13 +226,20 @@ def scrub(
         bytes_in=len(text.encode("utf-8")),
         bytes_out=len(payload.encode("utf-8")),
     )
-    return _document(trace_path, destination, report, selection)
+    return _document(trace_path, destination, output_path, report, selection)
 
 
-def _document(trace_path: Path, destination: Path, report: ScrubReport, selection: str) -> Document:
+def _document(
+    trace_path: Path,
+    destination: Path,
+    output_path: Path | None,
+    report: ScrubReport,
+    selection: str,
+) -> Document:
     return {
         "trace": str(trace_path),
         "out": str(destination),
+        "output_file": str(output_path) if output_path is not None else None,
         "entries_in": report.entries_in,
         "entries_out": report.entries_out,
         "entries_dropped": report.entries_dropped,
@@ -227,7 +248,7 @@ def _document(trace_path: Path, destination: Path, report: ScrubReport, selectio
         "bytes_out": report.bytes_out,
         "user_names": list(report.user_names),
         "rules": [{"rule": row.rule, "count": row.count} for row in report.rules],
-        "changed": report.changed,
+        "changed": report.changed or output_path is not None,
     }
 
 
@@ -236,6 +257,24 @@ def _resolve_out(out_path: str, invocation: Invocation) -> Path:
     if not destination.is_absolute():
         destination = invocation.cwd / destination
     return destination
+
+
+def _prepare_output_file(
+    invocation: Invocation, output_file: str | None, force: bool
+) -> Path | None:
+    """Refuse an existing result destination before the trace product is written."""
+    if output_file is None:
+        return None
+    target = invocation.output_file
+    if target is None:
+        raise RuntimeError("--output-file was not resolved before scrub callback")
+    if target.exists() and not force:
+        raise PreconditionFailed(
+            f"{target} already exists",
+            hint="Pass --force to overwrite the --output-file destination",
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 def _parse_replacement(spec: str) -> Replacement:

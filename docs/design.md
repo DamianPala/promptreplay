@@ -76,6 +76,10 @@ kind = "openrouter"            # enables provider pinning and /generation billin
 url = "https://api.deepseek.com/anthropic/v1/messages"
 api_key_env = "DEEPSEEK_API_KEY"
 kind = "anthropic"
+litellm_provider = "deepseek"   # the namespace used by LiteLLM's price table
+
+[targets.deepseek.aliases]
+"deepseek/deepseek-v4.1-flash" = "deepseek-flash"
 
 # USD per 1M tokens; used for kinds without a billing API. Off-peak DeepSeek (2026-09).
 [targets.deepseek.prices."deepseek-flash"]
@@ -124,7 +128,10 @@ After the loop, for `kind = "openrouter"`:
 - compute the breakdown from endpoint prices: `input = prompt_total - cached`, `cache_read = cached`, `cache_write = usage.cache_creation_input_tokens`, `output = native_tokens_completion`; `source = "openrouter-endpoint"`.
   `billed_total` is what OpenRouter charged; the breakdown is our reconstruction, shown next to it.
 
-For `kind = "anthropic"`: `prompt_total` and buckets from `usage`; breakdown from `target.prices[model]` when present (`source = "table"`), otherwise `cost = None` and a note.
+For `kind = "anthropic"`: `prompt_total` and buckets from `usage`; native price resolution is
+`targets.toml` first, then LiteLLM through `litellm_provider`, then none. The selected source is
+recorded per spec (`table`, `litellm`, or no price), so a run does not silently inherit a later
+price-table change.
 
 `ReplayResult` fields: `seq, turn, status, latency_ms, message_id, model, provider, requested_providers, usage, prompt_total, cached, cache_write, output_tokens, cost, billed_total, cache_discount, error, note, generation`.
 
@@ -143,7 +150,7 @@ Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, con
 | keys, `Bearer` tokens, e-mail addresses | `[scrubbed:<kind>]`, per the table in `bench/scrub.py` |
 | whole-word `--user NAME` | replaced with `user`, for `ls -l` owners and prose |
 
-`collect_user_names` walks the trace once before scrubbing, so the encoded form is rewritten whatever the order of the strings holding it. `--replace OLD=NEW` is literal and repeatable, for project names the rules cannot know; `--user NAME` is for a person's name, which is not automatic because a name can be an ordinary word. `--allow-email` keeps an address. Two dict keys that scrub to the same string are an `invalid_input` naming the entry's `seq`, rather than a silent loss. `--turns N` keeps the first N entries of the main conversation, or of the file when the trace carries no conversation keys; the report's `selection` says which. A `.gz` `--out` is written with `gzip.compress(mtime=0)`, so repeated runs produce identical bytes. An existing `--out` needs `--force` (`precondition_failed`); an unparsable input line is an `invalid_input` naming the line.
+`collect_user_names` walks the trace once before scrubbing, so the encoded form is rewritten whatever the order of the strings holding it. `--replace OLD=NEW` is literal and repeatable, for project names the rules cannot know; `--user NAME` is for a person's name, which is not automatic because a name can be an ordinary word. `--allow-email` keeps an address. Two dict keys that scrub to the same string are an `invalid_input` naming the entry's `seq`, rather than a silent loss. `--turns N` keeps the first N entries of the main conversation, or of the file when the trace carries no conversation keys; the report's `selection` says which. An OUT ending in `.gz` is written with `gzip.compress(mtime=0)`, so repeated runs produce identical bytes. An existing OUT needs `--force` (`precondition_failed`); an unparsable input line is an `invalid_input` naming the line. `--output-file PATH` writes the result summary instead of stdout.
 
 ## Summary
 
@@ -167,16 +174,21 @@ Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, con
 
 | command | effects | output |
 |---|---|---|
-| `record --name N --upstream URL [--host] [--port] [--traces-dir]` | idempotent (appends to a trace file), runs until SIGINT | `{trace, requests, conversations}` |
-| `inspect TRACE [--conversation KEY]` | read-only | conversation list plus per-turn table of the selected conversation |
-| `replay TRACE --run SPEC... [--conversation] [--max-tokens] [--delay] [--strip-thinking] [--limit] [--yes]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, summaries}` and the report table |
-| `report RUN_DIR [--md PATH]` | read-only | summaries table, cache curves; `--md` writes markdown |
-| `history [MODEL] [--trace T] [--since DURATION]` | read-only | one row per run and spec from `runs/*/*/run.json`, plus a hit-rate sparkline per spec |
 | `compare RUN_A RUN_B [--trace T] [--force]` | read-only | per-spec deltas between two runs of one trace; `invalid_input` across traces or protocols |
-| `scrub TRACE --out PATH [--replace OLD=NEW]... [--user NAME]... [--turns N] [--allow-email ADDR]... [--force]` | idempotent | `{trace, out, entries_in/out/dropped, selection, bytes_in/out, user_names, rules, changed}` and the rules table |
-| `endpoints MODEL` | read-only | OpenRouter endpoints: tag, provider, quantization, context, prices, uptime, latency, throughput |
+| `completion [SHELL] [--install] [--force]` | idempotent | completion script, or installed path and `changed` |
+| `config show` | read-only | every setting with its effective value and source |
+| `endpoints MODEL [--sort KEY]` | read-only | OpenRouter endpoints: tag, provider, quantization, context, prices, uptime, latency, throughput |
+| `history [MODEL] [--trace T] [--since DURATION]` | read-only | one row per run and spec, plus a hit-rate sparkline per spec |
+| `inspect TRACE [--conversation KEY]` | read-only | conversation list plus per-turn table of the selected conversation |
+| `prices [MODEL...] [--update]` | idempotent | native model prices and their source |
+| `probe TRACE SPEC... [--rungs] [--repeats] [--gap] [--ttl] [--warm] [--timeout] [--budget] [--yes]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, run_hex, conversation, rungs, summaries, changed}` |
+| `record --name N --upstream URL [--host] [--port] [--append] [--timeout DURATION]` | non-idempotent, runs until SIGINT or the timeout | `{trace, requests, conversations, changed}` |
+| `replay TRACE --run SPEC... [--conversation] [--max-tokens] [--delay] [--strip-thinking] [--limit] [--warm] [--budget] [--yes]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, conversation, turns, summaries, changed}` |
+| `report RUN [--format text\|md\|html\|json] [--output-file PATH]` | idempotent | summaries table and cache curves; `--output-file` writes the selected rendering, replacing the file (a report is derived from the run alone) |
+| `scrub TRACE OUT [--output-file PATH] [--replace OLD=NEW]... [--user NAME]... [--turns N] [--allow-email ADDR]... [--force]` | idempotent | `{trace, out, output_file, entries_in/out/dropped, selection, bytes_in/out, user_names, rules, changed}` and the rules table |
+| `sweep TRACE MODEL [--top N] [--sort KEY] [--zdr] [--budget USD] [--yes]` | non-idempotent, spends API credit, `confirm=True` | probe summaries plus the recorded selection criteria |
 
-Settings: `targets_path` (`--targets`, `PROVIBENCH_TARGETS`), `traces_dir` (`PROVIBENCH_TRACES_DIR`, default `./traces`), `runs_dir` (`PROVIBENCH_RUNS_DIR`, default `./runs`).
+Settings: `targets_path` (`--targets`, `PROVIBENCH_TARGETS`), `traces_dir` (`PROVIBENCH_TRACES_DIR`, default `./traces`), `runs_dir` (`PROVIBENCH_RUNS_DIR`, default `./runs`). A non-empty `NO_INPUT` disables prompts.
 
 ## Known limits (v1)
 

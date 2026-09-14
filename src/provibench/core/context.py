@@ -5,8 +5,9 @@ tests inject every boundary and nothing reads `sys` or `os.environ` directly.
 """
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
@@ -92,6 +93,7 @@ class Invocation:
         self.argv: Sequence[str] = ()
         self.flags = GlobalFlags()
         self.format: Format | None = None
+        self.output_file: Path | None = None
         self.log = logging.getLogger(program)
         self._settings: dict[str, Resolved] | None = None
         self._stdin_claim: str | None = None
@@ -206,6 +208,19 @@ class Invocation:
     def stdout_console(self) -> "Console":
         """A rich console on stdout for human-readable results; imported lazily."""
         return self._console("stdout", self.streams.stdout)
+
+    @contextmanager
+    def rendering_to(self, stdout: TextIO) -> Generator[None, None, None]:
+        """Temporarily render human output to another stream, such as ``--output-file``."""
+        old_process = self.process
+        old_consoles = self._consoles
+        self.process = replace(old_process, streams=replace(old_process.streams, stdout=stdout))
+        self._consoles = {}
+        try:
+            yield
+        finally:
+            self.process = old_process
+            self._consoles = old_consoles
 
     def stderr_console(self) -> "Console":
         """A rich console on stderr for human-readable messages; imported lazily."""

@@ -6,6 +6,7 @@ import asyncio
 import itertools
 import json
 import sys
+import threading
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -174,8 +175,9 @@ def serve(
     port: int,
     *,
     log: Callable[[str], None] | None = None,
+    timeout_s: float | None = None,
 ) -> None:
-    """Run the recording proxy until interrupted; uvicorn installs its own SIGINT handler."""
+    """Run the recording proxy until interrupted or the optional deadline."""
     recorder = Recorder(upstream, trace_path, log=log)
     app = Starlette(
         routes=[
@@ -186,4 +188,15 @@ def serve(
             )
         ]
     )
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    if timeout_s is None:
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+        return
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    stopper = threading.Timer(timeout_s, setattr, args=(server, "should_exit", True))
+    stopper.daemon = True
+    stopper.start()
+    try:
+        server.run()
+    finally:
+        stopper.cancel()

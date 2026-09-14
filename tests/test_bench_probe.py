@@ -1572,7 +1572,7 @@ def test_a_late_ttl_read_does_not_shrink_the_label_column() -> None:
     ]
     for summary in summaries:
         summary.rungs[0].ttl = [
-            TtlRead(offset=60, hit=True, offset_actual_s=66.2),
+            TtlRead(offset_s=60, hit=True, offset_actual_s=66.2),
         ]
     blocks = render_probe(summaries).split("\n\n")
     spec_block, rung_block = [block for block in blocks if block.startswith(("spec ", "spec |"))]

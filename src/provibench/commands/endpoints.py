@@ -146,7 +146,7 @@ def render_endpoints(invocation: Invocation, document: Document) -> None:
     spec=CommandSpec(effects=Effects.READ_ONLY, output=_OUTPUT, render=render_endpoints),
     help="List the OpenRouter endpoints serving MODEL, with prices and recent health.",
 )
-@click.argument("model")
+@click.argument("model", help="OpenRouter model slug whose endpoints to list")
 @click.option(
     "--sort",
     type=click.Choice(sorted(_SORT_KEYS)),

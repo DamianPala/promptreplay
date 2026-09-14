@@ -33,6 +33,8 @@ provibench completion --install    # shell completions
 [docs/design.md](docs/design.md) for the full design (trace/replay format, `targets.toml`,
 cost model).
 
+Agents: [`skills/provibench/SKILL.md`](skills/provibench/SKILL.md)
+
 ## Probe
 
 The probe is the default measurement; it answers "does this provider cache my prompt, and
@@ -209,8 +211,8 @@ ranked candidates, and that is what the run can cost.
 
 The run records how it chose (`run.json`'s `sweep` block: the criteria, the ranking it
 ranked from, and every endpoint it dropped with the reason), so `report` prints a
-`selection: sort=price, top=5, zdr=off; dropped: …` line under its tables with no network —
-in the terminal and in the `--html` file.
+`selection: sort=price, top=5, zdr=off; dropped: …` line under its tables with no network,
+in the terminal and in the HTML output file.
 
 A sweep is the one run that sorts its tables: by effective $/M ascending, ties to the higher
 hit rate, so the first row is the endpoint to use and the rest are the alternatives.
@@ -249,7 +251,7 @@ provibench replay my-session \
   --budget 2 --yes
 
 # 5. Summarise (or re-summarise) a run, optionally as markdown.
-provibench report latest --md report.md
+provibench report latest --format md --output-file report.md
 ```
 
 `--run` takes the same spec shape as `probe`'s positional `SPEC`; `report` accepts a run
@@ -323,8 +325,8 @@ instruction files, `metadata.user_id`, and any key that travelled in a header or
 Before sharing a recording, write a scrubbed copy:
 
 ```sh
-provibench scrub my-session --out my-session.shared.jsonl.gz
-provibench scrub my-session --out clean.jsonl \
+provibench scrub my-session my-session.shared.jsonl.gz
+provibench scrub my-session clean.jsonl \
   --turns 20 --replace acme-corp=example --user haz
 ```
 
@@ -336,8 +338,8 @@ addresses as `[scrubbed:<kind>]`: Anthropic (`sk-ant-`), OpenAI-style (`sk-` fol
 (`AKIA…`), GitHub (`ghp_`, `gho_`, `github_pat_`) and Slack (`xox[abp]-`) tokens.
 `--allow-email` keeps an address you are allowed to share and `--turns N` keeps only the
 first N entries of the main conversation (a trace without conversation keys keeps its
-first N entries instead; the report says which rule chose them). `--force` overwrites an
-existing `--out`. The report lists the per-rule replacement counts, the user names, the
+first N entries instead; the report says which rule chose them). `--force` overwrites OUT.
+The report lists the per-rule replacement counts, the user names, the
 entries dropped and the payload sizes; `--json` gives the same object.
 
 Two options remove what the rules cannot know. `--replace OLD=NEW` does a literal
@@ -351,8 +353,9 @@ that are not paths, secrets or addresses (a bare `user_id`, for instance) come t
 unchanged.
 
 `TRACE` is an existing path (gzipped or not), a name under `traces_dir`, or `sample`, the
-packaged example trace that `inspect`, `replay` and `scrub` all accept; `--out` ending in
-`.gz` is written compressed. Recording still writes plain jsonl.
+packaged example trace that `inspect`, `replay` and `scrub` all accept; OUT ending in `.gz`
+is written compressed. Recording still writes plain jsonl. Add `--output-file PATH` when the
+scrub summary itself should be written to a file instead of stdout.
 
 The packaged sample is the first 30 turns of a real Claude Code session on DeepSeek V4.1
 Flash (raising test coverage in the public [acpc](https://github.com/DamianPala/acpc)

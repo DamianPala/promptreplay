@@ -22,6 +22,8 @@ class Format(StrEnum):
     JSON = "json"
     NDJSON = "ndjson"
     PLAIN = "plain"
+    MARKDOWN = "md"
+    HTML = "html"
 
     @property
     def machine_readable(self) -> bool:
@@ -50,16 +52,37 @@ def select_format(
     *,
     json_flag: bool,
     plain_flag: bool,
+    named_format: str | None = None,
     stream: bool,
     stdout_isatty: bool,
 ) -> Format:
     """The stdout format for one call: explicit flags first, then the context default."""
-    if json_flag and plain_flag:
-        raise InvalidInput("--json and --plain select conflicting formats; pass one of them")
+    chosen = [
+        flag
+        for flag, set_ in (
+            ("--json", json_flag),
+            ("--plain", plain_flag),
+            (f"--format {named_format}", named_format is not None),
+        )
+        if set_
+    ]
+    if len(chosen) > 1:
+        raise InvalidInput(
+            f"{' and '.join(chosen)} select different output formats",
+            hint="Pass one of them",
+        )
     if plain_flag:
         return Format.PLAIN
     if json_flag:
         return Format.NDJSON if stream else Format.JSON
+    if named_format is not None:
+        try:
+            return Format(named_format)
+        except ValueError as exc:
+            known = ", ".join(member.value for member in Format)
+            raise InvalidInput(
+                f"--format {named_format!r} is not an output format", hint=f"One of: {known}"
+            ) from exc
     return defaults.tty if stdout_isatty else defaults.non_tty
 
 

@@ -7,6 +7,7 @@ command path.
 """
 
 from collections.abc import Callable, MutableMapping
+from pathlib import Path
 from typing import override
 
 import click
@@ -172,9 +173,11 @@ class Command(click.Command):
             self.spec.formats,
             json_flag=invocation.flags.json,
             plain_flag=plain,
+            named_format=_named_format(ctx),
             stream=self.spec.stream,
             stdout_isatty=invocation.streams.stdout.isatty(),
         )
+        invocation.output_file = _output_file(ctx, invocation)
         invocation.begin(selected)
         _reject_conflicting_stdin(self, ctx, invocation)
         result = super().invoke(ctx)
@@ -253,3 +256,23 @@ def explicit_page(ctx: click.Context) -> bool:
 def given(ctx: click.Context, parameter: str) -> bool:
     """Whether `parameter` was supplied on the command line rather than defaulted."""
     return ctx.get_parameter_source(parameter) is click.core.ParameterSource.COMMANDLINE
+
+
+def _named_format(ctx: click.Context) -> str | None:
+    """Read a command-specific ``--format`` option when one exists.
+
+    Convention: a command opts into the O2 machinery by naming its click parameters
+    `format_name` (or `format`) and `output_file`; nothing in `CommandSpec` declares them,
+    the registry finds them by name. `select_format` rejects a value that is not a `Format`.
+    """
+    value = ctx.params.get("format_name", ctx.params.get("format"))
+    return str(value) if value is not None else None
+
+
+def _output_file(ctx: click.Context, invocation: Invocation) -> Path | None:
+    """Resolve a command-specific result destination against the injected working directory."""
+    value = ctx.params.get("output_file")
+    if value is None:
+        return None
+    target = Path(str(value))
+    return target if target.is_absolute() else invocation.cwd / target

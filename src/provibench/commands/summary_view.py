@@ -31,6 +31,7 @@ from provibench.core.documents import (
     obj,
     string,
 )
+from provibench.core.output import Format
 from provibench.core.terminal_text import escape_terminal_text
 
 if TYPE_CHECKING:
@@ -79,7 +80,7 @@ SUMMARY = _all(
 
 _TTL_READ = _all(
     {
-        "offset": integer(),
+        "offset_s": integer(),
         "hit": boolean(),
         "fraction": nullable_number(),
         "offset_actual_s": nullable_number(),
@@ -254,22 +255,42 @@ def render_probe_report(invocation: Invocation, document: Document) -> None:
 
 def render_report_document(invocation: Invocation, document: Document) -> None:
     """`report`'s human rendering: the probe tables for a probe run, else the replay table."""
+    if invocation.format is Format.MARKDOWN:
+        _write_text(invocation, report_markdown(document))
+        return
+    if invocation.format is Format.HTML:
+        from provibench.bench.html_report import render_html
+
+        _write_text(invocation, render_html(document))
+        return
     if document.get("protocol") == "probe":
         render_probe_report(invocation, document)
     else:
         render_summaries(invocation, document)
-    _render_html_path(invocation, document)
 
 
-def _render_html_path(invocation: Invocation, document: Document) -> None:
-    """The HTML file's path, last: it is the one thing a caller with --html came for."""
-    from rich.markup import escape
+def report_markdown(document: Document) -> str:
+    """Render the report's Markdown form from the same document as every other format."""
+    if document.get("protocol") == "probe":
+        from provibench.bench.probe_tables import probe_markdown
 
-    path = document.get("html")
-    if not isinstance(path, str):
-        return
-    console = invocation.stdout_console()
-    console.print(escape(f"HTML report: {escape_terminal_text(path)}"))
+        entries = [
+            entry
+            for entry in map(as_document, as_list(document.get("probe_summaries")) or [])
+            if entry
+        ]
+        return probe_markdown([_probe_summary(entry) for entry in entries]) + "\n"
+    from provibench.bench.summary import render_markdown
+
+    entries = [
+        entry for entry in map(as_document, as_list(document.get("summaries")) or []) if entry
+    ]
+    return render_markdown(entries) + "\n"
+
+
+def _write_text(invocation: Invocation, text: str) -> None:
+    invocation.streams.stdout.write(text)
+    invocation.streams.stdout.flush()
 
 
 def _render_probe(invocation: Invocation, document: Document, *, key: str) -> None:
