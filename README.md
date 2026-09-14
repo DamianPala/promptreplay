@@ -46,7 +46,19 @@ what does that cost" on a few real turns instead of replaying the whole conversa
 4. Every rung stamps its own nonce (`provibench-probe:<run hex>:<k>`) into the first system
    block, so a cold request really is cold and rung 30 cannot read what rung 1 wrote;
    `--warm` sends no nonce and measures the cache as found.
-5. A cold request that fails skips its rung — a failed write is not a miss — and the run is
+5. After the warm reads, one streamed generation on the same prompt (`max_tokens 256`,
+   `temperature 0`) gives time-to-first-token, tokens per second and the model's first
+   output tokens; `--no-throughput` skips it, and it costs output tokens. The fingerprint
+   is for eyeballing: at temperature 0 two providers of one model still open differently,
+   because quantization and the chat template change what a model says, not how it caches,
+   so a difference there is not a fault. The tokens and models a spec was served by are
+   compared, in `drift` and in `--json`.
+6. `--ttl 60,300` re-reads the first served rung's cache that many seconds after its last
+   warm read, which is what turns "it is cached" into "it is cached for at least this
+   long"; a rung whose cold request failed wrote nothing to re-read, so the next one
+   carries the offsets. It is off by default because it costs wall time, and `--gap` must
+   be smaller than the smallest offset.
+7. A cold request that fails skips its rung — a failed write is not a miss — and the run is
    written to disk either way; the command exits non-zero when anything failed or was
    skipped, so a script can tell.
 
@@ -54,14 +66,17 @@ what does that cost" on a few real turns instead of replaying the whole conversa
 provibench inspect my-session                     # see the turns and their sizes
 provibench probe my-session deepseek:deepseek-flash \
   --rungs 1,13,30 --repeats 6,2,2 --budget 0.5
+provibench probe my-session openrouter:deepseek/deepseek-v4.1-flash@novita \
+  --ttl 60,300 --yes
 provibench report latest
 ```
 
 `SPEC` is `<target>:<model>[@provider[,provider...]]`, resolved against `targets.toml`
 (`@provider` is only valid for `kind = "openrouter"` targets); repeat it to probe several
 providers in one run. Before sending anything, `probe` prints the worst case per spec —
-every token it will send at the listed input price, assuming no cache hit — and `--budget`
-refuses to run above it, because weak resellers bill close to that number.
+every prompt token at the listed input price and the throughput request's output tokens at
+the output price, assuming no cache hit — and `--budget` refuses to run above it, because
+weak resellers bill close to that number.
 
 What the columns mean:
 
@@ -71,13 +86,26 @@ What the columns mean:
 | `prefix %` | On a hit, how much of the cold prompt was cached, averaged; 100 % is the whole prefix |
 | `eff $/M` | What a prompt token costs at that hit rate: `(1 − h)·input + h·cache read`, `h = hit % × prefix %` |
 | `in $/M` | The listed input price that calculation used: the OpenRouter endpoint's, or `targets.toml`'s |
-| `cold ms` / `warm ms` | Median wall clock; the gap is the prefill the cache saved |
+| `cold ms` / `warm ms` | The first rung's cold and warm prefill; the gap is what the cache saved |
+| `TTFT ms` / `tok/s` | Time to the first streamed output token, and output tokens per second after it; the median over the spec's rungs, so one slow rung cannot set the number |
+| `errors` | Requests that produced no usable answer |
+| `drift` | Short markers versus the reference spec: `provider` (the served provider differs from the pinned one, or varies), `model` (the response model differs or varies), `tokens±N%` (prompt size differs by ≥ 1 %); `-` when nothing drifts |
 | `hits` | One cell per warm read: `x` failed, `1` from 0.98 up, else the cached fraction (`0.9` = a 90 % prefix) |
+| `ttft ms` / `tok/s` | The same two numbers per rung, taken from that rung's streamed request |
+| `ttl` | One cell per `--ttl` offset: `60s:1` means the cache was still there at 60 s, `300s:0` that it was not, `60s:1 (+6)` that the read went out six seconds late |
 | `cached cold` | What the cold write read back; anything above 0 means the rung was not really cold |
+
+When every spec shares one `target:model`, the tables move it into a `specs:` line above them
+and the `spec` column shows just the provider tails (`@novita`, `@gmicloud`); a spec of
+another model keeps its whole name. The tables are planned to fit 120 columns without
+shortening two rows into the same name; a rung that carries a late `--ttl` read is the one
+thing allowed to run longer, because that marker is worth the columns.
 
 A run is persisted under `runs/<trace>/<timestamp>/` as the options, the endpoint snapshot
 and prices it was priced with, and one `<spec>.jsonl` per spec; `report` re-reads it with no
-network. `--json` prints the same summaries for scripts.
+network. `--json` prints the same summaries for scripts, including the fields the terminal
+tables leave out: the served provider names (`served`), every model the responses named
+(`models_seen`), and the raw per-rung records the columns are folded from.
 
 ## Full replay
 

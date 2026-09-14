@@ -15,6 +15,8 @@ import httpx
 from pydantic import BaseModel, Field
 
 from provibench.bench.openrouter import normalize_provider
+from provibench.bench.probe_models import ProbeOptions
+from provibench.bench.probe_stream import STREAM_MAX_TOKENS
 from provibench.bench.targets import Prices, RunSpec
 from provibench.bench.trace import TraceEntry
 
@@ -109,16 +111,30 @@ def spec_prices(spec: RunSpec, index: Mapping[str, list[Endpoint]]) -> SpecPrice
 def probe_estimate(
     spec: RunSpec,
     entries: Sequence[TraceEntry],
-    rungs: Sequence[int],
-    repeats: Sequence[int],
+    options: ProbeOptions,
     prices: SpecPrices | None,
 ) -> SpecEstimate:
-    """The worst case for one probe spec: cold turn `k` once, warm turn `k+1` R times."""
+    """The worst case for one probe spec: every request it is about to send.
+
+    That is the cold write and the warm reads, the throughput request's prompt plus its
+    output budget when it is on, and the TTL re-reads of the first rung. Output tokens are
+    priced at the model's output rate, because generation is not prompt tokens and does not
+    share their price.
+    """
+    rungs = options.rungs or []
     requests: list[tuple[int, int]] = []
-    for rung, count in zip(rungs, repeats, strict=True):
+    output_tokens = 0
+    for rung, count in zip(rungs, options.repeats, strict=True):
         requests.append((rung, 1))
         requests.append((rung + 1, count))
-    return _estimate(spec, entries, requests, prices)
+        if options.throughput:
+            # The streamed generation's prompt is a turn-`k+1` request too; its own 256
+            # output tokens are a second cost, billed at the output price.
+            requests.append((rung + 1, 1))
+            output_tokens += STREAM_MAX_TOKENS
+        if options.ttl_s and rung == rungs[0]:
+            requests.extend((rung + 1, 1) for _ in options.ttl_s)
+    return _estimate(spec, entries, requests, prices, output_tokens=output_tokens)
 
 
 def replay_estimate(
@@ -134,7 +150,10 @@ def _estimate(
     entries: Sequence[TraceEntry],
     requests: Sequence[tuple[int, int]],
     prices: SpecPrices | None,
+    *,
+    output_tokens: int = 0,
 ) -> SpecEstimate:
+    """`requests` are `(turn, times)`; `output_tokens` are the ones the run will generate."""
     tokens = 0
     known = True
     notes: list[str] = []
@@ -153,14 +172,24 @@ def _estimate(
             f"unpinned: priced from the most expensive endpoint ({endpoint}); "
             "pin @provider to price one endpoint"
         )
+    # `tokens` is what the run will send as prompt; the generated tokens are a second cost
+    # and are reported as such, not folded into a count that claims to be a prompt size.
+    usd = _usd(tokens, output_tokens, prices) if known else None
     return SpecEstimate(
-        label=spec.label,
-        tokens=tokens,
-        tokens_known=known,
-        prices=prices,
-        usd=tokens * prices.prices.input * 1e-6 if prices is not None and known else None,
-        notes=notes,
+        label=spec.label, tokens=tokens, tokens_known=known, prices=prices, usd=usd, notes=notes
     )
+
+
+def _usd(prompt_tokens: int, output_tokens: int, prices: SpecPrices | None) -> float | None:
+    """The prompt side at the input price, the generated side at the output price.
+
+    A spec with no listed output price is priced at its input price: the throughput request
+    is a small part of the estimate, and leaving it out would understate the run.
+    """
+    if prices is None:
+        return None
+    output_price = prices.prices.output or prices.prices.input
+    return (prompt_tokens * prices.prices.input + output_tokens * output_price) * 1e-6
 
 
 def _recorded_tokens(entry: TraceEntry) -> int | None:

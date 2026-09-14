@@ -15,10 +15,22 @@ from provibench.bench.estimate import (
     spec_prices,
 )
 from provibench.bench.openrouter import Endpoint
+from provibench.bench.probe_models import ProbeOptions
 from provibench.bench.targets import Prices, RunSpec, Target
 from provibench.bench.trace import RecordedResponse, TraceEntry, Usage
 
 _TABLE = Prices(input=1.0, cache_read=0.1, cache_write=1.0, output=2.0)
+"""The table every priced estimate uses; output is twice input, so the split is visible."""
+_STREAM = 256
+"""The throughput request's output budget, which one rung of a probe estimate carries."""
+
+
+def _options(
+    rungs: list[int], repeats: list[int], *, throughput: bool = True, ttl_s: list[int] | None = None
+) -> ProbeOptions:
+    return ProbeOptions(
+        rungs=rungs, repeats=repeats, gap_s=0.0, throughput=throughput, ttl_s=ttl_s
+    ).resolved([_entry(seq, 100) for seq in range(1, 9)])
 
 
 def _target(
@@ -117,18 +129,42 @@ def test_spec_prices_reads_the_targets_table_for_a_native_spec() -> None:
 def test_probe_estimate_counts_the_cold_write_and_every_warm_read() -> None:
     entries = [_entry(1, 100), _entry(2, 200), _entry(3, 300)]
     prices = SpecPrices(prices=_TABLE, source="table")
-    # rung 1: cold turn 1 (100) + 2 warm reads of turn 2 (2 * 200)
-    estimate = probe_estimate(_spec_anthropic(), entries, [1], [2], prices)
-    assert estimate.tokens == 500
-    assert estimate.usd == 500 * 1.0 * 1e-6
+    # rung 1: cold turn 1 (100) + 2 warm reads of turn 2 (2 * 200) + the streamed turn 2
+    estimate = probe_estimate(_spec_anthropic(), entries, _options([1], [2]), prices)
+    assert estimate.tokens == 100 + 2 * 200 + 200
+    # the streamed request's own 256 output tokens are billed at the output price, 2.0
+    assert estimate.usd == pytest.approx((700 * 1.0 + _STREAM * 2.0) * 1e-6)
     assert estimate.tokens_known is True
+
+
+def test_probe_estimate_without_throughput_leaves_the_stream_out() -> None:
+    entries = [_entry(1, 100), _entry(2, 200)]
+    prices = SpecPrices(prices=_TABLE, source="table")
+    estimate = probe_estimate(
+        _spec_anthropic(), entries, _options([1], [1], throughput=False), prices
+    )
+    assert estimate.tokens == 100 + 200
+    assert estimate.usd == pytest.approx(300 * 1.0 * 1e-6)
+
+
+def test_probe_estimate_counts_the_ttl_reads_of_the_first_rung_only() -> None:
+    entries = [_entry(1, 100), _entry(2, 200), _entry(3, 300)]
+    prices = SpecPrices(prices=_TABLE, source="table")
+    # an explicit rung list keeps `ttl_s` from tripping the gap check at the default 1 s
+    estimate = probe_estimate(
+        _spec_anthropic(),
+        entries,
+        _options([1], [1], throughput=False, ttl_s=[1, 2]),
+        prices,
+    )
+    assert estimate.tokens == 100 + 200 + 2 * 200  # the cold, the warm read, two re-reads
 
 
 def test_probe_estimate_marks_unknown_tokens_and_prices_nothing() -> None:
     entries = [_entry(1, None), _entry(2, 200)]
     prices = SpecPrices(prices=_TABLE, source="table")
-    estimate = probe_estimate(_spec_anthropic(), entries, [1], [1], prices)
-    assert estimate.tokens == 200
+    estimate = probe_estimate(_spec_anthropic(), entries, _options([1], [1]), prices)
+    assert estimate.tokens == 200 + 200  # turn 1's unknown size is not counted
     assert estimate.tokens_known is False
     assert estimate.usd is None  # a total over unknown tokens would be a guess
     assert "turn 1 has no recorded prompt usage; its tokens are unknown" in estimate.notes
@@ -144,7 +180,7 @@ def test_probe_estimate_notes_that_an_unpinned_endpoint_is_the_expensive_one() -
     }
     spec = RunSpec(target=_target("openrouter"), model="model")
     prices = spec_prices(spec, index)
-    estimate = probe_estimate(spec, entries, [1], [1], prices)
+    estimate = probe_estimate(spec, entries, _options([1], [1]), prices)
     assert estimate.usd is not None
     [note] = estimate.notes
     assert "most expensive endpoint (Pricey)" in note
@@ -153,8 +189,8 @@ def test_probe_estimate_notes_that_an_unpinned_endpoint_is_the_expensive_one() -
 
 def test_probe_estimate_without_a_price_is_tokens_only() -> None:
     entries = [_entry(1, 100), _entry(2, 200)]
-    estimate = probe_estimate(_spec_anthropic(), entries, [1], [1], None)
-    assert estimate.tokens == 300
+    estimate = probe_estimate(_spec_anthropic(), entries, _options([1], [1]), None)
+    assert estimate.tokens == 100 + 200 + 200
     assert estimate.usd is None
     assert estimate.notes == ["no listed input price for this model; the estimate is tokens only"]
 
@@ -176,10 +212,11 @@ def _spec_anthropic() -> RunSpec:
 
 def test_estimate_total_sums_what_is_known() -> None:
     entries = [_entry(1, 100), _entry(2, 100)]
-    priced = probe_estimate(
-        _spec_anthropic(), entries, [1], [0], SpecPrices(prices=_TABLE, source="table")
+    table = SpecPrices(prices=_TABLE, source="table")
+    priced = probe_estimate(_spec_anthropic(), entries, _options([1], [0], throughput=False), table)
+    unpriced = probe_estimate(
+        _spec_anthropic(), entries, _options([1], [0], throughput=False), None
     )
-    unpriced = probe_estimate(_spec_anthropic(), entries, [1], [0], None)
     assert estimate_total([priced]) == 100 * 1.0 * 1e-6
     assert estimate_total([priced, unpriced]) == 100 * 1.0 * 1e-6  # the known part only
     assert estimate_total([unpriced]) is None
@@ -188,7 +225,10 @@ def test_estimate_total_sums_what_is_known() -> None:
 def test_render_estimate_says_retries_are_excluded() -> None:
     entries = [_entry(1, 100), _entry(2, 100)]
     estimate = probe_estimate(
-        _spec_anthropic(), entries, [1], [0], SpecPrices(prices=_TABLE, source="table")
+        _spec_anthropic(),
+        entries,
+        _options([1], [0], throughput=False),
+        SpecPrices(prices=_TABLE, source="table"),
     )
     text = render_estimate([estimate])
     assert "excluding retries" in text

@@ -6,8 +6,9 @@ the command, the probe protocol and the aggregation together, on recorded fixtur
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -100,12 +101,12 @@ def _write_trace(path: Path, prompts: tuple[int, ...] = (100, 200, 300)) -> None
         append_entry(path, _trace_entry(seq, prompt_tokens))
 
 
-def _ok(cached: int = 0, input_tokens: int = 100) -> httpx.Response:
+def _ok(cached: int = 0, input_tokens: int = 100, model: str = "model-a") -> httpx.Response:
     return httpx.Response(
         200,
         json={
             "id": "msg_1",
-            "model": "model-a",
+            "model": model,
             "usage": {
                 "input_tokens": input_tokens,
                 "cache_read_input_tokens": cached,
@@ -115,27 +116,98 @@ def _ok(cached: int = 0, input_tokens: int = 100) -> httpx.Response:
     )
 
 
+_STREAM_TOKENS = [f"tok{index}" for index in range(1, 19)]
+"""The throughput fixture's output: 18 whitespace-separated pieces, so 16 is a real cut."""
+
+
+def _sse_bytes(events: list[dict[str, Any]]) -> bytes:
+    return ("\n\n".join(f"data: {json.dumps(event)}" for event in events) + "\n\n").encode()
+
+
+def _delta(index: int, kind: str, text: str) -> dict[str, Any]:
+    """One content delta; `kind` is `thinking_delta` or `text_delta`, each with its key."""
+    key = "thinking" if kind == "thinking_delta" else "text"
+    return {"type": "content_block_delta", "index": index, "delta": {"type": kind, key: f" {text}"}}
+
+
+def _stream_response(
+    body: dict[str, Any] | None = None,
+    *,
+    cached: int = 90,
+    model: str = "model-a",
+    input_tokens: int = 10,
+) -> httpx.Response:
+    """A streamed generation: message_start, thinking deltas, text deltas, usage, stop."""
+    events: list[dict[str, Any]] = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_stream",
+                "model": model,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "cache_read_input_tokens": cached,
+                    "cache_creation_input_tokens": 0,
+                },
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking"}},
+        *(_delta(0, "thinking_delta", token) for token in _STREAM_TOKENS[:8]),
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text"}},
+        *(_delta(1, "text_delta", token) for token in _STREAM_TOKENS[8:]),
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 18},
+        },
+        {"type": "message_stop"},
+    ]
+    return httpx.Response(
+        200, content=_sse_bytes(events), headers={"content-type": "text/event-stream"}
+    )
+
+
+def _refuse_stream(body: dict[str, Any] | None = None) -> httpx.Response:
+    """A provider that answers the throughput request with a 500."""
+    del body
+    return httpx.Response(500, json={"error": {"message": "no stream"}})
+
+
 def _transport(
     reply: Callable[[int], httpx.Response],
     *,
     sent: list[dict[str, Any]] | None = None,
     generation: dict[str, Any] | None = _GENERATION,
+    stream: Callable[[dict[str, Any]], httpx.Response] | None = None,
+    handler: Callable[[httpx.Request], httpx.Response] | None = None,
 ) -> Callable[[httpx.Request], httpx.Response]:
-    """A transport serving /endpoints and /generation, and delegating the rest to `reply`."""
+    """A transport serving /endpoints and /generation, and delegating the rest to `reply`.
+
+    A request whose body carries `stream: true` goes to `stream` instead of `reply`, so a
+    test can give the throughput request its own answer without counting it as a message.
+    `handler` replaces the whole message path for a test that needs to see every request.
+    """
     calls = {"messages": 0}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def serve(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/endpoints"):
             return httpx.Response(200, json=_ENDPOINTS)
         if request.url.path.endswith("/generation"):
             return httpx.Response(200, json={"data": generation or {}})
+        body = json.loads(request.content)
         if sent is not None:
-            sent.append(json.loads(request.content))
+            sent.append(body)
+        if handler is not None:
+            return handler(request)
+        if body.get("stream"):
+            return (stream or _stream_response)(body)
         index = calls["messages"]
         calls["messages"] += 1
         return reply(index)
 
-    return handler
+    return serve
 
 
 def _install(
@@ -197,8 +269,15 @@ def test_probe_runs_a_rung_and_persists_the_run(
 
     lines = (run_dir / "fake-model-a.jsonl").read_text(encoding="utf-8").splitlines()
     records = [json.loads(line) for line in lines]
-    assert [record["role"] for record in records] == ["cold", "warm", "warm"]
+    # cold, two warm reads, then one streamed throughput request
+    assert [record["role"] for record in records] == ["cold", "warm", "warm", "stream"]
     assert records[0]["cached"] == 0  # the cold write read nothing
+    stream = records[-1]
+    assert stream["usage"]["output_tokens"] == 18
+    # a mock transport delivers the whole body at once, so there is a TTFT but no window
+    # to compute a generation rate over; the real derivation is tested in test_bench_sse
+    assert stream["ttft_ms"] is not None and stream["ttft_ms"] >= 0
+    assert stream["fingerprint"] == " ".join(_STREAM_TOKENS[:16])  # thinking first, then text
 
     [summary] = [d for d in map(as_document, as_list(doc["summaries"]) or []) if d]
     assert summary["label"] == "fake:model-a"
@@ -287,7 +366,8 @@ def test_probe_estimate_is_shown_and_the_budget_refuses_above_it(
     sent: list[dict[str, Any]] = []
     _install(monkeypatch, _transport(lambda index: _ok(), sent=sent))
 
-    # rung 1, two warm reads: 100 cold + 2 * 200 warm = 500 tokens at 1.0 USD/M
+    # rung 1: 100 cold + 2 * 200 warm + one streamed turn 2 (200 prompt, 256 output at
+    # the table's output price, 2.0 USD/M) = 700 prompt tokens and 256 output tokens
     outcome = _probe(
         cli,
         bench_paths,
@@ -305,7 +385,7 @@ def test_probe_estimate_is_shown_and_the_budget_refuses_above_it(
     )
     assert outcome.code == 2
     assert outcome.error["kind"] == "invalid_input"
-    assert "0.0005" in str(outcome.error["message"])
+    assert "0.0012" in str(outcome.error["message"])
     assert sent == []
     assert not (bench_paths.runs_dir / "t").exists()
 
@@ -321,12 +401,12 @@ def test_probe_estimate_is_shown_and_the_budget_refuses_above_it(
         "--gap",
         "0",
         "--budget",
-        "0.001",
+        "0.002",
         "--yes",
     )
     assert within.code == 0, within.stderr
     assert "worst case" in within.stderr
-    assert "500" in within.stderr
+    assert "700" in within.stderr
 
 
 def test_probe_budget_refuses_a_spec_it_cannot_price(
@@ -464,6 +544,7 @@ def test_probe_exits_one_when_a_request_failed_and_keeps_the_run(
         "1",
         "--gap",
         "0",
+        "--no-throughput",
         "--yes",
     )
     assert outcome.code == 1
@@ -596,7 +677,8 @@ def test_probe_warm_sends_no_nonce(
         "--yes",
     )
     assert outcome.code == 0, outcome.stderr
-    assert [body["system"][0]["text"] for body in sent] == ["You are helpful."] * 2
+    # the cold write, the warm read, and the throughput request all send the plain system
+    assert [body["system"][0]["text"] for body in sent] == ["You are helpful."] * 3
 
 
 def test_probe_prices_an_openrouter_spec_from_the_endpoint_snapshot(
@@ -679,3 +761,549 @@ def test_report_summarises_a_probe_run_without_the_network(
     assert marked.code == 0, marked.stderr
     assert marked.document["changed"] is True
     assert md_path.read_text(encoding="utf-8").startswith("| spec |")
+
+
+# --- the throughput request and TTL -------------------------------------------
+
+
+def test_probe_no_throughput_sends_no_stream_request(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    sent: list[dict[str, Any]] = []
+    _install(monkeypatch, _transport(lambda index: _ok(), sent=sent))
+
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--no-throughput",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert [body["stream"] for body in sent] == [False, False]
+    run_dir = Path(str(outcome.document["run_dir"]))
+    records = (run_dir / "fake-model-a.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["role"] for line in records] == ["cold", "warm"]
+
+
+def test_probe_streams_the_warm_body_with_a_real_output_budget(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    sent: list[dict[str, Any]] = []
+    _install(monkeypatch, _transport(lambda index: _ok(cached=90, input_tokens=10), sent=sent))
+
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "2",
+        "--gap",
+        "0",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    cold, *warm = sent
+    first_warm, *_ = warm
+    stream = warm[-1]
+    assert len(warm) == 3  # two warm reads, then the throughput request
+    assert stream["stream"] is True
+    assert stream["max_tokens"] == 256
+    assert stream["temperature"] == 0
+    # the prefix the streamed request reads is byte-identical to the warm reads'
+    changed = {"stream", "max_tokens", "temperature"}
+    assert {key: value for key, value in stream.items() if key not in changed} == {
+        key: value for key, value in first_warm.items() if key not in changed
+    }
+    assert cold["stream"] is False
+
+    run_dir = Path(str(outcome.document["run_dir"]))
+    records = [
+        json.loads(line) for line in (run_dir / "fake-model-a.jsonl").read_text().splitlines()
+    ]
+    assert [record["role"] for record in records] == ["cold", "warm", "warm", "stream"]
+    [stream_record] = [record for record in records if record["role"] == "stream"]
+    assert stream_record["fingerprint"] is not None
+    assert stream_record["attempt"] == 0
+
+
+def test_probe_streams_a_thinking_body_without_the_param_when_it_was_dropped(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dropped `thinking` key is dropped from the streamed body too."""
+    _write_targets(bench_paths.targets_path)
+    trace = bench_paths.traces_dir / "t.jsonl"
+    for seq, prompt_tokens in enumerate((100, 200, 300), start=1):
+        entry = _trace_entry(seq, prompt_tokens)
+        entry.body["thinking"] = {"type": "enabled", "budget_tokens": 1024}
+        append_entry(trace, entry)
+    seen: list[bool] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body.get("stream"):
+            seen.append("thinking" in body)
+            return _stream_response()
+        if "thinking" in body:
+            return httpx.Response(
+                400, json={"error": {"message": "max_tokens must exceed thinking"}}
+            )
+        return _ok()
+
+    _install(monkeypatch, _transport(lambda index: _ok(), handler=handler))
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert seen == [False]
+
+
+def test_probe_ttl_re_reads_the_first_rung_at_each_offset(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    _install(monkeypatch, _transport(lambda index: _ok(cached=90, input_tokens=10)))
+
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1,2",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--ttl",
+        "5,10",
+        "--no-throughput",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    run_dir = Path(str(outcome.document["run_dir"]))
+    records = [
+        json.loads(line) for line in (run_dir / "fake-model-a.jsonl").read_text().splitlines()
+    ]
+    ttl = [record for record in records if record["role"] == "ttl"]
+    assert [(record["rung"], record["attempt"]) for record in ttl] == [(1, 5), (1, 10)]
+    assert [record["cached"] for record in ttl] == [90, 90]
+    # rung 2 carries no TTL read, and the second offset waits past the first
+    assert [record["rung"] for record in records if record["role"] == "cold"] == [1, 2]
+    assert len(sleeps) == 2
+    assert 0 < sleeps[0] <= 5 and sleeps[1] > sleeps[0]
+
+    [summary] = [d for d in map(as_document, as_list(outcome.document["summaries"]) or []) if d]
+    [first_rung, second_rung] = [d for d in map(as_document, as_list(summary["rungs"]) or []) if d]
+    reads = [d for d in map(as_document, as_list(first_rung["ttl"]) or []) if d]
+    assert [read["offset"] for read in reads] == [5, 10]
+    assert all(read["hit"] is True for read in reads)
+    assert as_list(second_rung["ttl"]) == []
+
+
+def test_probe_rejects_a_gap_larger_than_a_ttl_offset(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    sent: list[dict[str, Any]] = []
+    _install(monkeypatch, _transport(lambda index: _ok(), sent=sent))
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--gap",
+        "30",
+        "--ttl",
+        "10",
+        "--yes",
+    )
+    assert outcome.code == 2
+    assert outcome.error["kind"] == "invalid_input"
+    assert "--gap 30" in str(outcome.error["message"])
+    assert sent == []
+
+
+def test_probe_reports_a_failed_stream_without_skipping_the_rung(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    _install(
+        monkeypatch,
+        _transport(
+            lambda index: _ok(cached=90, input_tokens=10),
+            stream=_refuse_stream,
+        ),
+    )
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--yes",
+    )
+    # the streamed request failed, so the command exits non-zero, but the rung is measured
+    assert outcome.code == 1
+    assert "1 request(s) failed" in str(outcome.error["message"])
+    context = as_document(outcome.error.get("context"))
+    assert context is not None
+    [summary] = [d for d in map(as_document, as_list(context["summaries"]) or []) if d]
+    assert summary["skipped"] == 0
+    assert summary["hit_rate"] == 1.0
+    assert summary["ttft_ms"] is None
+    [rung] = [d for d in map(as_document, as_list(summary["rungs"]) or []) if d]
+    assert as_list(rung["hits"]) == [pytest.approx(0.9)]
+
+
+def test_probe_records_the_ttl_offsets_in_the_run(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    _install(monkeypatch, _transport(lambda index: _ok()))
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--ttl",
+        "5",
+        "--no-throughput",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    run_json = Path(str(outcome.document["run_dir"])) / "run.json"
+    meta = as_document(json.loads(run_json.read_text()))
+    assert meta is not None
+    options = as_document(meta["options"])
+    assert options is not None
+    assert options["ttl_s"] == [5]
+    assert meta["ttl_s"] == [5]
+
+
+def test_probe_reports_token_drift_and_a_model_mismatch_between_specs(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second spec answers with another model and a larger prompt, so drift names both.
+
+    The prompt sizes come from the responses here, because the rung's size is what the
+    provider says it read: the first spec is served turn 2 (200 tokens), the second spec the
+    same turn from an endpoint that reports 400.
+    """
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        # the first spec sends three requests; the second spec's start at the fourth
+        later = calls["n"] > 3
+        model = "model-b" if later else "model-a"
+        body = json.loads(request.content)
+        if body.get("stream"):
+            return _stream_response(model=model, input_tokens=310)
+        if body["messages"][0]["content"] == "question 1":  # the rung's cold write
+            # the rung's size is what the cold response reports: 200 for the second spec
+            return _ok(input_tokens=200 if later else 100, model=model)
+        return _ok(cached=90, input_tokens=310, model=model)
+
+    _install(monkeypatch, _transport(lambda index: _ok(), handler=handler))
+
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "fake:model-b",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    summaries = [d for d in map(as_document, as_list(outcome.document["summaries"]) or []) if d]
+    first, second = summaries
+    assert first["reference"] is True
+    assert first["drift"] is None
+    assert second["model_seen"] == "model-b"
+    assert second["tokens_delta_pct"] == pytest.approx(100.0)  # rung 1 is 200 against 100
+    assert second["drift"] == "model,tokens+100%"
+    assert first["fingerprint_match"] is None  # the reference is never compared with itself
+
+
+class _Clock:
+    """A `perf_counter` stand-in the transport can move: the stream 'takes' 10 s."""
+
+    def __init__(self, start: float = 100.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_probe_ttl_counts_from_the_last_warm_read_not_from_the_stream(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 10 s streamed request is elapsed time, not added time: 30 s means 20 s of waiting."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    clock = _Clock()
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content).get("stream"):
+            clock.now += 10.0  # the generation the TTL offset has to account for
+            return _stream_response()
+        return _ok(cached=90, input_tokens=10)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr("provibench.bench.probe.perf_counter", clock)
+    _install(monkeypatch, _transport(lambda index: _ok(), handler=handler))
+
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--ttl",
+        "30,60",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    # the warm read finished at 100, the stream ended at 110, so 30 s and 60 s are 20 s and 50 s
+    assert sleeps == [pytest.approx(20.0), pytest.approx(50.0)]
+
+
+def test_probe_ttl_rides_the_first_served_rung(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rung 1's cold write failed, so the cache rung 2 wrote is the one to re-read."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths, prompts=(100, 200, 300, 400))
+    seen = {"n": 0}
+
+    def reply(index: int) -> httpx.Response:
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return httpx.Response(502, text="bad gateway")  # rung 1's cold write fails
+        return _ok(cached=90, input_tokens=10)
+
+    _install(monkeypatch, _transport(reply))
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1,2",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--ttl",
+        "5",
+        "--no-throughput",
+        "--yes",
+    )
+    assert outcome.code == 1  # the failed cold request is reported, the run is kept
+    context = as_document(outcome.error.get("context"))
+    assert context is not None
+    run_dir = Path(str(context["run_dir"]))
+    records = [
+        json.loads(line) for line in (run_dir / "fake-model-a.jsonl").read_text().splitlines()
+    ]
+    ttl = [record for record in records if record["role"] == "ttl"]
+    assert [record["rung"] for record in ttl] == [2]
+    assert [record["cached"] for record in ttl] == [90]
+
+
+def test_probe_rejects_ttl_offsets_out_of_order(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    sent: list[dict[str, Any]] = []
+    _install(monkeypatch, _transport(lambda index: _ok(), sent=sent))
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--gap",
+        "0",
+        "--ttl",
+        "300,60",
+        "--yes",
+    )
+    assert outcome.code == 2
+    assert outcome.error["kind"] == "invalid_input"
+    assert "ascend" in str(outcome.error["message"])
+    assert sent == []
+
+
+class _Stalled(httpx.AsyncByteStream):
+    """A stream that sends one event and then goes quiet without closing."""
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'data: {"type": "message_start", "message": {"id": "m"}}\n\n'
+        await asyncio.Event().wait()
+
+
+def test_probe_does_not_hang_on_a_stream_that_stalls(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A silent stream is a failed request after `--timeout`, not a run that never ends."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body.get("stream"):
+            return httpx.Response(
+                200,
+                stream=_Stalled(),
+                headers={"content-type": "text/event-stream"},
+            )
+        return _ok(cached=90, input_tokens=10)
+
+    _install(monkeypatch, _transport(lambda index: _ok(), handler=handler))
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--timeout",
+        "0.2",
+        "--yes",
+    )
+    assert outcome.code == 1  # the stalled stream is reported, the rest of the run stands
+    assert "1 request(s) failed" in str(outcome.error["message"])
+    context = as_document(outcome.error.get("context"))
+    assert context is not None
+    [summary] = [d for d in map(as_document, as_list(context["summaries"]) or []) if d]
+    assert summary["hit_rate"] == 1.0  # the warm read was served and is still scored
+    assert summary["ttft_ms"] is None
+    run_dir = Path(str(context["run_dir"]))
+    records = [
+        json.loads(line) for line in (run_dir / "fake-model-a.jsonl").read_text().splitlines()
+    ]
+    [stream] = [record for record in records if record["role"] == "stream"]
+    assert "stream stalled" in str(stream["error"])
+
+
+def test_probe_records_the_ttl_offset_it_actually_landed_on(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record carries both numbers: the offset asked for and the one it went out at."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    clock = _Clock()
+
+    async def fake_sleep(seconds: float) -> None:
+        del seconds
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content).get("stream"):
+            clock.now += 10.0
+            return _stream_response()
+        return _ok(cached=90, input_tokens=10)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr("provibench.bench.probe.perf_counter", clock)
+    _install(monkeypatch, _transport(lambda index: _ok(), handler=handler))
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--ttl",
+        "30,60",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    run_dir = Path(str(outcome.document["run_dir"]))
+    records = [
+        json.loads(line) for line in (run_dir / "fake-model-a.jsonl").read_text().splitlines()
+    ]
+    # the baseline is the warm read at 100 and the clock never moved again after the stream
+    ttl = [record for record in records if record["role"] == "ttl"]
+    assert [record["attempt"] for record in ttl] == [30, 60]
+    assert [record["offset_actual_s"] for record in ttl] == [pytest.approx(10.0)] * 2
+
+    [summary] = [d for d in map(as_document, as_list(outcome.document["summaries"]) or []) if d]
+    [rung] = [d for d in map(as_document, as_list(summary["rungs"]) or []) if d]
+    reads = [d for d in map(as_document, as_list(rung["ttl"]) or []) if d]
+    assert [read["offset_actual_s"] for read in reads] == [pytest.approx(10.0)] * 2

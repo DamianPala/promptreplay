@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
 import httpx
@@ -24,7 +24,16 @@ from provibench.bench.probe import (
     is_served,
     run_probe,
 )
-from provibench.bench.probe_summary import cached_of, render_probe, summarize_probe, summarize_rung
+from provibench.bench.probe_drift import apply_drift
+from provibench.bench.probe_models import Role
+from provibench.bench.probe_summary import (
+    ProbeSummary,
+    TtlRead,
+    cached_of,
+    summarize_probe,
+    summarize_rung,
+)
+from provibench.bench.probe_tables import column_labels, render_probe
 from provibench.bench.rungs import (
     broadcast_repeats,
     parse_int_list,
@@ -105,6 +114,73 @@ def _ok(cached: int = 0, input_tokens: int = 100) -> httpx.Response:
     )
 
 
+_STREAM_TOKENS = [f"tok{index}" for index in range(1, 19)]
+"""The throughput fixture's output: 18 whitespace-separated pieces, so 16 is a real cut."""
+
+
+def _sse_bytes(events: list[dict[str, Any]]) -> bytes:
+    return ("\n\n".join(f"data: {json.dumps(event)}" for event in events) + "\n\n").encode()
+
+
+def _stream_response(
+    *, cached: int = 0, input_tokens: int = 100, model: str = "model-a"
+) -> httpx.Response:
+    """A streamed generation: message_start, a thinking block, deltas, usage, message_stop."""
+    events: list[dict[str, Any]] = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_stream",
+                "model": model,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "cache_read_input_tokens": cached,
+                    "cache_creation_input_tokens": 0,
+                },
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+    ]
+    events.extend(
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": f" {token}"},
+        }
+        for token in _STREAM_TOKENS[:8]
+    )
+    events.append({"type": "content_block_stop", "index": 0})
+    events.append(
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}}
+    )
+    events.extend(
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "text_delta", "text": f" {token}"},
+        }
+        for token in _STREAM_TOKENS[8:]
+    )
+    events.append({"type": "content_block_stop", "index": 1})
+    events.append(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 18},
+        }
+    )
+    events.append({"type": "message_stop"})
+    return httpx.Response(
+        200,
+        content=_sse_bytes(events),
+        headers={"content-type": "text/event-stream"},
+    )
+
+
 def _client_factory(
     handler: Callable[[httpx.Request], httpx.Response],
 ) -> Callable[..., httpx.AsyncClient]:
@@ -131,7 +207,7 @@ def _run_probe(
 
 
 def _record(  # noqa: PLR0913 (a factory mirroring the record model's fields)
-    role: Literal["cold", "warm"],
+    role: Role,
     attempt: int,
     *,
     rung: int = 1,
@@ -142,6 +218,7 @@ def _record(  # noqa: PLR0913 (a factory mirroring the record model's fields)
     native_cached: int | None = None,
     generation: dict[str, Any] | None = None,
     provider: str | None = None,
+    model: str | None = None,
     error: str | None = None,
     latency: float = 10.0,
 ) -> ProbeResult:
@@ -154,6 +231,7 @@ def _record(  # noqa: PLR0913 (a factory mirroring the record model's fields)
         status=status,
         latency_ms=latency,
         provider=provider,
+        model=model,
         prompt_total=prompt,
         cached=cached,
         cache_write=cache_write,
@@ -161,6 +239,17 @@ def _record(  # noqa: PLR0913 (a factory mirroring the record model's fields)
         generation=generation,
         error=error,
     )
+
+
+def _ref(kind: str) -> Any:
+    """A stand-in spec reference for `apply_drift`: only its kind and providers are read."""
+
+    class _Ref:
+        def __init__(self, kind: str) -> None:
+            self.kind = kind
+            self.providers: list[str] = []
+
+    return _Ref(kind)
 
 
 def _prices() -> SpecPrices:
@@ -309,7 +398,11 @@ def test_run_probe_sends_cold_then_warm_with_one_nonce_per_rung(
     targets = {"fake": _target()}
     specs = [parse_run_spec("fake:a", targets), parse_run_spec("fake:b", targets)]
     run = _run_probe(
-        monkeypatch, specs, _trace(), ProbeOptions(rungs=[1, 3], repeats=[1, 1], gap_s=0.0), handler
+        monkeypatch,
+        specs,
+        _trace(),
+        ProbeOptions(rungs=[1, 3], repeats=[1, 1], gap_s=0.0, throughput=False),
+        handler,
     )
 
     assert run.options.repeats == [1, 1]
@@ -347,7 +440,7 @@ def test_run_probe_skips_a_rung_whose_cold_request_failed(monkeypatch: pytest.Mo
         monkeypatch,
         [_spec()],
         _trace(),
-        ProbeOptions(rungs=[1, 3], repeats=[3, 2], gap_s=0.0),
+        ProbeOptions(rungs=[1, 3], repeats=[3, 2], gap_s=0.0, throughput=False),
         handler,
     )
 
@@ -368,7 +461,11 @@ def test_warm_attempts_send_byte_identical_bodies(monkeypatch: pytest.MonkeyPatc
         return _ok()
 
     _run_probe(
-        monkeypatch, [_spec()], _trace(), ProbeOptions(rungs=[1], repeats=[3], gap_s=0.0), handler
+        monkeypatch,
+        [_spec()],
+        _trace(),
+        ProbeOptions(rungs=[1], repeats=[3], gap_s=0.0, throughput=False),
+        handler,
     )
 
     cold, *warm = sent
@@ -390,7 +487,7 @@ def test_warm_mode_sends_no_nonce(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch,
         [_spec()],
         _trace(),
-        ProbeOptions(rungs=[1], repeats=[1], gap_s=0.0, warm=True),
+        ProbeOptions(rungs=[1], repeats=[1], gap_s=0.0, warm=True, throughput=False),
         handler,
     )
     assert [body["system"][0]["text"] for body in bodies] == ["You are helpful."] * 2
@@ -406,7 +503,7 @@ def test_run_probe_reports_one_progress_line_per_request(monkeypatch: pytest.Mon
         monkeypatch,
         [_spec()],
         _trace(),
-        ProbeOptions(rungs=[1], repeats=[2], gap_s=0.0),
+        ProbeOptions(rungs=[1], repeats=[2], gap_s=0.0, throughput=False),
         lambda request: _ok(),
         on_progress=on_progress,
     )
@@ -452,7 +549,11 @@ def test_send_retries_429_and_503_with_the_backoff_schedule(
         return response
 
     run = _run_probe(
-        monkeypatch, [_spec()], _trace(), ProbeOptions(rungs=[1], repeats=[0], gap_s=0.0), handler
+        monkeypatch,
+        [_spec()],
+        _trace(),
+        ProbeOptions(rungs=[1], repeats=[0], gap_s=0.0, throughput=False),
+        handler,
     )
     [cold] = run.records["fake:model-a"]
     assert cold.status == 200
@@ -469,7 +570,11 @@ def test_send_does_not_retry_a_500(monkeypatch: pytest.MonkeyPatch) -> None:
         return httpx.Response(500, json={"error": {"message": "boom"}})
 
     run = _run_probe(
-        monkeypatch, [_spec()], _trace(), ProbeOptions(rungs=[1], repeats=[0], gap_s=0.0), handler
+        monkeypatch,
+        [_spec()],
+        _trace(),
+        ProbeOptions(rungs=[1], repeats=[0], gap_s=0.0, throughput=False),
+        handler,
     )
     [cold] = run.records["fake:model-a"]
     assert calls["n"] == 1
@@ -503,7 +608,7 @@ def test_send_retries_a_400_about_thinking_without_the_param(
         monkeypatch,
         [_spec()],
         [_entry(1, thinking=True), _entry(2, thinking=True)],
-        ProbeOptions(rungs=[1], repeats=[1], gap_s=0.0),
+        ProbeOptions(rungs=[1], repeats=[1], gap_s=0.0, throughput=False),
         _thinking_transport(sent),
     )
 
@@ -524,7 +629,7 @@ def test_warm_bodies_stay_byte_identical_after_a_thinking_drop(
         monkeypatch,
         [_spec()],
         [_entry(1, thinking=True), _entry(2, thinking=True), _entry(3)],
-        ProbeOptions(rungs=[1], repeats=[3], gap_s=0.0),
+        ProbeOptions(rungs=[1], repeats=[3], gap_s=0.0, throughput=False),
         _thinking_transport(sent),
     )
 
@@ -544,7 +649,7 @@ def test_a_thinking_drop_on_a_warm_read_applies_to_the_later_repeats(
         monkeypatch,
         [_spec()],
         [_entry(1), _entry(2, thinking=True), _entry(3), _entry(4)],
-        ProbeOptions(rungs=[1], repeats=[3], gap_s=0.0),
+        ProbeOptions(rungs=[1], repeats=[3], gap_s=0.0, throughput=False),
         _thinking_transport(sent),
     )
 
@@ -575,7 +680,7 @@ def test_send_does_not_retry_a_400_without_the_thinking_trigger(
         monkeypatch,
         [_spec()],
         [_entry(1, thinking=True), _entry(2)],
-        ProbeOptions(rungs=[1], repeats=[0], gap_s=0.0),
+        ProbeOptions(rungs=[1], repeats=[0], gap_s=0.0, throughput=False),
         handler,
     )
     [cold] = run.records["fake:model-a"]
@@ -625,7 +730,11 @@ def test_run_probe_enriches_openrouter_records_from_the_generation(
 
     spec = _spec("deepseek/model", providers=["novita"])
     run = _run_probe(
-        monkeypatch, [spec], _trace(), ProbeOptions(rungs=[1], repeats=[1], gap_s=0.0), handler
+        monkeypatch,
+        [spec],
+        _trace(),
+        ProbeOptions(rungs=[1], repeats=[1], gap_s=0.0, throughput=False),
+        handler,
     )
     cold, warm = run.records[spec.label]
     assert [record.provider for record in (cold, warm)] == ["Novita", "Novita"]
@@ -785,3 +894,374 @@ def test_render_probe_has_a_spec_table_and_a_rung_table_within_120_columns() -> 
     assert rung_header[:5] == ["spec", "rung", "prompt", "cached cold", "hits"]
     assert "0 x 1" in rung_table[2]  # one cell per warm attempt, `x` for the failed one
     assert all(len(line) <= 120 for block in blocks for line in block)
+
+
+def test_run_probe_streams_the_throughput_request_after_the_warm_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One streamed request per rung, after its warm reads, recorded with its fingerprint."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body.get("stream"):
+            calls.append("stream")
+            return _stream_response(cached=40)
+        calls.append("read")
+        return _ok(cached=40, input_tokens=60)
+
+    run = _run_probe(
+        monkeypatch,
+        [_spec()],
+        _trace(),
+        ProbeOptions(rungs=[1], repeats=[2], gap_s=0.0),
+        handler,
+    )
+
+    assert calls == ["read", "read", "read", "stream"]  # cold, warm, warm, then the stream
+    assert [
+        (record.rung, record.role, record.attempt) for record in run.records["fake:model-a"]
+    ] == [
+        (1, "cold", 0),
+        (1, "warm", 1),
+        (1, "warm", 2),
+        (1, "stream", 0),
+    ]
+    [stream] = [record for record in run.records["fake:model-a"] if record.role == "stream"]
+    assert stream.fingerprint == " ".join(_STREAM_TOKENS[:16])  # thinking first, then text
+    assert stream.usage.output_tokens == 18
+    assert stream.cached == 40
+    assert stream.gen_tok_s is None or stream.gen_tok_s > 0
+
+
+# --- the spec column ----------------------------------------------------------
+
+_ROLE_ORDER: dict[str, int] = {"cold": 0, "warm": 1, "stream": 2}
+
+
+def _summary(
+    label: str,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    prompt: int = 100,
+    drift: str | None = None,
+    fingerprint: str = "tok1 tok2",
+) -> ProbeSummary:
+    """One spec's summary with a cold write, a warm hit and a streamed request."""
+    records = [
+        _record("cold", 0, provider=provider, prompt=prompt),
+        _record("warm", 1, cached=90, provider=provider, prompt=prompt),
+        ProbeResult(
+            spec_label=label,
+            rung=1,
+            role="stream",
+            attempt=0,
+            seq=1,
+            status=200,
+            latency_ms=10.0,
+            ttft_ms=100.0,
+            gen_tok_s=20.0,
+            fingerprint=fingerprint,
+            provider=provider,
+            model=model,
+            prompt_total=prompt,
+            cached=90,
+        ),
+    ]
+    summary = summarize_probe(label, records)
+    summary.drift = drift
+    return summary
+
+
+def test_column_labels_shorten_the_openrouter_pair_under_a_caption() -> None:
+    summaries = [
+        _summary("openrouter:deepseek/deepseek-v4.1-flash@novita"),
+        _summary("openrouter:deepseek/deepseek-v4.1-flash@gmicloud"),
+    ]
+    caption, labels = column_labels(summaries)
+    assert caption == "specs: openrouter:deepseek/deepseek-v4.1-flash@<provider>"
+    assert labels == ["@novita", "@gmicloud"]
+
+
+def test_column_labels_keep_a_native_spec_named_and_shorten_the_rest() -> None:
+    """The live shape: one native endpoint next to two resellers of the same model."""
+    summaries = [
+        _summary("deepseek:deepseek-flash"),
+        _summary("openrouter:deepseek/deepseek-v4.1-flash@novita"),
+        _summary("openrouter:deepseek/deepseek-v4.1-flash@gmicloud"),
+    ]
+    caption, labels = column_labels(summaries)
+    assert caption == "specs: openrouter:deepseek/deepseek-v4.1-flash@<provider>"
+    assert labels == ["deepseek:deepseek-flash", "@novita", "@gmicloud"]
+    assert len(set(labels)) == 3
+
+
+def test_column_labels_never_clip_two_specs_into_one_string() -> None:
+    """Two different models of one target are a long, shared prefix: the tail must survive."""
+    summaries = [
+        _summary("openrouter:deepseek/deepseek-v4.1-flash"),
+        _summary("openrouter:deepseek/deepseek-v4.1-flash-0731"),
+    ]
+    caption, labels = column_labels(summaries)
+    assert caption is None  # nothing shared, so nothing moves up
+    assert labels[0] != labels[1]
+    assert len(set(labels)) == 2
+
+
+def test_column_labels_elide_a_long_label_keeping_its_provider() -> None:
+    summaries = [
+        _summary("openrouter:deepseek/deepseek-v4.1-flash-0731@novita"),
+        _summary("openrouter:deepseek/deepseek-v4.1-flash-0731@gmicloud"),
+    ]
+    caption, labels = column_labels(summaries)
+    assert caption is not None
+    assert labels == ["@novita", "@gmicloud"]
+    assert all(len(label) <= 40 for label in labels)
+
+    lone = column_labels([_summary("openrouter:a-very-long-target-name/and-a-long-model@novita")])[
+        1
+    ]
+    assert len(lone[0]) <= 40
+    assert lone[0].endswith("@novita")  # the part that names the row survives the cut
+
+
+def test_render_probe_uses_the_same_labels_in_both_tables() -> None:
+    summaries = [
+        _summary("or:model@novita"),
+        _summary("or:model@gmicloud", prompt=200),
+    ]
+    tables = [block.splitlines() for block in render_probe(summaries).split("\n\n")[-2:]]
+    spec_table, rung_table = tables[0], tables[1]
+    spec_labels = [line.split("|")[0].strip() for line in spec_table[2:]]
+    rung_labels = [line.split("|")[0].strip() for line in rung_table[2:]]
+    assert spec_labels == ["@novita", "@gmicloud"]
+    assert rung_labels == spec_labels
+
+
+def test_render_probe_fits_120_columns_with_every_cell_populated() -> None:
+    summaries = [
+        _summary(
+            "deepseek:deepseek-v4.1-flash",
+            provider="DeepSeek",
+            model="deepseek-chat",
+            prompt=20198,
+            drift="provider,model,tokens+123%,fingerprint",
+        ),
+        _summary(
+            "openrouter:deepseek/deepseek-v4.1-flash@novita",
+            provider="Novita",
+            model="deepseek/deepseek-v4.1-flash",
+            prompt=20198,
+            drift="tokens+123%,fingerprint",
+        ),
+        _summary(
+            "openrouter:deepseek/deepseek-v4.1-flash@gmicloud",
+            provider="GMICloud",
+            model="deepseek/deepseek-v4.1-flash",
+            prompt=20198,
+            drift="provider,model,tokens+123%,fingerprint",
+        ),
+    ]
+    for block in render_probe(summaries).split("\n\n"):
+        assert all(len(line) <= 120 for line in block.splitlines()), block
+
+
+def _thinking_provider(sent: list[bytes]) -> Callable[[httpx.Request], httpx.Response]:
+    """A provider that rejects `thinking` only when the output budget is a real one.
+
+    `max_tokens: 1` reads (the cold and warm requests) pass with the parameter; the streamed
+    request's 256 meets the reasoning budget and is refused, which is what the retry is for.
+    """
+    refusal = {"error": {"message": "max_tokens must be greater than thinking.budget_tokens"}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request.content)
+        body = json.loads(request.content)
+        if "thinking" in body and body.get("max_tokens", 1) > 1:
+            return httpx.Response(400, json=refusal)
+        if body.get("stream"):
+            return _stream_response()
+        return _ok(cached=40)
+
+    return handler
+
+
+def test_stream_retries_a_400_about_thinking_without_the_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[bytes] = []
+    run = _run_probe(
+        monkeypatch,
+        [_spec()],
+        [_entry(1, thinking=True), _entry(2, thinking=True)],
+        ProbeOptions(rungs=[1], repeats=[1], gap_s=0.0),
+        _thinking_provider(sent),
+    )
+
+    [stream] = [record for record in run.records["fake:model-a"] if record.role == "stream"]
+    assert stream.status == 200
+    assert stream.note == "thinking param dropped"
+    assert stream.fingerprint == " ".join(_STREAM_TOKENS[:16])
+    # the streamed attempt kept the parameter, the retry dropped it
+    streamed = [json.loads(body) for body in sent if json.loads(body).get("stream")]
+    assert ["thinking" in body for body in streamed] == [True, False]
+
+
+def test_stream_records_the_error_text_of_a_failed_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content).get("stream"):
+            return httpx.Response(500, json={"error": {"message": "no stream for you"}})
+        return _ok(cached=40)
+
+    run = _run_probe(
+        monkeypatch,
+        [_spec()],
+        _trace(),
+        ProbeOptions(rungs=[1], repeats=[0], gap_s=0.0),
+        handler,
+    )
+    [stream] = [record for record in run.records["fake:model-a"] if record.role == "stream"]
+    assert stream.status == 500
+    assert stream.error is not None and "no stream for you" in stream.error
+    assert is_failed(stream)
+
+
+# --- drift --------------------------------------------------------------------
+
+
+def _drift_summary(label: str, models: Sequence[str], *, prompt: int = 100) -> ProbeSummary:
+    """One spec whose served responses named `models`, with its largest rung at `prompt`."""
+    records = [_record("cold", 0, prompt=prompt, model=models[0])]
+    records.extend(
+        _record("warm", index + 1, cached=90, prompt=prompt, model=model)
+        for index, model in enumerate(models)
+    )
+    return summarize_probe(label, records)
+
+
+def test_model_drift_marks_a_spec_whose_responses_named_two_models() -> None:
+    summaries = [
+        _drift_summary("or:model@novita", ["model"]),
+        _drift_summary("or:model@gmicloud", ["model", "other-model"]),
+    ]
+    apply_drift(summaries, [_ref("openrouter"), _ref("openrouter")])
+    assert summaries[0].drift is None  # the reference is never compared with itself
+    assert summaries[1].drift == "model"
+    assert summaries[1].models_seen == ["model", "other-model"]
+    assert summaries[1].model_seen == "model"  # the first value is the reported one
+
+
+def test_model_drift_marks_a_model_the_reference_did_not_name() -> None:
+    summaries = [
+        _drift_summary("or:model@novita", ["model"]),
+        _drift_summary("or:model@gmicloud", ["another"]),
+    ]
+    apply_drift(summaries, [_ref("openrouter"), _ref("openrouter")])
+    assert summaries[1].drift == "model"
+
+
+def test_a_single_model_named_by_both_specs_is_not_drift() -> None:
+    summaries = [
+        _drift_summary("or:model@novita", ["model"]),
+        _drift_summary("or:model@gmicloud", ["model"]),
+    ]
+    apply_drift(summaries, [_ref("openrouter"), _ref("openrouter")])
+    assert summaries[1].drift is None
+
+
+def test_column_labels_keep_two_long_labels_of_one_target_apart() -> None:
+    """Two models of one target differ in the middle of a long label, not at its end."""
+    summaries = [
+        _summary("openrouter:deepseek/deepseek-v4.1-flash-0731"),
+        _summary("openrouter:deepseek/deepseek-v4.1-flash"),
+    ]
+    caption, labels = column_labels(summaries, label_width=23)
+    assert caption is None  # different models: nothing moves into a caption
+    assert len(set(labels)) == 2
+    assert labels[0].endswith("0731")
+
+
+def test_render_probe_names_every_row_when_two_labels_are_elided() -> None:
+    summaries = [
+        _summary("openrouter:deepseek/deepseek-v4.1-flash-0731"),
+        _summary("openrouter:deepseek/deepseek-v4.1-flash"),
+    ]
+    spec_table = render_probe(summaries).split("\n\n")[0].splitlines()
+    labels = [line.split("|")[0].strip() for line in spec_table[2:]]
+    assert len(set(labels)) == 2
+
+
+def _ttl_cell(records: list[ProbeResult]) -> str:
+    """The `ttl` cell of the rendered rung table, which is what a reader sees."""
+    rung_table = render_probe([summarize_probe("fake:model-a", records)]).split("\n\n")[1]
+    lines = rung_table.splitlines()
+    header = [cell.strip() for cell in lines[0].split("|")]
+    row = [cell.strip() for cell in lines[2].split("|")]
+    return row[header.index("ttl")]
+
+
+def _ttl_records(*offsets: int) -> list[ProbeResult]:
+    return [
+        _record("cold", 0, prompt=100),
+        _record("warm", 1, cached=90),
+        *(_record("ttl", offset, cached=90) for offset in offsets),
+    ]
+
+
+def test_ttl_cell_marks_a_read_that_went_out_late() -> None:
+    """`60s:1 (+6)` says the hit was measured six seconds past the offset it asked for."""
+    records = _ttl_records(60, 300)
+    [first, second] = [record for record in records if record.role == "ttl"]
+    first.offset_actual_s = 61.0  # a second late is inside the margin
+    second.offset_actual_s = 306.4  # six seconds late is worth saying
+    assert _ttl_cell(records) == "60s:1 300s:1 (+6)"
+
+
+def test_ttl_cell_says_nothing_when_the_read_was_on_time() -> None:
+    records = _ttl_records(60)
+    [read] = [record for record in records if record.role == "ttl"]
+    read.offset_actual_s = 60.5
+    assert _ttl_cell(records) == "60s:1"
+
+
+def test_ttl_cell_has_no_lateness_without_a_measured_offset() -> None:
+    """A record from a run that predates `offset_actual_s` still renders its offset."""
+    records = _ttl_records(60)
+    [rung] = summarize_probe("fake:model-a", records).rungs
+    assert rung.ttl[0].offset_actual_s is None
+    assert _ttl_cell(records) == "60s:1"
+
+
+def test_fingerprint_is_reported_but_never_a_drift_marker() -> None:
+    """Two quantizations open differently at temperature 0; that is not a warning."""
+    summaries = [
+        _summary("or:model@novita"),
+        _summary("or:model@gmicloud", fingerprint="Let me read the test files"),
+    ]
+    apply_drift(summaries, [_ref("openrouter"), _ref("openrouter")])
+    assert summaries[1].fingerprint_match is False  # reported
+    assert summaries[1].drift is None  # but not a drift marker
+
+
+def test_a_late_ttl_read_does_not_shrink_the_label_column() -> None:
+    """The lateness marker is worth its columns; the spec column keeps enough to name a row."""
+    summaries = [
+        _summary("or:model@novita", prompt=20000),
+        _summary("or:model@gmicloud", prompt=20000),
+    ]
+    for summary in summaries:
+        summary.rungs[0].ttl = [
+            TtlRead(offset=60, hit=True, offset_actual_s=66.2),
+        ]
+    blocks = render_probe(summaries).split("\n\n")
+    spec_block, rung_block = [block for block in blocks if block.startswith(("spec ", "spec |"))]
+    labels = [line.split("|")[0].strip() for line in spec_block.splitlines()[2:]]
+    assert labels == [
+        "@novita",
+        "@gmicloud",
+    ]  # the shared head is in the caption, so it stays whole
+    assert all(len(line) <= 120 for line in spec_block.splitlines())
+    assert "60s:1 (+6)" in rung_block

@@ -32,6 +32,8 @@ class ProbeRunMeta(BaseModel):
     run_hex: str
     options: ProbeOptions
     specs: list[RunRef]
+    ttl_s: list[int] | None = None
+    """The offsets `--ttl` re-read the first rung at; `None` when TTL never ran."""
     endpoints: dict[str, list[Endpoint]] = Field(default_factory=dict)
     prices: dict[str, SpecPrices] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
@@ -67,6 +69,7 @@ def write_probe_run(
                 model=spec.model,
                 providers=spec.providers,
                 file=file_name,
+                kind=spec.target.kind,
             )
         )
 
@@ -77,6 +80,7 @@ def write_probe_run(
         run_hex=run.run_hex,
         options=run.options,
         specs=refs,
+        ttl_s=run.options.ttl_s,
         endpoints=dict(endpoints or {}),
         prices=dict(prices or {}),
         notes=list(notes),

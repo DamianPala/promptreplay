@@ -248,6 +248,8 @@ class RunRef(BaseModel):
     model: str
     providers: list[str] = Field(default_factory=list)
     file: str
+    kind: str = "anthropic"
+    """The target's kind at run time, so a re-read report knows which spec is the reference."""
 
 
 class RunMeta(BaseModel):

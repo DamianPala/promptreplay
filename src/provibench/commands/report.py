@@ -126,18 +126,23 @@ def _full_report(invocation: Invocation, run_dir: Path, md_path: str | None) -> 
 
 
 def _probe_report(invocation: Invocation, run_dir: Path, md_path: str | None) -> Document:
+    from provibench.bench.probe_drift import apply_drift
     from provibench.bench.probe_runs import load_probe_run
-    from provibench.bench.probe_summary import probe_markdown, summarize_probe
+    from provibench.bench.probe_summary import summarize_probe
+    from provibench.bench.probe_tables import probe_markdown
     from provibench.bench.summary import cache_mode_note
 
     meta, records = load_probe_run(run_dir)
     notes = [*meta.notes, cache_mode_note(meta.options.warm)]
-    summaries = [
-        summarize_probe(
-            ref.label, records[ref.label], prices=meta.prices.get(ref.label), notes=notes
-        )
-        for ref in meta.specs
-    ]
+    summaries = apply_drift(
+        [
+            summarize_probe(
+                ref.label, records[ref.label], prices=meta.prices.get(ref.label), notes=notes
+            )
+            for ref in meta.specs
+        ],
+        meta.specs,
+    )
     markdown_path = _write_markdown(invocation, md_path, probe_markdown(summaries))
     return {
         "run_dir": str(run_dir),

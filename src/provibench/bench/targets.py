@@ -78,6 +78,11 @@ class RunSpec(BaseModel):
     def slug(self) -> str:
         return _SLUG_UNSAFE.sub("-", self.label)
 
+    @property
+    def kind(self) -> str:
+        """The target's wire kind, so a spec can be compared without its whole target."""
+        return self.target.kind
+
 
 def _split_providers(rest: str) -> tuple[str, list[str]]:
     """Split "<model>[@p1,p2]" on the LAST '@' whose suffix contains no '/'.

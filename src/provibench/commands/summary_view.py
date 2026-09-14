@@ -22,6 +22,7 @@ from provibench.core.documents import (
     as_list,
     boolean,
     integer,
+    nullable_boolean,
     nullable_number,
     nullable_object,
     nullable_string,
@@ -36,6 +37,12 @@ if TYPE_CHECKING:
     from provibench.bench.probe_summary import ProbeSummary
     from provibench.bench.summary import RunSummary
 
+
+def _all(properties: dict[str, JsonSchema]) -> JsonSchema:
+    """A document schema whose every property is required: these documents always carry them."""
+    return obj(properties, required=list(properties))
+
+
 _PROVIDER_COUNT = obj({"provider": string(), "count": integer()}, required=["provider", "count"])
 _COST_PROPERTIES: dict[str, JsonSchema] = {
     "input": number(),
@@ -45,8 +52,7 @@ _COST_PROPERTIES: dict[str, JsonSchema] = {
     "total": number(),
     "source": string(),
 }
-_COST_REQUIRED = ["input", "cache_read", "cache_write", "output", "total", "source"]
-SUMMARY = obj(
+SUMMARY = _all(
     {
         "label": string(),
         "requested_providers": array(string()),
@@ -61,34 +67,13 @@ SUMMARY = obj(
         "output_total": integer(),
         "hit_ratio": nullable_number(),
         "curve": array(number()),
-        "cost": nullable_object(_COST_PROPERTIES, required=_COST_REQUIRED),
+        "cost": nullable_object(_COST_PROPERTIES, required=list(_COST_PROPERTIES)),
         "billed_total": nullable_number(),
         "effective_per_m_prompt": nullable_number(),
         "latency_p50_ms": nullable_number(),
         "latency_p95_ms": nullable_number(),
         "notes": array(string()),
-    },
-    required=[
-        "label",
-        "requested_providers",
-        "turns",
-        "ok",
-        "errors",
-        "providers_seen",
-        "drift",
-        "prompt_total",
-        "cached_total",
-        "cache_write_total",
-        "output_total",
-        "hit_ratio",
-        "curve",
-        "cost",
-        "billed_total",
-        "effective_per_m_prompt",
-        "latency_p50_ms",
-        "latency_p95_ms",
-        "notes",
-    ],
+    }
 )
 
 _COLUMNS = (
@@ -110,7 +95,15 @@ _COLUMNS = (
     "p95 ms",
 )
 
-_RUNG_SUMMARY = obj(
+_TTL_READ = _all(
+    {
+        "offset": integer(),
+        "hit": boolean(),
+        "fraction": nullable_number(),
+        "offset_actual_s": nullable_number(),
+    }
+)
+_RUNG_SUMMARY = _all(
     {
         "spec": string(),
         "rung": integer(),
@@ -121,30 +114,18 @@ _RUNG_SUMMARY = obj(
         "hits": array(nullable_number()),
         "cold_ms": number(),
         "warm_ms": nullable_number(),
+        "ttft_ms": nullable_number(),
+        "gen_tok_s": nullable_number(),
+        "fingerprint": nullable_string(),
+        "ttl": array(_TTL_READ),
         "cache_write_cold": integer(),
         "errors": integer(),
         "retries": integer(),
         "skipped": boolean(),
         "cold_error": nullable_string(),
-    },
-    required=[
-        "spec",
-        "rung",
-        "prompt_cold",
-        "cached_cold",
-        "hit_rate",
-        "prefix_fraction",
-        "hits",
-        "cold_ms",
-        "warm_ms",
-        "cache_write_cold",
-        "errors",
-        "retries",
-        "skipped",
-        "cold_error",
-    ],
+    }
 )
-PROBE_SUMMARY = obj(
+PROBE_SUMMARY = _all(
     {
         "label": string(),
         "rungs": array(_RUNG_SUMMARY),
@@ -157,28 +138,20 @@ PROBE_SUMMARY = obj(
         "eff_per_m_prompt": nullable_number(),
         "billed_usd": nullable_number(),
         "providers_seen": array(_PROVIDER_COUNT),
+        "served": string(),
+        "model_seen": nullable_string(),
+        "models_seen": array(string()),
+        "tokens_delta_pct": nullable_number(),
+        "fingerprint_match": nullable_boolean(),
+        "ttft_ms": nullable_number(),
+        "gen_tok_s": nullable_number(),
+        "reference": boolean(),
+        "drift": nullable_string(),
         "errors": integer(),
         "retries": integer(),
         "skipped": integer(),
         "notes": array(string()),
-    },
-    required=[
-        "label",
-        "rungs",
-        "hit_rate",
-        "prefix_fraction",
-        "h",
-        "input_price",
-        "cache_read_price",
-        "price_source",
-        "eff_per_m_prompt",
-        "billed_usd",
-        "providers_seen",
-        "errors",
-        "retries",
-        "skipped",
-        "notes",
-    ],
+    }
 )
 
 
@@ -227,6 +200,15 @@ def probe_summary_to_document(summary: ProbeSummary) -> Document:
             {"provider": name, "count": count}
             for name, count in sorted(summary.providers_seen.items())
         ],
+        "served": summary.served,
+        "model_seen": summary.model_seen,
+        "models_seen": list(summary.models_seen),
+        "tokens_delta_pct": summary.tokens_delta_pct,
+        "fingerprint_match": summary.fingerprint_match,
+        "ttft_ms": summary.ttft_ms,
+        "gen_tok_s": summary.gen_tok_s,
+        "reference": summary.reference,
+        "drift": summary.drift,
         "errors": summary.errors,
         "retries": summary.retries,
         "skipped": summary.skipped,
@@ -241,7 +223,7 @@ def render_probe_run(invocation: Invocation, document: Document) -> None:
 
 def probe_tables_text(document: Document) -> str:
     """The probe run's two tables as text, for a caller that writes them itself."""
-    from provibench.bench.probe_summary import render_probe
+    from provibench.bench.probe_tables import render_probe
 
     entries = [d for d in map(as_document, as_list(document.get("summaries")) or []) if d]
     return render_probe([_probe_summary(entry) for entry in entries])
@@ -262,7 +244,7 @@ def render_report_document(invocation: Invocation, document: Document) -> None:
 
 def _render_probe(invocation: Invocation, value: object) -> None:
     """The probe tables are plain text, so they render the same at any terminal width."""
-    from provibench.bench.probe_summary import render_probe
+    from provibench.bench.probe_tables import render_probe
 
     entries = [d for d in map(as_document, as_list(value) or []) if d]
     summaries = [_probe_summary(entry) for entry in entries]
