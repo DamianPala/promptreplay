@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from provibench.bench.openrouter import normalize_provider
 from provibench.bench.pricing import CostBreakdown
 from provibench.bench.replay import ReplayResult
+from provibench.core.documents import Document, as_document, as_list
 
 _SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
 
@@ -166,11 +167,7 @@ def cache_mode_note(warm: bool) -> str:
     return "warm" if warm else "cold (nonce)"
 
 
-def _fmt(value: float | None, digits: int = 4) -> str:
-    return f"{value:.{digits}f}" if value is not None else "-"
-
-
-_HEADERS = (
+SUMMARY_COLUMNS = (
     "label",
     "turns ok/err",
     "drift",
@@ -188,36 +185,70 @@ _HEADERS = (
     "p50 ms",
     "p95 ms",
 )
+"""The full-replay table's columns: the terminal, `report --md` and `report --html` share them."""
 
 
-def _row(summary: RunSummary) -> list[str]:
-    providers_items = sorted(summary.providers_seen.items())
-    providers = ", ".join(f"{name}={count}" for name, count in providers_items)
-    cost = summary.cost
-    hit_pct = f"{summary.hit_ratio * 100:.1f}" if summary.hit_ratio is not None else "-"
+def summary_row(entry: Document) -> list[str]:
+    """One run's cells for `SUMMARY_COLUMNS`, as the terminal prints them.
+
+    The document carries numbers and `None`s, not strings, so this is the one place they
+    become cells: the terminal, the markdown and the HTML all print these strings, so the
+    three can never disagree about a rounding or a thousands separator.
+    """
+    providers = [d for d in map(as_document, as_list(entry.get("providers_seen")) or []) if d]
+    providers_text = ", ".join(f"{p.get('provider')}={p.get('count')}" for p in providers) or "-"
+    cost = as_document(entry.get("cost"))
+    ratio = _number(entry.get("hit_ratio"))
+    hit_pct = f"{ratio * 100:.1f}" if ratio is not None else "-"
     return [
-        summary.label,
-        f"{summary.ok}/{summary.errors}",
-        str(summary.drift),
-        providers or "-",
-        str(summary.prompt_total),
-        str(summary.cached_total),
+        str(entry.get("label")),
+        f"{_count(entry.get('ok'))}/{_count(entry.get('errors'))}",
+        str(_count(entry.get("drift"))),
+        providers_text,
+        f"{_count(entry.get('prompt_total')):,}",
+        f"{_count(entry.get('cached_total')):,}",
         hit_pct,
-        _fmt(cost.input if cost else None),
-        _fmt(cost.cache_read if cost else None),
-        _fmt(cost.cache_write if cost else None),
-        _fmt(cost.output if cost else None),
-        _fmt(cost.total if cost else None),
-        _fmt(summary.billed_total),
-        _fmt(summary.effective_per_m_prompt, 2),
-        _fmt(summary.latency_p50_ms, 0),
-        _fmt(summary.latency_p95_ms, 0),
+        _limit(cost.get("input") if cost else None, 4),
+        _limit(cost.get("cache_read") if cost else None, 4),
+        _limit(cost.get("cache_write") if cost else None, 4),
+        _limit(cost.get("output") if cost else None, 4),
+        _limit(cost.get("total") if cost else None, 4),
+        _limit(entry.get("billed_total"), 4),
+        _limit(entry.get("effective_per_m_prompt"), 3),
+        _limit(entry.get("latency_p50_ms"), 0),
+        _limit(entry.get("latency_p95_ms"), 0),
     ]
 
 
-def render_markdown(summaries: list[RunSummary]) -> str:
-    lines = ["| " + " | ".join(_HEADERS) + " |", "|" + "---|" * len(_HEADERS)]
-    lines.extend("| " + " | ".join(_row(summary)) + " |" for summary in summaries)
+def _count(value: object) -> int:
+    return value if isinstance(value, int) else 0
+
+
+def _number(value: object) -> float | None:
+    """A document's number; `None` for a missing key, a string, or a boolean."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _limit(value: object, digits: int) -> str:
+    number = _number(value)
+    return "-" if number is None else f"{number:.{digits}f}"
+
+
+def render_markdown(entries: Sequence[Document]) -> str:
+    """The summary table as markdown, with every cell `summary_row` produced.
+
+    The input is the same `--json` shape the terminal renders from, so `report --md` and
+    `report --html` on one run cannot print different numbers for it.
+    """
+    lines = [
+        "| " + " | ".join(SUMMARY_COLUMNS) + " |",
+        "|" + "---|" * len(SUMMARY_COLUMNS),
+    ]
+    lines.extend("| " + " | ".join(summary_row(entry)) + " |" for entry in entries)
     lines.append("")
-    lines.extend(f"{summary.label}: {sparkline(summary.curve)}" for summary in summaries)
+    for entry in entries:
+        curve = [float(v) for v in as_list(entry.get("curve")) or [] if isinstance(v, int | float)]
+        lines.append(f"{entry.get('label')}: {sparkline(curve)}")
     return "\n".join(lines)

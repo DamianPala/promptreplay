@@ -10,6 +10,7 @@ thing has to fit 120 columns.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from provibench.bench.probe_summary import ProbeSummary, RungSummary, TtlRead
 
@@ -58,15 +59,36 @@ _RUNG_COLUMNS = (
 _TTL_COLUMN = "ttl"
 
 
+@dataclass(frozen=True, slots=True)
+class TableBlock:
+    """One table with its columns and its cells already formatted, ready for any renderer."""
+
+    columns: tuple[str, ...]
+    rows: tuple[tuple[str, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeBlocks:
+    """The caption (when the specs share a prefix) and the two tables, in reading order.
+
+    The cells are the same strings the terminal prints, so a second renderer (the HTML
+    report) shows the same numbers without recomputing them; only the layout differs.
+    """
+
+    caption: str | None
+    spec: TableBlock
+    rungs: TableBlock
+
+
 def render_probe(summaries: Sequence[ProbeSummary]) -> str:
     """The probe's human output: one row per spec, then one row per rung; for a tty."""
-    lines = [*_lines(summaries, markdown=False), *_note_lines(summaries)]
+    lines = [*_lines(summaries, markdown=False), *probe_note_lines(summaries)]
     return "\n".join(lines) if lines else "\n\n"
 
 
 def probe_markdown(summaries: Sequence[ProbeSummary]) -> str:
     """The same two tables as markdown, for a report that gets pasted somewhere."""
-    lines = [*_lines(summaries, markdown=True), "", *_note_lines(summaries)]
+    lines = [*_lines(summaries, markdown=True), "", *probe_note_lines(summaries)]
     return "\n".join(lines) if lines else "\n\n"
 
 
@@ -79,8 +101,8 @@ def _lines(summaries: Sequence[ProbeSummary], *, markdown: bool) -> list[str]:
     return lines[:-1]
 
 
-def _blocks(summaries: Sequence[ProbeSummary], *, markdown: bool) -> list[str]:
-    """The optional caption, the spec table and the rung table, in that order.
+def probe_blocks(summaries: Sequence[ProbeSummary]) -> ProbeBlocks:
+    """The caption, the spec table and the rung table as data, for any renderer.
 
     The caption is its own block, which is what `report`'s text extraction splits on to
     recover the two tables whether or not there is one.
@@ -91,10 +113,27 @@ def _blocks(summaries: Sequence[ProbeSummary], *, markdown: bool) -> list[str]:
     caption, labels = column_labels(summaries, label_width=label_width)
     rows = zip(summaries, labels, strict=True)
     run_rows = [_run_cells(summary, label, drift_width) for summary, label in rows]
-    rung_rows = _rung_rows(summaries, labels, rung_columns)
+    return ProbeBlocks(
+        caption=caption,
+        spec=TableBlock(columns=_RUN_COLUMNS, rows=tuple(tuple(row) for row in run_rows)),
+        rungs=TableBlock(
+            columns=rung_columns,
+            rows=tuple(tuple(row) for row in _rung_rows(summaries, labels, rung_columns)),
+        ),
+    )
+
+
+def _blocks(summaries: Sequence[ProbeSummary], *, markdown: bool) -> list[str]:
+    """The optional caption, the spec table and the rung table, rendered as text."""
+    blocks = probe_blocks(summaries)
     table = _md_table if markdown else _table
-    blocks = [table(_RUN_COLUMNS, run_rows), table(rung_columns, rung_rows)]
-    return [caption, *blocks] if caption is not None else blocks
+    rendered = [table(block.columns, block.rows) for block in (blocks.spec, blocks.rungs)]
+    return [blocks.caption, *rendered] if blocks.caption is not None else rendered
+
+
+def probe_note_lines(summaries: Sequence[ProbeSummary]) -> list[str]:
+    """One `label: note` line per note, in spec order; shared by every renderer."""
+    return [f"{summary.label}: {note}" for summary in summaries for note in summary.notes]
 
 
 def column_labels(
@@ -237,10 +276,6 @@ def _rung_rows(
         for summary in summaries
         for rung in summary.rungs
     ]
-
-
-def _note_lines(summaries: Sequence[ProbeSummary]) -> list[str]:
-    return [f"{summary.label}: {note}" for summary in summaries for note in summary.notes]
 
 
 def _run_cells(summary: ProbeSummary, label: str, drift_width: int) -> list[str]:

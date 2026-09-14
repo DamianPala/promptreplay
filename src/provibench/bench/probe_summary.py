@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from provibench.bench.estimate import SpecPrices
 from provibench.bench.probe_models import ProbeResult, is_failed, is_served
+from provibench.core.documents import Document, as_document, as_list
 
 
 class TtlRead(BaseModel):
@@ -105,6 +106,23 @@ class ProbeSummary(BaseModel):
     def warm_ms(self) -> float | None:
         """The first rung's warm prefill, to be read next to `cold_ms`."""
         return self.rungs[0].warm_ms if self.rungs else None
+
+
+def summary_from_document(entry: Document) -> ProbeSummary:
+    """A `--json` probe summary back into a `ProbeSummary`.
+
+    The document carries `providers_seen` as a list of `{provider, count}` pairs — the O4
+    schema subset has no `additionalProperties` — so it is folded back into the mapping
+    the model holds. Both the terminal report and the HTML report read a document and go
+    through here, so they summarise the same numbers.
+    """
+    providers = [d for d in map(as_document, as_list(entry.get("providers_seen")) or []) if d]
+    seen = {str(p.get("provider")): _count(p.get("count")) for p in providers}
+    return ProbeSummary.model_validate({**entry, "providers_seen": seen})
+
+
+def _count(value: object) -> int:
+    return value if isinstance(value, int) else 0
 
 
 def cached_of(record: ProbeResult | None) -> int:

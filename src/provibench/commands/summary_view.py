@@ -76,25 +76,6 @@ SUMMARY = _all(
     }
 )
 
-_COLUMNS = (
-    "label",
-    "turns ok/err",
-    "drift",
-    "providers seen",
-    "Σprompt",
-    "Σcached",
-    "hit %",
-    "in $",
-    "cache read $",
-    "cache write $",
-    "out $",
-    "computed $",
-    "billed $",
-    "eff $/M prompt",
-    "p50 ms",
-    "p95 ms",
-)
-
 _TTL_READ = _all(
     {
         "offset": integer(),
@@ -238,8 +219,20 @@ def render_report_document(invocation: Invocation, document: Document) -> None:
     """`report`'s human rendering: the probe tables for a probe run, else the replay table."""
     if document.get("protocol") == "probe":
         render_probe_report(invocation, document)
+    else:
+        render_summaries(invocation, document)
+    _render_html_path(invocation, document)
+
+
+def _render_html_path(invocation: Invocation, document: Document) -> None:
+    """The HTML file's path, last: it is the one thing a caller with --html came for."""
+    from rich.markup import escape
+
+    path = document.get("html")
+    if not isinstance(path, str):
         return
-    render_summaries(invocation, document)
+    console = invocation.stdout_console()
+    console.print(escape(f"HTML report: {escape_terminal_text(path)}"))
 
 
 def _render_probe(invocation: Invocation, value: object) -> None:
@@ -256,11 +249,9 @@ def _render_probe(invocation: Invocation, value: object) -> None:
 
 def _probe_summary(entry: Document) -> ProbeSummary:
     """The document shape back into a `ProbeSummary`: `providers_seen` is a list there."""
-    from provibench.bench.probe_summary import ProbeSummary
+    from provibench.bench.probe_summary import summary_from_document
 
-    providers = [d for d in map(as_document, as_list(entry.get("providers_seen")) or []) if d]
-    seen = {str(p.get("provider")): _count(p.get("count")) for p in providers}
-    return ProbeSummary.model_validate({**entry, "providers_seen": seen})
+    return summary_from_document(entry)
 
 
 def _cost_document(cost: CostBreakdown | None) -> Document | None:
@@ -282,14 +273,14 @@ def render_summaries(invocation: Invocation, document: Document) -> None:
     from rich.markup import escape
     from rich.table import Table
 
-    from provibench.bench.summary import sparkline
+    from provibench.bench.summary import SUMMARY_COLUMNS, sparkline, summary_row
 
     entries = [d for d in map(as_document, as_list(document.get("summaries")) or []) if d]
     table = Table(box=box.SIMPLE, header_style="bold")
-    for column in _COLUMNS:
+    for column in SUMMARY_COLUMNS:
         table.add_column(column)
     for entry in entries:
-        table.add_row(*(escape(escape_terminal_text(cell)) for cell in _row(entry)))
+        table.add_row(*(escape(escape_terminal_text(cell)) for cell in summary_row(entry)))
     console = invocation.stdout_console()
     console.print(table)
     for entry in entries:
@@ -297,45 +288,3 @@ def render_summaries(invocation: Invocation, document: Document) -> None:
         notes = ", ".join(str(note) for note in as_list(entry.get("notes")) or [])
         line = f"{entry.get('label')}  {sparkline(curve)}  {notes}"
         console.print(escape(escape_terminal_text(line)))
-
-
-def _row(entry: Document) -> list[str]:
-    providers = [d for d in map(as_document, as_list(entry.get("providers_seen")) or []) if d]
-    providers_text = ", ".join(f"{p.get('provider')}={p.get('count')}" for p in providers) or "-"
-    cost = as_document(entry.get("cost"))
-    hit_ratio = entry.get("hit_ratio")
-    hit_pct = f"{hit_ratio * 100:.1f}" if isinstance(hit_ratio, int | float) else "-"
-    return [
-        str(entry.get("label")),
-        f"{_count(entry.get('ok'))}/{_count(entry.get('errors'))}",
-        str(_count(entry.get("drift"))),
-        providers_text,
-        f"{_count(entry.get('prompt_total')):,}",
-        f"{_count(entry.get('cached_total')):,}",
-        hit_pct,
-        _money(cost.get("input") if cost else None),
-        _money(cost.get("cache_read") if cost else None),
-        _money(cost.get("cache_write") if cost else None),
-        _money(cost.get("output") if cost else None),
-        _money(cost.get("total") if cost else None),
-        _money(entry.get("billed_total")),
-        _rate(entry.get("effective_per_m_prompt")),
-        _fmt0(entry.get("latency_p50_ms")),
-        _fmt0(entry.get("latency_p95_ms")),
-    ]
-
-
-def _count(value: object) -> int:
-    return value if isinstance(value, int) else 0
-
-
-def _money(value: object) -> str:
-    return f"{value:.4f}" if isinstance(value, int | float) else "-"
-
-
-def _rate(value: object) -> str:
-    return f"{value:.3f}" if isinstance(value, int | float) else "-"
-
-
-def _fmt0(value: object) -> str:
-    return f"{value:.0f}" if isinstance(value, int | float) else "-"
