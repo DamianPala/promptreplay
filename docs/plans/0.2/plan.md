@@ -25,10 +25,15 @@ Owner: Damian. Orchestration: main session (Claude Code). Builder and explore: `
 | 2026-09-14 | Skip more native targets in 0.2 | Reach comes from wire formats, not from more `kind = "anthropic"` entries |
 | 2026-09-14 | Default measurement is the probe (a few real turns, cold write + repeated warm reads per size rung), not the full replay | PoC in `docs/research/probe-poc.md`: same ranking as the full replay at ~1/7 of the cost, independent samples instead of 30 correlated turns, a size ladder instead of a curve. Full replay stays as `--full` |
 | 2026-09-14 | Report shows cache, cost, prefill latency, generation TTFT and tok/s, reliability and drift by default; TTL behind `--ttl`; decode-KV probe and tool-call agreement move to 0.3 | Everything in the default costs nothing or a fraction of a cent extra; TTL costs wall time; the rest costs output tokens or needs thinking-block round-tripping |
+| 2026-09-14 | 0.2 scope: slices 1, 3, 3b, 3c sweep, 4, 5, 5b, 6, 7, 8. Slice 2 (`convert`, chat-completions) moves to 0.3 | 0.2 measures harnesses on the Anthropic wire (Claude Code and what runs through it); a second wire format is its own error surface |
+| 2026-09-14 | MIT license, CI from the starter, `requires-python >= 3.12` | A public repo without CI looks abandoned; 3.13-only would cut off most users |
+| 2026-09-14 | Report in the terminal and as HTML, both from the same `run.json` | Terminal for daily use, HTML for a screenshot and a link |
+| 2026-09-14 | Agent skill lives statically in the repo (`skills/provibench/SKILL.md`), linked from the README, no installer | Basics only: what the tool measures, how to record, probe, sweep and read a report; `--help` and `schema` carry the rest |
+| 2026-09-14 | Headline models beyond DeepSeek V4.1 Flash decided at sweep time; name decided at the end, before the upload | Both depend on what the sweeps show |
 
 ## Slices
 
-Each slice ends with: ruff, ruff format, pyright, pytest green; a review verdict; one commit. Order is the dependency order; 1, 2 and 3 can run in parallel (3 started first, 2026-09-14, from the PoC script).
+Each slice ends with: ruff, ruff format, pyright, pytest green; a review verdict; one commit. Order is the dependency order. Slice 2 stays in the plan for 0.3; 1 and 3a were done in parallel on 2026-09-14.
 
 ### 1. `scrub` + clean sample trace
 
@@ -93,13 +98,13 @@ Providers change routing, quantization, cache config and prices from week to wee
 
 ### 6. Release hygiene
 
-- LICENSE (MIT unless decided otherwise), `CHANGELOG.md`, `status.md` kept current, GitHub Actions CI copied from the starter (lint, types, tests, build, wheel smoke), README rewritten: one-paragraph why, the measured DeepSeek table, quickstart on the sample trace, then reference.
+- LICENSE (MIT), `CHANGELOG.md`, `status.md` kept current, GitHub Actions CI copied from the starter (lint, types, tests, build, wheel smoke), `requires-python >= 3.12` (verify nothing 3.13-only is used), README rewritten: one-paragraph why, the measured DeepSeek table, quickstart on the sample trace, then reference.
 - PyPI name `provibench` confirmed free on 2026-09-14; GitHub `DamianPala/provibench` free.
 
 ### 7. cli-design alignment + agent skill
 
 - Delta check of `core/` and the command specs against the current CLI Design Standard; fix drift.
-- `skills/provibench/SKILL.md` telling an agent how to record, sweep, and read a report.
+- `skills/provibench/SKILL.md`, static in the repo and linked from the README: what the tool measures, how to record, probe, sweep and read a report, the basics only; `--help` and `schema` carry the rest. No installer.
 
 ### 8. Publish 0.2.0
 
@@ -125,10 +130,8 @@ The probe measures infrastructure on exact recorded payloads. Cache is the first
 ## Open decisions
 
 - Name: decided at the end of 0.2, before the PyPI upload; analysis and candidates in `docs/research/naming.md`. The rename is its own mechanical slice (env prefix, XDG paths, entry point, package dir) right before slice 8.
-- License: MIT assumed.
-- Sample trace task and length: ~30 turns assumed; chosen when recording.
-- Whether 0.2 ships slice 7 or it moves to 0.3.
+- Headline models for the README table beyond DeepSeek V4.1 Flash: decided when the sweeps run.
 
 ## Out of scope for 0.2
 
-Responses API (`previous_response_id` chaining), output-quality measurement, more native targets, a public results site.
+Slice 2 (`convert` to chat-completions, `kind = "openai"`; moved to 0.3), Responses API (`previous_response_id` chaining), output-quality measurement, more native targets, a public results site.
