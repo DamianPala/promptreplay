@@ -101,6 +101,31 @@ def test_inspect_empty_trace_has_no_selected_conversation(
     }
 
 
+def test_inspect_resolves_the_packaged_sample(cli: Cli, bench_paths: BenchPaths) -> None:
+    outcome = cli.run("inspect", "sample", env=bench_paths.env)
+
+    assert outcome.code == 0, outcome.stderr
+    document = outcome.document
+    assert str(document["trace"]).endswith("sample.jsonl.gz")
+    assert document["selected"] is not None
+    assert len(as_list(document["turns"]) or []) == 30
+
+
+def test_inspect_reads_a_gzipped_trace(cli: Cli, bench_paths: BenchPaths) -> None:
+    from provibench.bench.trace import read_trace_text, write_trace_text
+
+    plain = bench_paths.traces_dir / "t.jsonl"
+    append_entry(plain, _entry(1, "main", "hi"))
+    trace = bench_paths.traces_dir / "t.jsonl.gz"
+    write_trace_text(trace, read_trace_text(plain))
+
+    outcome = cli.run("inspect", "t.jsonl.gz", env=bench_paths.env)
+
+    assert outcome.code == 0, outcome.stderr
+    assert outcome.document["trace"] == str(trace)
+    assert len(as_list(outcome.document["turns"]) or []) == 1
+
+
 def test_inspect_human_table(cli: Cli, bench_paths: BenchPaths) -> None:
     trace = bench_paths.traces_dir / "t.jsonl"
     append_entry(trace, _entry(1, "main", "hi"))

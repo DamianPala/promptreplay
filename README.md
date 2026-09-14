@@ -28,9 +28,9 @@ provibench config show             # effective settings and their source
 provibench completion --install    # shell completions
 ```
 
-`record`, `inspect`, `probe`, `replay`, `report`, and `endpoints` are the domain commands
-built on top of `src/provibench/bench/`; see [docs/design.md](docs/design.md) for the full
-design (trace/replay format, `targets.toml`, cost model).
+`record`, `inspect`, `probe`, `replay`, `report`, `scrub`, and `endpoints` are the domain
+commands built on top of `src/provibench/bench/`; see [docs/design.md](docs/design.md) for
+the full design (trace/replay format, `targets.toml`, cost model).
 
 ## Probe
 
@@ -85,7 +85,7 @@ Where the probe samples a few turns, `replay` sends every recorded turn, which i
 want for the per-turn cache curve and for the "what would my own session have cost" number.
 It stamps one nonce (`provibench-run:<run hex>`) into every turn unless `--warm` is given,
 so turn 2 can read what turn 1 wrote — the effect being measured — without inheriting an
-earlier run's cache.
+earlier run's cache. A typical session:
 
 ```sh
 # 1. Record real traffic once, by pointing the harness at the proxy.
@@ -112,6 +112,49 @@ provibench report latest --md report.md
 `--run` takes the same spec shape as `probe`'s positional `SPEC`; `report` accepts a run
 directory, a trace name (its newest run), or `latest` (the newest run across every trace).
 Every command accepts `--json` and the other global flags documented by `provibench schema`.
+
+## Sharing a trace
+
+A trace records request bytes verbatim, so it carries home paths, the operator's
+instruction files, `metadata.user_id`, and any key that travelled in a header or a body.
+Before sharing a recording, write a scrubbed copy:
+
+```sh
+provibench scrub my-session --out my-session.shared.jsonl.gz
+provibench scrub my-session --out clean.jsonl \
+  --turns 20 --replace acme-corp=example --user haz
+```
+
+`scrub` drops `body.metadata`, rewrites every `/home/<name>` and `/Users/<name>` path to
+`/home/user` (the names it saw are reported, not written), including the copy Claude Code
+encodes into its state directories (`-home-<name>-recwork`), and masks secrets and e-mail
+addresses as `[scrubbed:<kind>]`: Anthropic (`sk-ant-`), OpenAI-style (`sk-` followed by
+20+ key characters, so `sk-proj-…` too), OpenRouter (`sk-or-`), `Bearer <token>`, AWS
+(`AKIA…`), GitHub (`ghp_`, `gho_`, `github_pat_`) and Slack (`xox[abp]-`) tokens.
+`--allow-email` keeps an address you are allowed to share and `--turns N` keeps only the
+first N entries of the main conversation (a trace without conversation keys keeps its
+first N entries instead; the report says which rule chose them). `--force` overwrites an
+existing `--out`. The report lists the per-rule replacement counts, the user names, the
+entries dropped and the payload sizes; `--json` gives the same object.
+
+Two options remove what the rules cannot know. `--replace OLD=NEW` does a literal
+replacement in every string, after the built-in rules; `--user NAME` replaces whole-word
+occurrences of a name with `user`, for `ls -l` owner columns (`-rw-rw-r-- 1 haz haz`) and
+prose. Both are repeatable. `--user` is not automatic because a name can be an ordinary
+word: `--replace` for a repository, a customer or a hostname, `--user` for a person.
+Read the copy before sending it either way. Nested `metadata` blocks inside the request
+body are left in place — only the request's own `body.metadata` is removed — and values
+that are not paths, secrets or addresses (a bare `user_id`, for instance) come through
+unchanged.
+
+`TRACE` is an existing path (gzipped or not), a name under `traces_dir`, or `sample`, the
+packaged example trace that `inspect`, `replay` and `scrub` all accept; `--out` ending in
+`.gz` is written compressed. Recording still writes plain jsonl.
+
+The packaged sample is the first 30 turns of a real Claude Code session on DeepSeek V4.1
+Flash (raising test coverage in the public [acpc](https://github.com/DamianPala/acpc)
+repository), recorded from an isolated home and scrubbed with this command: prompts grow
+from 20k to 93k tokens, 1,9 M prompt tokens in total.
 
 ## Configuration
 

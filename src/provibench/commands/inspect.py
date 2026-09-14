@@ -1,12 +1,14 @@
 """`inspect`: list a trace's conversations and show one conversation's turns.
 
 `provibench.bench.trace` pulls in pydantic; importing it only inside the callback keeps
-building the CLI (schema, --help, completion) cheap. `resolve_trace_path` is also used by
-`provibench.commands.replay`.
+building the CLI (schema, --help, completion) cheap. The TRACE helpers here —
+`resolve_trace_path`, `load_trace_entries`, `load_trace_text`, `load_trace_documents` —
+are shared with `provibench.commands.replay` and `provibench.commands.scrub`.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -25,7 +27,7 @@ from provibench.core.documents import (
     obj,
     string,
 )
-from provibench.core.errors import NotFound
+from provibench.core.errors import Action, InvalidInput, NotFound, OperationFailed
 from provibench.core.registry import Command, require_invocation
 from provibench.core.spec import CommandSpec, Effects
 from provibench.core.terminal_text import escape_terminal_text
@@ -136,21 +138,21 @@ def render_inspect_table(invocation: Invocation, document: Document) -> None:
     cls=Command,
     spec=CommandSpec(effects=Effects.READ_ONLY, output=_OUTPUT, render=render_inspect_table),
     help="List a trace's conversations and show one conversation's turns.\n\n"
-    "TRACE is either an existing path or a name under traces_dir. Without "
-    "--conversation, the conversation carrying the most request bytes (the agent's "
-    "main loop) is selected.",
+    "TRACE is either an existing path, a name under traces_dir, or 'sample' (the "
+    "packaged example). Without --conversation, the conversation carrying the most "
+    "request bytes (the agent's main loop) is selected.",
 )
-@click.argument("trace")
+@click.argument("trace", help="Trace path, a name under traces_dir, or 'sample'")
 @click.option(
     "--conversation", default=None, help="Conversation key to inspect; defaults to the main one"
 )
 @click.pass_context
 def inspect(ctx: click.Context, trace: str, conversation: str | None) -> Document:
-    from provibench.bench.trace import group_conversations, load_trace
+    from provibench.bench.trace import group_conversations
 
     invocation = require_invocation(ctx)
     trace_path = resolve_trace_path(trace, invocation)
-    entries = load_trace(trace_path)
+    entries = load_trace_entries(trace_path)
     groups = group_conversations(entries)
     conversations = sorted(
         (_conversation_document(key, group) for key, group in groups.items()),
@@ -240,17 +242,52 @@ def _turn_document(turn: int, entry: TraceEntry) -> Document:
 
 
 def resolve_trace_path(trace: str, invocation: Invocation) -> Path:
-    """TRACE as an existing path, or as `<traces_dir>/<trace>.jsonl`."""
-    candidate = Path(trace)
-    if not candidate.is_absolute():
-        candidate = invocation.cwd / candidate
-    if candidate.is_file():
-        return candidate
+    """TRACE as an existing path, as `<traces_dir>/<trace>.jsonl[.gz]`, or the packaged sample."""
+    from provibench.bench.trace import PackagedSampleMissing, TraceNotFound, resolve_trace
+
     traces_dir = Path(invocation.setting("traces_dir") or ".")
-    named = traces_dir / f"{trace}.jsonl"
-    if named.is_file():
-        return named
-    raise NotFound(
-        f"No trace file at {candidate} or {named}",
-        hint="Pass an existing path, or a name under traces_dir",
-    )
+    try:
+        return resolve_trace(trace, traces_dir, invocation.cwd)
+    except TraceNotFound as exc:
+        raise NotFound(str(exc), hint=exc.hint) from exc
+    except PackagedSampleMissing as exc:
+        raise OperationFailed(str(exc), hint=exc.hint, action=Action.NONE) from exc
+
+
+def load_trace_entries(trace_path: Path) -> list[TraceEntry]:
+    """A trace parsed into entries; unreadable or malformed input is an input error."""
+    from provibench.bench.trace import load_trace
+
+    return _read(lambda: load_trace(trace_path), trace_path)
+
+
+def load_trace_text(trace_path: Path) -> str:
+    """A trace's whole text; an unreadable file is an input error."""
+    from provibench.bench.trace import read_trace_text
+
+    return _read(lambda: read_trace_text(trace_path), trace_path)
+
+
+def load_trace_documents(trace_path: Path) -> list[dict[str, Any]]:
+    """A trace's entry documents, exactly as they were written.
+
+    A line that is not JSON, or not an object, is an input error naming it. Entries are
+    deliberately *not* validated against `TraceEntry`: `scrub` must never refuse to remove
+    secrets from a trace, and writing the documents back verbatim is what keeps the copy
+    byte-identical apart from the masked strings.
+    """
+    from provibench.bench.trace import parse_trace_text, read_trace_text
+
+    return _read(lambda: parse_trace_text(read_trace_text(trace_path)), trace_path)
+
+
+def _read[T](reader: Callable[[], T], trace_path: Path) -> T:
+    """Run `reader`, reporting an unreadable trace or a bad line as an input error."""
+    from provibench.bench.trace import TraceError
+
+    try:
+        return reader()
+    except TraceError as exc:
+        raise InvalidInput(str(exc)) from exc
+    except OSError as exc:
+        raise InvalidInput(f"Trace file {trace_path} could not be read: {exc}") from exc

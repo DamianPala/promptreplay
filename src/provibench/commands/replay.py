@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import click
 
-from provibench.commands.inspect import resolve_trace_path
+from provibench.commands.inspect import load_trace_entries, resolve_trace_path
 from provibench.commands.run_specs import (
     check_budget,
     endpoint_index,
@@ -59,14 +59,15 @@ _OUTPUT = obj(
         effects=Effects.NON_IDEMPOTENT, confirm=True, output=_OUTPUT, render=render_summaries
     ),
     help="Replay a trace's recorded requests against one or more targets.\n\n"
-    "Sends every recorded turn of a conversation to each --run target with "
+    "TRACE is either an existing path, a name under traces_dir, or 'sample' (the packaged "
+    "example). Sends every recorded turn of a conversation to each --run target with "
     "max_tokens: 1, so a run costs only prompt tokens; the output-side generation is "
     "discarded. A nonce is prepended to the first system block so the run measures its own "
     "cache rather than one left behind by an earlier run; --warm sends no nonce and reads "
     "whatever cache exists. Spends API credit, so this asks for confirmation unless --yes "
     "is given; --budget refuses a run whose worst-case cost exceeds it.",
 )
-@click.argument("trace")
+@click.argument("trace", help="Trace path, a name under traces_dir, or 'sample'")
 @click.option(
     "--run",
     "run_specs",
@@ -108,12 +109,13 @@ def replay(  # noqa: PLR0913 (click binds one parameter per flag; there is no gr
     from provibench.bench.nonce import new_run_hex
     from provibench.bench.replay import ReplayOptions, replay_all, write_run
     from provibench.bench.summary import cache_mode_note, summarize
-    from provibench.bench.trace import load_trace
+    from provibench.bench.trace import trace_name
 
     invocation = require_invocation(ctx)
     specs = parse_specs(run_specs, load_targets(invocation))
     trace_path = resolve_trace_path(trace, invocation)
-    selected_entries, selected_key = select_conversation(load_trace(trace_path), conversation)
+    entries = load_trace_entries(trace_path)
+    selected_entries, selected_key = select_conversation(entries, conversation)
     if limit is not None:
         selected_entries = selected_entries[:limit]
     if not selected_entries:
@@ -154,7 +156,7 @@ def replay(  # noqa: PLR0913 (click binds one parameter per flag; there is no gr
     runs_dir = Path(invocation.setting("runs_dir") or ".")
     run_dir = write_run(
         runs_dir,
-        trace_path.stem,
+        trace_name(trace_path),
         selected_key,
         specs,
         opts,

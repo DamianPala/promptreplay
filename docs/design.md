@@ -28,7 +28,9 @@ src/provibench/
     pricing.py                  CostBreakdown
     replay.py                   replay engine, run persistence
     summary.py                  RunSummary aggregation, sparkline
+    scrub.py                    shareability rules, the walker, the report model
   data/targets.toml             packaged default targets
+  data/sample.jsonl.gz          packaged example trace (`TRACE` = sample)
 traces/                         recorded traces (gitignored: they contain repo content)
 runs/                           replay results (gitignored)
 ```
@@ -48,6 +50,8 @@ seq, ts, path, query, headers{anthropic-version, anthropic-beta}, body, conversa
 `conversation` is a 12-hex key derived from the first user message: a harness interleaves background calls (title generation, summarisation) with the main loop; `main_conversation()` picks the group with the most request bytes.
 
 `usage` follows Anthropic semantics: `input_tokens` excludes `cache_read_input_tokens` and `cache_creation_input_tokens`; `prompt_total` is the sum of the three.
+
+A trace reads fine gzipped (`.gz` is decompressed transparently); recording always writes plain jsonl. The literal TRACE name `sample` resolves to the packaged `data/sample.jsonl.gz`, next to `targets.toml`.
 
 ## Recording
 
@@ -119,6 +123,21 @@ For `kind = "anthropic"`: `prompt_total` and buckets from `usage`; breakdown fro
 
 Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, conversation key, options, list of `{label, slug, target, model, providers, file}`) plus one `<slug>.jsonl` per spec with a `ReplayResult` per line.
 
+## Scrubbing
+
+`scrub` writes a shareable copy of a trace (`bench/scrub.py`, pure; `commands/scrub.py`, I/O).
+`bench/scrub.py` holds the rule table (`SECRET_RULES`), the recursive walker over entry strings, the `--turns` selection, and the report model; the rules are applied in a fixed order — user paths, secrets, `--user` names, then literal `--replace` pairs — so the same input and options give byte-identical output.
+
+| removed | how |
+|---|---|
+| `body.metadata` | dropped from every entry (`metadata.user_id` is not needed on replay) |
+| `/home/<name>`, `/Users/<name>` | rewritten to `/home/user`; the names are reported, not written |
+| `-home-<name>-…` | rewritten to `-home-user-…`: the project path Claude Code encodes into its state directory |
+| keys, `Bearer` tokens, e-mail addresses | `[scrubbed:<kind>]`, per the table in `bench/scrub.py` |
+| whole-word `--user NAME` | replaced with `user`, for `ls -l` owners and prose |
+
+`collect_user_names` walks the trace once before scrubbing, so the encoded form is rewritten whatever the order of the strings holding it. `--replace OLD=NEW` is literal and repeatable, for project names the rules cannot know; `--user NAME` is for a person's name, which is not automatic because a name can be an ordinary word. `--allow-email` keeps an address. Two dict keys that scrub to the same string are an `invalid_input` naming the entry's `seq`, rather than a silent loss. `--turns N` keeps the first N entries of the main conversation, or of the file when the trace carries no conversation keys; the report's `selection` says which. A `.gz` `--out` is written with `gzip.compress(mtime=0)`, so repeated runs produce identical bytes. An existing `--out` needs `--force` (`precondition_failed`); an unparsable input line is an `invalid_input` naming the line.
+
 ## Summary
 
 `RunSummary` per spec:
@@ -145,6 +164,7 @@ Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, con
 | `inspect TRACE [--conversation KEY]` | read-only | conversation list plus per-turn table of the selected conversation |
 | `replay TRACE --run SPEC... [--conversation] [--max-tokens] [--delay] [--strip-thinking] [--limit] [--yes]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, summaries}` and the report table |
 | `report RUN_DIR [--md PATH]` | read-only | summaries table, cache curves; `--md` writes markdown |
+| `scrub TRACE --out PATH [--replace OLD=NEW]... [--user NAME]... [--turns N] [--allow-email ADDR]... [--force]` | idempotent | `{trace, out, entries_in/out/dropped, selection, bytes_in/out, user_names, rules, changed}` and the rules table |
 | `endpoints MODEL` | read-only | OpenRouter endpoints: tag, provider, quantization, context, prices, uptime, latency, throughput |
 
 Settings: `targets_path` (`--targets`, `PROVIBENCH_TARGETS`), `traces_dir` (`PROVIBENCH_TRACES_DIR`, default `./traces`), `runs_dir` (`PROVIBENCH_RUNS_DIR`, default `./runs`).
