@@ -31,6 +31,12 @@ class Target(BaseModel):
     prices: dict[str, Prices] = Field(default_factory=dict)
     aliases: dict[str, str] = Field(default_factory=dict)
     """`"<openrouter slug>" = "<native model>"`, so a sweep of the slug also probes this target."""
+    litellm_provider: str | None = None
+    """How LiteLLM namespaces this target's models (`deepseek` in `deepseek/deepseek-flash`).
+
+    It is the first key the price lookup tries; without it only the bare model name is, so a
+    target never gets another provider's rate by sharing a model name.
+    """
 
 
 def load_targets(path: Path) -> dict[str, Target]:
@@ -58,6 +64,7 @@ def load_targets(path: Path) -> dict[str, Target]:
                 kind=fields["kind"],
                 prices=fields.get("prices", {}),
                 aliases=fields.get("aliases", {}),
+                litellm_provider=fields.get("litellm_provider"),
             )
         except KeyError as exc:
             raise ValueError(f"{path}: targets.{name} missing key {exc}") from exc

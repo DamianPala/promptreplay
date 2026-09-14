@@ -28,9 +28,10 @@ provibench config show             # effective settings and their source
 provibench completion --install    # shell completions
 ```
 
-`record`, `inspect`, `probe`, `sweep`, `replay`, `report`, `scrub`, and `endpoints` are the
-domain commands built on top of `src/provibench/bench/`; see [docs/design.md](docs/design.md)
-for the full design (trace/replay format, `targets.toml`, cost model).
+`record`, `inspect`, `probe`, `sweep`, `replay`, `report`, `scrub`, `endpoints`, and `prices`
+are the domain commands built on top of `src/provibench/bench/`; see
+[docs/design.md](docs/design.md) for the full design (trace/replay format, `targets.toml`,
+cost model).
 
 ## Probe
 
@@ -80,6 +81,16 @@ weak resellers bill close to that number. Its spec column is the tables' one, ca
 all, so the rows of a 16-endpoint sweep are told apart before the run is paid for; the
 refusal's hint names the ways to fit a budget: fewer specs or rungs, lower `--repeats`, or
 `--no-throughput`.
+
+A native target is priced from LiteLLM's community table
+(`model_prices_and_context_window.json`), cached under
+`$XDG_CACHE_HOME/provibench/litellm-prices.json` and refetched at most once a week, or on
+demand with `provibench prices --update`; `provibench prices` prints each model's four prices
+and the source they resolved to. A `targets.toml` `prices` entry wins over that table: precedence is
+`targets.toml`, then LiteLLM, then nothing, and a model neither lists stays `n/a`, counting
+tokens only, which `--budget` refuses. The caveat the community table carries is that it
+lists peak rates — DeepSeek, for one, halves them off-peak — and that is why the packaged
+`targets.toml` keeps its own off-peak entry for `deepseek-flash` rather than take the table's.
 
 What the columns mean:
 

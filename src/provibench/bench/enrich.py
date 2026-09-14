@@ -18,6 +18,7 @@ from provibench.bench.openrouter import (
     fetch_generation,
     normalize_provider,
 )
+from provibench.bench.prices import PriceTable, resolve_target
 from provibench.bench.pricing import compute_cost
 from provibench.bench.targets import Prices, RunSpec
 
@@ -97,13 +98,20 @@ async def enrich_openrouter(
     await asyncio.gather(*(_fetch(r) for r in successful))
 
 
-def enrich_anthropic(spec: RunSpec, results: list[ReplayResult]) -> None:
-    """Cost the results against the target's own price table; no lookup needed."""
-    prices = spec.target.prices.get(spec.model)
+def enrich_anthropic(
+    spec: RunSpec, results: list[ReplayResult], table: PriceTable | None = None
+) -> None:
+    """Cost the results against the target's own price table or the LiteLLM one; no lookup.
+
+    `table` is the resolved community table the run was priced with, so the breakdown the
+    run records names the same source the estimate showed before it was paid for. A spec
+    with neither price leaves the cost unknown and says so in its note, as it always did.
+    """
+    found = resolve_target(spec.target, spec.model, table)
     for result in results:
         if result.status != 200:
             continue
-        if prices is None:
+        if found is None:
             result.note = append_note(result.note, f"no price table for {spec.model}")
             continue
         result.cost = compute_cost(
@@ -111,6 +119,6 @@ def enrich_anthropic(spec: RunSpec, results: list[ReplayResult]) -> None:
             cache_read=result.cached,
             cache_write=result.cache_write,
             output_tokens=result.output_tokens,
-            prices=prices,
-            source="table",
+            prices=found[0],
+            source=found[1],
         )

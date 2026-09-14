@@ -16,13 +16,14 @@ from provibench.bench.trace import RecordedResponse, TraceEntry, Usage, append_e
 from provibench.core.documents import Document, as_document, as_list
 from provibench.core.introspection import command_flags, listed_commands
 from provibench.core.registry import Command
-from tests.conftest import Cli
+from tests.conftest import Cli, install_price_cache
 
 EXPECTED_COMMANDS = {
     "completion": ("idempotent", False, False),
     "config show": ("read_only", False, False),
     "endpoints": ("read_only", False, False),
     "inspect": ("read_only", False, False),
+    "prices": ("idempotent", False, False),
     "probe": ("non_idempotent", True, False),
     "record": ("non_idempotent", False, False),
     "replay": ("non_idempotent", True, False),
@@ -192,6 +193,8 @@ _SUCCESS_ARGV: dict[str, list[str]] = {
     "completion": ["bash"],
     "endpoints": ["deepseek/model"],
     "inspect": ["fixture"],
+    # a bare model too: it is priced from the cached LiteLLM fixture, `model-a` from targets
+    "prices": ["model-a", "deepseek-flash"],
     "probe": ["probe-fixture", "t:model-a", "--yes"],
     "record": ["--name", "record-fixture", "--upstream", "https://example.invalid", "--append"],
     "replay": ["fixture", "--run", "t:model-a", "--yes"],
@@ -249,10 +252,14 @@ def _seed_domain_fixtures(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
     targets_path.parent.mkdir(parents=True, exist_ok=True)
     targets_path.write_text(
         '[targets.t]\nurl = "https://x.test/v1/messages"\napi_key_env = "X_KEY"\n'
-        'kind = "anthropic"\n'
+        'kind = "anthropic"\nlitellm_provider = "deepseek"\n'
+        '[targets.t.prices."model-a"]\ninput = 1.0\ncache_read = 0.1\n'
+        "cache_write = 1.0\noutput = 2.0\n"
         '[targets.or]\nurl = "https://openrouter.test/v1/messages"\n'
         'api_key_env = "OR_KEY"\nkind = "openrouter"\n'
     )
+    # `prices` reads this copy; nothing in the suite ever fetches the table.
+    install_price_cache(cli)
 
     target = Target(
         name="t", url="https://x.test/v1/messages", api_key_env="X_KEY", kind="anthropic"

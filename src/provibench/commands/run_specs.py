@@ -17,6 +17,7 @@ from provibench.core.errors import InvalidInput, NotFound, OperationFailed
 if TYPE_CHECKING:
     from provibench.bench.estimate import PreCheckCost, SpecEstimate, SpecPrices, UpperBound
     from provibench.bench.openrouter import Endpoint
+    from provibench.bench.prices import PriceTable
     from provibench.bench.targets import RunSpec, Target
     from provibench.bench.trace import TraceEntry
 
@@ -195,14 +196,17 @@ def _selected(tags: Sequence[str], patterns: Sequence[str], *, flag: str) -> set
 
 
 def spec_price_map(
-    run_specs: Sequence[RunSpec], index: Mapping[str, list[Endpoint]]
+    run_specs: Sequence[RunSpec],
+    index: Mapping[str, list[Endpoint]],
+    *,
+    table: PriceTable | None = None,
 ) -> dict[str, SpecPrices]:
-    """The listed price of every spec that has one, keyed by label."""
+    """The listed price of every spec that has one, keyed by label; `table` prices natives."""
     from provibench.bench.estimate import spec_prices
 
     prices: dict[str, SpecPrices] = {}
     for spec in run_specs:
-        listed = spec_prices(spec, index)
+        listed = spec_prices(spec, index, table)
         if listed is not None:
             prices[spec.label] = listed
     return prices

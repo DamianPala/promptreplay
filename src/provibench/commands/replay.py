@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import click
 
 from provibench.commands.inspect import load_trace_entries, resolve_trace_path
+from provibench.commands.prices import native_price_table
 from provibench.commands.run_specs import (
     check_budget,
     endpoint_index,
@@ -124,7 +125,8 @@ def replay(  # noqa: PLR0913 (click binds one parameter per flag; there is no gr
     index, lookup_notes = endpoint_index(specs)
     for note in lookup_notes:
         invocation.message(note)
-    prices = spec_price_map(specs, index)
+    table = native_price_table(invocation, specs)
+    prices = spec_price_map(specs, index, table=table)
     estimates = [replay_estimate(spec, selected_entries, prices.get(spec.label)) for spec in specs]
     invocation.message(render_estimate(estimates))
     check_budget(estimates, budget, hint="Raise --budget, or drop a target or a turn")
@@ -148,6 +150,7 @@ def replay(  # noqa: PLR0913 (click binds one parameter per flag; there is no gr
                 invocation.env,
                 run_hex=run_hex,
                 on_progress=on_progress,
+                table=table,
             )
         )
     except ValueError as exc:

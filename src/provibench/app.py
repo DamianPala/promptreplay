@@ -10,6 +10,7 @@ from pathlib import Path
 
 from provibench.commands.endpoints import endpoints as endpoints_command
 from provibench.commands.inspect import inspect as inspect_command
+from provibench.commands.prices import prices as prices_command
 from provibench.commands.probe import probe as probe_command
 from provibench.commands.record import record as record_command
 from provibench.commands.replay import replay as replay_command
@@ -91,6 +92,7 @@ def build_cli() -> Root:
     root.add_command(report_command)
     root.add_command(scrub_command)
     root.add_command(endpoints_command)
+    root.add_command(prices_command)
     return root
 
 

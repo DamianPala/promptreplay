@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import click
 
 from provibench.commands.inspect import resolve_trace_path
+from provibench.commands.prices import native_price_table
 from provibench.commands.probe_flags import ProbeRequest, options_for, probe_options
 from provibench.commands.probe_phases import (
     Checked,
@@ -154,7 +155,8 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         index, lookup_notes = dict(request.endpoints), []
     for note in lookup_notes:
         invocation.message(note)
-    prices = spec_price_map(request.specs, index)
+    table = native_price_table(invocation, request.specs)
+    prices = spec_price_map(request.specs, index, table=table)
     plan = request.pre_check
     pre_check = None if plan is None else precheck_cost(plan.candidates, selected, options, prices)
     estimates = planned_estimates(request, selected, options, prices)

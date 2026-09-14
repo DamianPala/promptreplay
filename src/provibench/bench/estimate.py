@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from provibench.bench.labels import column_labels, text_table
 from provibench.bench.openrouter import normalize_provider
+from provibench.bench.prices import SOURCE_LITELLM, PriceTable, resolve_target
 from provibench.bench.probe_models import ProbeOptions
 from provibench.bench.probe_stream import STREAM_MAX_TOKENS
 from provibench.bench.targets import Prices, RunSpec
@@ -110,16 +111,22 @@ async def fetch_endpoint_index(
     return index, notes
 
 
-def spec_prices(spec: RunSpec, index: Mapping[str, list[Endpoint]]) -> SpecPrices | None:
+def spec_prices(
+    spec: RunSpec, index: Mapping[str, list[Endpoint]], table: PriceTable | None = None
+) -> SpecPrices | None:
     """The listed price a spec would be billed at, or `None` when there is no match.
 
     A pinned gateway spec takes the price of the endpoint it named. An unpinned one takes
     the most expensive endpoint serving the model: this is the worst case, so the top of the
     ladder is the honest end of it, and the estimate says which endpoint it used.
+
+    A native spec takes its target's `prices` entry when there is one and the LiteLLM table's
+    rate for the model otherwise; `table` is the resolved community table, so nothing here
+    touches the network.
     """
     if spec.target.kind != "openrouter":
-        table = spec.target.prices.get(spec.model)
-        return None if table is None else SpecPrices(prices=table, source="table")
+        found = resolve_target(spec.target, spec.model, table)
+        return None if found is None else SpecPrices(prices=found[0], source=found[1])
     endpoints = index.get(spec.model, [])
     if spec.providers:
         wanted = {normalize_provider(name) for name in spec.providers}
@@ -231,6 +238,11 @@ def _estimate(
         notes.append(
             f"unpinned: priced from the most expensive endpoint ({endpoint}); "
             "pin @provider to price one endpoint"
+        )
+    elif prices.source == SOURCE_LITELLM:
+        notes.append(
+            "priced from LiteLLM's community table, which lists peak rates; a provider's "
+            "off-peak rate has to be stated in targets.toml"
         )
     # `tokens` is what the run will send as prompt; the generated tokens are a second cost
     # and are reported as such, not folded into a count that claims to be a prompt size.
