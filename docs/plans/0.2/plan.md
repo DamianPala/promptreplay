@@ -30,6 +30,7 @@ Owner: Damian. Orchestration: main session (Claude Code). Builder and explore: `
 | 2026-09-14 | Report in the terminal and as HTML, both from the same `run.json` | Terminal for daily use, HTML for a screenshot and a link |
 | 2026-09-14 | Agent skill lives statically in the repo (`skills/provibench/SKILL.md`), linked from the README, no installer | Basics only: what the tool measures, how to record, probe, sweep and read a report; `--help` and `schema` carry the rest |
 | 2026-09-14 | Headline models beyond DeepSeek V4.1 Flash decided at sweep time; name decided at the end, before the upload | Both depend on what the sweeps show |
+| 2026-09-14 | Slice 3d (`sweep --top/--sort/--zdr` + availability pre-check) is in 0.2; the skill's headline recipe is "measure the N best endpoints" | The OpenRouter endpoint list already carries uptime, status, and (with a key) latency and throughput percentiles; the account's provider exclusions only show up as failed requests, hence the pre-check. An agent using the tool should not have to hand-pick a provider list |
 
 ## Slices
 
@@ -75,6 +76,13 @@ Commands:
 - `provibench sweep TRACE MODEL [--target openrouter] [--exclude tag]... [--include tag]...` expands to one probe spec per endpoint from `endpoints` (plus native targets that carry the model in `targets.toml`), then behaves like `probe`, including the estimate and `--budget`.
 - Acceptance: `sweep sample deepseek/deepseek-v4.1-flash --json` produces one summary per endpoint; a 12-endpoint sweep of the sample stays under 2 USD worst case.
 
+### 3d. `sweep` selection: `--top`, `--sort`, `--zdr`, availability pre-check
+
+- The endpoint list already carries `status`, `uptime_last_{5m,30m,1d}`, `pricing`, `quantization`, and with an API key `latency_last_30m` and `throughput_last_30m` as p50/p75/p90/p99. `GET /api/v1/endpoints/zdr` lists the Zero Data Retention endpoints.
+- Selection criteria (also stated in the skill): "best" means cheapest among the stable ones. Stability floor first: `status >= 0` and `uptime_last_1d >= 97 %`, otherwise the endpoint is dropped and named in a note (`--include` brings one back). Then the ranking key from `--sort`: `price` (default, prompt price ascending, ties broken by throughput p50 descending when the key is present, then uptime), `throughput` (p50 descending), `latency` (p50 ascending), `uptime` (1d descending); `throughput` and `latency` need the key and error without it. `--top N` keeps the N best after the availability check, `--zdr` intersects with the ZDR list before ranking. The selection is a pre-filter only; the report still orders rows by the measured effective $/M, so the measurement, not the listing, is the verdict.
+- Availability pre-check: one `max_tokens 1` request on the smallest rung per candidate before the cut, so account-level exclusions (ignored providers, ZDR on the account) surface as "unavailable for this key" rows instead of eating a slot in `--top`. The pre-check tokens count in the estimate.
+- Acceptance: `sweep sample deepseek/deepseek-v4.1-flash --top 5 --sort uptime` probes exactly five served endpoints; `--zdr` on the sample model yields only endpoints from the ZDR list; the run records the selection (sort, top, zdr, dropped endpoints with the reason) so `report` can show it offline.
+
 ### 4. Prices from LiteLLM
 
 - `bench/prices.py`: fetch `model_prices_and_context_window.json` (cached under `$XDG_CACHE_HOME/provibench/`, refreshed on `provibench prices --update` or when older than 7 days), resolve a native target's model to `Prices`; `targets.toml` `prices` entries override.
@@ -105,6 +113,7 @@ Providers change routing, quantization, cache config and prices from week to wee
 
 - Delta check of `core/` and the command specs against the current CLI Design Standard; fix drift.
 - `skills/provibench/SKILL.md`, static in the repo and linked from the README: what the tool measures, how to record, probe, sweep and read a report, the basics only; `--help` and `schema` carry the rest. No installer.
+- The skill carries agent recipes, not only command reference: the headline one is "pick the N best endpoints for a model and measure them" (`sweep TRACE MODEL --top N --sort ... [--zdr] --budget ... --yes --json`, then read the summaries and name the winner with its hit rate, effective $/M and TTFT). The recipe states the selection criteria in one paragraph: stability floor (status, uptime 1d), then the `--sort` key, `price` by default; pick `throughput` for interactive agents, `latency` when TTFT matters, `uptime` when reliability matters; the measured effective $/M in the report is the verdict, the listing only chooses candidates. A second recipe is "re-check one endpoint by hand" with `probe` on a label copied from a sweep row.
 
 ### 8. Publish 0.2.0
 
