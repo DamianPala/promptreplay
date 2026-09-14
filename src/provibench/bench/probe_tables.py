@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from provibench.bench.labels import column_labels, elide, named, rendered
+from provibench.bench.labels import column_labels, elide, named, rendered, uncovered_width
 from provibench.bench.probe_summary import ProbeSummary, RungSummary, TtlRead
 
 _HIT_FULL = 0.98
@@ -21,6 +21,8 @@ _MAX_CELL = 40
 """Longest drift cell rendered before it is elided; the label is planned from the budget."""
 _LABEL_FLOOR = 16
 """Narrowest label column: below this a row loses the name it is read by."""
+_LABEL_WIN = 24
+"""Widest a row the caption does not cover may win the plan, before the budget cuts it."""
 _MIN_DRIFT = 9
 """Narrowest drift column that still shows at least one whole marker."""
 _SEPARATOR = " | "
@@ -155,16 +157,20 @@ def _planned_widths(
     the label column does not use are the drift's rather than nobody's: a drift cell is one
     short marker, `provider,tokens+3%`, and it is worth showing whole.
 
+    A label the caption does not cover — the native endpoint next to a column of gateway
+    tags — wins the width it needs, up to `_LABEL_WIN` and up to what the spec table can
+    spare the drift: the `@tag` rows are short and can be elided, while that row is the
+    reference every other row is read against, and it wins over the rung table's budget.
+
     A width that would name two rows alike is skipped, and the label is never cut below
     `_LABEL_FLOOR` — past that a readable name beats the column budget. A row wider than
     `_MAX_TABLE` is still possible: a late TTL read writes `(+6)` into the rung table, and
     so does a drift column squeezed under its floor, which is worth the columns too.
     """
-    budget = min(
-        _MAX_TABLE - _spec_middle(summaries) - _MIN_DRIFT,
-        _MAX_TABLE - _rung_span(summaries, rung_columns),
-    )
-    for width in range(max(budget, _LABEL_FLOOR), _LABEL_FLOOR - 1, -1):
+    spare = _MAX_TABLE - _spec_middle(summaries) - _MIN_DRIFT
+    budget = min(spare, _MAX_TABLE - _rung_span(summaries, rung_columns))
+    required = min(uncovered_width([summary.label for summary in summaries], cap=_LABEL_WIN), spare)
+    for width in range(max(budget, _LABEL_FLOOR, required), _LABEL_FLOOR - 1, -1):
         labels = _labels_of(summaries, label_width=width)[1]
         if named(labels):
             return width, _drift_width(rendered(labels), summaries)

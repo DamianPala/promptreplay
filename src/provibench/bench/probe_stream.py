@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from provibench.bench.enrich import append_note
 from provibench.bench.probe_context import ProbeContext
 from provibench.bench.probe_models import ProbeCall, ProbeOutcome
 from provibench.bench.probe_requests import outcome_from
@@ -29,7 +30,23 @@ STREAM_MAX_TOKENS = 256
 _ERROR_STATUS = 400
 """From here up a streaming response is an error payload, not a stream to read."""
 
-__all__ = ["STREAM_MAX_TOKENS", "StreamResult", "build_stream_body", "post_stream", "stream_record"]
+BURST_NOTE = "burst"
+"""The record note of a stream that delivered its answer in one flush; see `StreamResult`."""
+
+_WINDOW_MS = 250.0
+"""Shortest generation window a rate can be read from: below it the divisor is noise."""
+
+_DELTAS_AFTER_FIRST = 3
+"""Content deltas a stream must send past its first for the window to divide anything."""
+
+__all__ = [
+    "BURST_NOTE",
+    "STREAM_MAX_TOKENS",
+    "StreamResult",
+    "build_stream_body",
+    "post_stream",
+    "stream_record",
+]
 
 
 @dataclass(slots=True)
@@ -49,8 +66,28 @@ class StreamResult:
         return None if first is None else first * 1000
 
     @property
+    def burst(self) -> bool:
+        """Whether the answer arrived in one flush, which no rate can be read from.
+
+        A provider that buffers a tool-call JSON and flushes it after the first token shows
+        a generation window of a few milliseconds with one or two deltas in it; dividing a
+        hundred tokens by that gives five figures of tokens per second and measures the
+        buffer, not the model. The window has to be long enough to time a token in, and the
+        content has to have arrived in more than one piece — the first delta plus three.
+
+        A stream that produced no rate at all — a refused request, a stream that died before
+        its first delta — is not a burst: there is no number to distrust, and calling it one
+        would put "delivered in one flush" on a generation that never happened.
+        """
+        if self.stats.gen_tok_s is None:
+            return False
+        window_ms = self.latency_ms - (self.ttft_ms or 0.0)
+        return window_ms < _WINDOW_MS or self.stats.deltas < _DELTAS_AFTER_FIRST + 1
+
+    @property
     def gen_tok_s(self) -> float | None:
-        return self.stats.gen_tok_s
+        """Output tokens per second over the generation window; `None` for a burst."""
+        return None if self.burst else self.stats.gen_tok_s
 
     @property
     def status_code(self) -> int:
@@ -106,7 +143,9 @@ async def post_stream(
         status = response.status_code
         if status >= _ERROR_STATUS:
             await response.aread()
-            message = parse_response(response.headers.get("content-type", ""), response.content)
+            message = parse_response(
+                response.headers.get("content-type", ""), response.content, status=status
+            )
             stats = StreamStats()
             stats.on_done(since_start())
         else:
@@ -137,7 +176,7 @@ def stream_record(
     lookup and the costing treat a streamed request like any other.
     """
     result: StreamResult = response
-    return outcome_from(
+    outcome = outcome_from(
         probe,
         entry,
         result,
@@ -152,3 +191,8 @@ def stream_record(
             "fingerprint": result.stats.fingerprint,
         },
     )
+    if result.burst:
+        # Noted on the record because it is a property of this one response: the summary
+        # names the rungs it happened on, and the raw jsonl says it here.
+        outcome.record.note = append_note(outcome.record.note, BURST_NOTE)
+    return outcome

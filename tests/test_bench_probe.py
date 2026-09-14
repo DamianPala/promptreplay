@@ -27,6 +27,7 @@ from provibench.bench.probe import (
 )
 from provibench.bench.probe_drift import apply_drift
 from provibench.bench.probe_models import Role
+from provibench.bench.probe_stream import BURST_NOTE, StreamResult
 from provibench.bench.probe_summary import (
     ProbeSummary,
     TtlRead,
@@ -41,6 +42,7 @@ from provibench.bench.rungs import (
     select_rungs,
     validate_rungs,
 )
+from provibench.bench.sse import ParsedMessage, StreamStats
 from provibench.bench.targets import Prices, RunSpec, Target, parse_run_spec
 from provibench.bench.trace import RecordedResponse, TraceEntry, Usage
 
@@ -801,6 +803,93 @@ def test_summarize_rung_skips_a_rung_whose_cold_request_failed() -> None:
     assert rung.errors == 1
 
 
+_GUARDRAIL_ERROR = (
+    '{"type": "not_found_error", "message": "0 endpoints out of 1 requested are available'
+    " matching your guardrail restrictions and data policy. We removed them for the following"
+    " reasons (...):\\nPaid model training violation (account settings): 1 endpoint excluded;"
+    ' configurable at https://openrouter.ai/settings/privacy", "error_type": "not_found"}'
+)
+"""The live refusal: the endpoint is not served to this account at all, in under 300 ms."""
+
+
+def _cold_failure(error: str, rung: int) -> ProbeResult:
+    return _record("cold", 0, rung=rung, status=404, error=error)
+
+
+def test_a_spec_whose_every_cold_failed_says_why() -> None:
+    """Three 404s and a reason: the row shows `errors 3`, and the note shows the setting."""
+    records = [_cold_failure(_GUARDRAIL_ERROR, rung) for rung in (1, 13, 23)]
+    summary = summarize_probe("or:model@alibaba", records)
+    assert summary.skipped == 3
+    assert "skipped, not_found: Paid model training violation (account settings)" in summary.notes
+    assert (
+        "or:model@alibaba: skipped, not_found: Paid model training violation (account settings)"
+        in render_probe([summary])
+    )
+
+
+def test_a_rate_limited_spec_is_skipped_with_its_error_type() -> None:
+    error = (
+        '{"type": "rate_limit_exceeded", "message": "slow down",'
+        ' "error_type": "rate_limit_exceeded"}'
+    )
+    records = [_cold_failure(error, rung) for rung in (1, 13, 23)]
+    summary = summarize_probe("or:model@alibaba", records)
+    assert "skipped, rate_limit_exceeded" in summary.notes
+
+
+def test_a_spec_that_answered_one_rung_is_not_called_skipped() -> None:
+    """One cold that went through means the endpoint serves this account; the rest is noise."""
+    records = [
+        _record("cold", 0, rung=1),
+        _cold_failure(_GUARDRAIL_ERROR, 13),
+        _cold_failure(_GUARDRAIL_ERROR, 23),
+    ]
+    summary = summarize_probe("or:model@alibaba", records)
+    assert not [note for note in summary.notes if note.startswith("skipped")]
+
+
+def test_a_spec_that_failed_differently_each_time_is_not_called_skipped() -> None:
+    records = [
+        _cold_failure(_GUARDRAIL_ERROR, 1),
+        _cold_failure('{"type": "server_error"}', 2),
+    ]
+    summary = summarize_probe("or:model@alibaba", records)
+    assert not [note for note in summary.notes if note.startswith("skipped")]
+
+
+def test_a_404_body_of_the_live_shape_becomes_the_records_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The path from a real refusal body to the note, through the probe's own parsing."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            404,
+            json={
+                "type": "not_found_error",
+                "message": "0 endpoints out of 1 requested are available",
+                "error_type": "not_found",
+            },
+        )
+
+    run = _run_probe(
+        monkeypatch, [_spec()], _trace(), ProbeOptions(rungs=[1], repeats=[1], gap_s=0.0), handler
+    )
+    [cold] = [record for record in run.records["fake:model-a"] if record.role == "cold"]
+    assert "not_found" in (cold.error or "")
+    [summary] = [summarize_probe("fake:model-a", run.records["fake:model-a"])]
+    assert "skipped, not_found" in " ".join(summary.notes)
+
+
+def test_a_transport_error_is_not_a_kind_of_refusal() -> None:
+    """A timeout is not the provider saying no, so the note cannot name an error type."""
+    records = [_cold_failure("ReadTimeout(...)", rung) for rung in (1, 2)]
+    summary = summarize_probe("or:model@alibaba", records)
+    assert not [note for note in summary.notes if note.startswith("skipped")]
+
+
 def test_summarize_probe_pools_the_rungs_and_prices_the_result() -> None:
     records = [
         _record("cold", 0, rung=1, prompt=100, cache_write=100),
@@ -933,6 +1022,114 @@ def test_run_probe_streams_the_throughput_request_after_the_warm_reads(
     assert stream.usage.output_tokens == 18
     assert stream.cached == 40
     assert stream.gen_tok_s is None or stream.gen_tok_s > 0
+
+
+def _stream_result(
+    *, latency_ms: float, ttft_ms: float, deltas: int, output_tokens: int
+) -> StreamResult:
+    """A streamed result with the timing and the arrival shape a test wants."""
+    stats = StreamStats()
+    stats.first_delta_at = ttft_ms / 1000
+    stats.stop_at = latency_ms / 1000
+    stats.output_tokens = output_tokens
+    stats.deltas = deltas
+    return StreamResult(
+        message=ParsedMessage(), stats=stats, status=200, latency_ms=latency_ms, started=0.0
+    )
+
+
+def test_a_burst_stream_has_no_generation_rate() -> None:
+    """The live shape: 97 tokens 9 ms after the first one is a flush, not a generation."""
+    burst = _stream_result(latency_ms=3103.0, ttft_ms=3094.0, deltas=1, output_tokens=97)
+    assert burst.burst is True
+    assert burst.gen_tok_s is None
+    assert burst.ttft_ms == pytest.approx(3094.0)  # the first token's wait is still real
+
+
+def test_a_normal_stream_keeps_its_generation_rate() -> None:
+    stream = _stream_result(latency_ms=5295.0, ttft_ms=2895.0, deltas=40, output_tokens=98)
+    assert stream.burst is False
+    assert stream.gen_tok_s == pytest.approx(98 / 2.4)
+
+
+def test_a_stream_that_flushes_few_deltas_is_a_burst_however_long_the_window() -> None:
+    """`latency - ttft` of two seconds over three deltas is one flush, timed slowly."""
+    flushed = _stream_result(latency_ms=2000.0, ttft_ms=300.0, deltas=3, output_tokens=50)
+    spread = _stream_result(latency_ms=2000.0, ttft_ms=300.0, deltas=4, output_tokens=50)
+    assert flushed.burst is True  # the first delta plus two: not a generation
+    assert spread.burst is False  # the first delta plus three, which is the line
+
+
+def test_a_refused_stream_is_an_error_not_a_burst() -> None:
+    """A 4xx carries no deltas at all, and `post_stream` builds it with empty stats.
+
+    Calling that a burst would put "delivered in one flush" next to an error count, on a
+    generation the endpoint refused to start.
+    """
+    stats = StreamStats()
+    stats.on_done(0.12)  # what post_stream does for an error status
+    refused = StreamResult(
+        message=ParsedMessage(error='{"type": "not_found_error"}'),
+        stats=stats,
+        status=404,
+        latency_ms=120.0,
+        started=0.0,
+    )
+    assert refused.burst is False
+    assert refused.gen_tok_s is None  # no rate either way, and nothing to explain away
+
+    records = [
+        _record("cold", 0),
+        _record("warm", 1, cached=90),
+        _record("stream", 0, status=404, error='{"type": "not_found_error"}'),
+    ]
+    summary = summarize_probe("fake:model-a", records)
+    assert not any("burst" in note for note in summary.notes)
+
+
+def test_a_burst_record_is_noted_and_the_summary_names_its_rung(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The record carries `burst`; the spec's notes say which rung it was."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body.get("stream"):
+            return _stream_response(cached=40)
+        return _ok(cached=40, input_tokens=60)
+
+    run = _run_probe(
+        monkeypatch, [_spec()], _trace(), ProbeOptions(rungs=[1], repeats=[1], gap_s=0.0), handler
+    )
+    [stream] = [record for record in run.records["fake:model-a"] if record.role == "stream"]
+    assert stream.note == BURST_NOTE
+    assert stream.gen_tok_s is None
+
+    [summary] = [summarize_probe("fake:model-a", run.records["fake:model-a"])]
+    assert "burst delivery on rung 1" in summary.notes
+    rendered = render_probe([summary])
+    assert "fake:model-a: burst delivery on rung 1" in rendered
+    rung_table = rendered.split("\n\n")[1]  # no caption here: the spec table comes first
+    header = [cell.strip() for cell in rung_table.splitlines()[0].split("|")]
+    row = [cell.strip() for cell in rung_table.splitlines()[2].split("|")]
+    assert row[header.index("tok/s")] == "-"  # the rate is undefined, not zero
+
+
+def test_the_summarys_rate_is_the_median_of_its_timed_rungs() -> None:
+    """A burst rung is no rate at all, so it does not pull the median toward zero."""
+    records = [
+        _record("cold", 0, rung=1),
+        _record("warm", 1, rung=1, cached=90),
+        _record("cold", 0, rung=2, prompt=200),
+        _record("warm", 1, rung=2, cached=190, prompt=200),
+    ]
+    timed = _record("stream", 0, rung=1)
+    timed.gen_tok_s = 40.0
+    burst = _record("stream", 0, rung=2, prompt=200)
+    burst.note = BURST_NOTE
+    summary = summarize_probe("fake:model-a", [*records, timed, burst])
+    assert summary.gen_tok_s == 40.0
+    assert [rung.gen_tok_s for rung in summary.rungs] == [40.0, None]
 
 
 # --- the spec column ----------------------------------------------------------
@@ -1109,7 +1306,8 @@ def test_stream_retries_a_400_about_thinking_without_the_param(
 
     [stream] = [record for record in run.records["fake:model-a"] if record.role == "stream"]
     assert stream.status == 200
-    assert stream.note == "thinking param dropped"
+    # a mock transport delivers the whole body at once, so this stream is also a burst
+    assert "thinking param dropped" in (stream.note or "").split("; ")
     assert stream.fingerprint == " ".join(_STREAM_TOKENS[:16])
     # the streamed attempt kept the parameter, the retry dropped it
     streamed = [json.loads(body) for body in sent if json.loads(body).get("stream")]
@@ -1272,6 +1470,42 @@ def test_fingerprint_is_reported_but_never_a_drift_marker() -> None:
     apply_drift(summaries, [_ref("openrouter"), _ref("openrouter")])
     assert summaries[1].fingerprint_match is False  # reported
     assert summaries[1].drift is None  # but not a drift marker
+
+
+def test_a_label_the_caption_does_not_cover_wins_its_width() -> None:
+    """The live shape: fifteen `@tag` rows, and the native reference keeps its whole name.
+
+    The `hits` cells are six readings wide, as the default `--repeats` makes them, which is
+    what squeezes the label column to its floor when the budget alone decides.
+    """
+    tags = [
+        "relace/fp8",
+        "deepinfra/turbo",
+        "gmicloud",
+        "novita/fp8",
+        "novita",
+        "siliconflow",
+        "parasail",
+        "friendli",
+        "together",
+        "fireworks",
+        "lambda",
+        "cloudflare",
+        "baseten",
+        "mancer",
+        "openinference",
+    ]
+    summaries = [_summary(f"openrouter:deepseek/deepseek-v4.1-flash@{tag}") for tag in tags]
+    summaries.append(_summary("deepseek:deepseek-flash"))
+    for summary in summaries:
+        summary.rungs[0].hits = [0.9] * 6
+
+    spec_block = next(
+        block for block in render_probe(summaries).split("\n\n") if block.startswith("spec ")
+    )
+    labels = [line.split("|")[0].strip() for line in spec_block.splitlines()[2:]]
+    assert labels[-1] == "deepseek:deepseek-flash"
+    assert len(set(labels)) == len(labels)  # and no two `@tag` rows were cut together
 
 
 def test_a_label_the_caption_does_not_cover_keeps_its_target_head() -> None:

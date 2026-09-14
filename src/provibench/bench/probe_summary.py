@@ -18,7 +18,9 @@ from statistics import fmean, median
 from pydantic import BaseModel, Field
 
 from provibench.bench.estimate import SpecPrices
+from provibench.bench.probe_errors import skip_note
 from provibench.bench.probe_models import ProbeResult, is_failed, is_served
+from provibench.bench.probe_stream import BURST_NOTE
 from provibench.core.documents import Document, as_document, as_list
 
 
@@ -289,17 +291,47 @@ def _providers_of(records: Sequence[ProbeResult]) -> dict[str, int]:
 
 
 def _probe_notes(records: Sequence[ProbeResult], models: Sequence[str]) -> list[str]:
-    """One note per distinct record note, plus the cache fallback and model-variance notes."""
-    notes: list[str] = []
-    for record in records:
-        if record.note and record.note not in notes:
-            notes.append(record.note)
+    """What a spec's records amount to beyond the numbers: the notes a reader is owed."""
+    notes = _record_notes(records)
+    for note in (skip_note(records), _burst_note(records)):
+        if note:
+            notes.append(note)
     fallbacks = sum(1 for r in records if r.cached == 0 and (r.native_tokens_cached or 0) > 0)
     if fallbacks:
         notes.append(f"cached taken from the OpenRouter generation for {fallbacks} request(s)")
     if len(models) > 1:
         notes.append(f"responses named more than one model: {', '.join(models)}")
     return notes
+
+
+def _record_notes(records: Sequence[ProbeResult]) -> list[str]:
+    """One note per distinct record note, without the burst marker.
+
+    A burst record's own note says `burst` and nothing else, and the rung it happened on is
+    what a reader needs; `_burst_note` writes that in its place.
+    """
+    notes: list[str] = []
+    for record in records:
+        for part in _note_parts(record.note or ""):
+            if part != BURST_NOTE and part not in notes:
+                notes.append(part)
+    return notes
+
+
+def _note_parts(note: str) -> list[str]:
+    """One record note split into its parts: `append_note` joins them with a semicolon."""
+    return [part.strip() for part in note.split(";") if part.strip()]
+
+
+def _burst_note(records: Sequence[ProbeResult]) -> str | None:
+    """One line naming every rung whose generation arrived in a single flush."""
+    rungs = sorted(
+        {record.rung for record in records if BURST_NOTE in _note_parts(record.note or "")}
+    )
+    if not rungs:
+        return None
+    which = "rung" if len(rungs) == 1 else "rungs"
+    return f"burst delivery on {which} {', '.join(str(rung) for rung in rungs)}"
 
 
 def _rungs(records: Sequence[ProbeResult]) -> list[int]:

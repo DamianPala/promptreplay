@@ -114,7 +114,11 @@ class Recorder:
         upstream_resp: httpx.Response,
         captured: _CapturedResponse,
     ) -> None:
-        parsed = parse_response(upstream_resp.headers.get("content-type", ""), captured.raw)
+        parsed = parse_response(
+            upstream_resp.headers.get("content-type", ""),
+            captured.raw,
+            status=upstream_resp.status_code,
+        )
         entry = TraceEntry(
             seq=next(self.seq),
             ts=datetime.now(UTC).isoformat(timespec="seconds"),

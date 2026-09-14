@@ -28,6 +28,8 @@ _DELTA_TYPES = {
 """Where each delta kind carries its text: a tool call streams its arguments as JSON."""
 _TERMINAL_EVENTS = ("message_stop", "error")
 """The events after which a stream carries nothing more, whatever the socket does."""
+_ERROR_STATUS = 400
+"""From here up a response is a refusal; its body is read as the error it is."""
 FINGERPRINT_TOKENS = 16
 """Output tokens taken in order to identify the model behind an endpoint."""
 
@@ -47,10 +49,19 @@ def _merge_usage(base: dict[str, Any], extra: dict[str, Any] | None) -> None:
             base[key] = value
 
 
-def parse_json_message(data: dict[str, Any]) -> ParsedMessage:
+def parse_json_message(data: dict[str, Any], *, status: int | None = None) -> ParsedMessage:
+    """One JSON body as a message; with `status` an error status, the body is the error.
+
+    A provider spells its refusals differently — Anthropic wraps one in `error`, OpenRouter's
+    compatibility layer sends the error object itself (`{"type": "not_found_error", ...}`) —
+    so the shape alone cannot tell a refusal from an answer. The status can, and a refusal's
+    whole body is kept: it is where the reason a request was rejected is written.
+    """
     if data.get("type") == "error" or "error" in data:
         err = data.get("error", data)
         return ParsedMessage(error=json.dumps(err)[:500])
+    if status is not None and status >= _ERROR_STATUS:
+        return ParsedMessage(error=json.dumps(data)[:500])
     return ParsedMessage(
         message_id=data.get("id"),
         model=data.get("model"),
@@ -112,11 +123,11 @@ def parse_event_stream(raw: bytes) -> ParsedMessage:
     return out
 
 
-def parse_response(content_type: str, raw: bytes) -> ParsedMessage:
+def parse_response(content_type: str, raw: bytes, *, status: int | None = None) -> ParsedMessage:
     if "text/event-stream" in content_type:
         return parse_event_stream(raw)
     try:
-        return parse_json_message(json.loads(raw or b"{}"))
+        return parse_json_message(json.loads(raw or b"{}"), status=status)
     except json.JSONDecodeError:
         return ParsedMessage(error=raw[:500].decode("utf-8", "replace"))
 
@@ -190,6 +201,8 @@ class StreamStats:
         self.stop_at: float | None = None
         self.output_tokens: int | None = None
         self.pieces: list[str] = []
+        self.deltas = 0
+        """How many deltas carried content; one flush of a whole answer counts as one."""
         self.stop_after_tokens = stop_after_tokens
 
     def on_event(self, data: dict[str, Any], at: float) -> None:
@@ -253,6 +266,7 @@ class StreamStats:
         text = delta.get(key)
         if isinstance(text, str) and text:
             self.pieces.append(text)
+            self.deltas += 1
 
 
 async def read_stream(

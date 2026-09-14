@@ -51,7 +51,7 @@ def parse_body(resp: httpx.Response) -> ParsedMessage:
         return ParsedMessage(error=resp.text[:500])
     if not isinstance(data, dict):
         return ParsedMessage(error=str(data)[:500])
-    return parse_json_message(cast("dict[str, Any]", data))
+    return parse_json_message(cast("dict[str, Any]", data), status=resp.status_code)
 
 
 async def post(

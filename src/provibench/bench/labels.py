@@ -17,7 +17,7 @@ from collections.abc import Sequence
 
 _ELLIPSIS = "…"
 
-__all__ = ["column_labels", "elide", "named", "rendered"]
+__all__ = ["column_labels", "elide", "named", "rendered", "uncovered_width"]
 
 
 def column_labels(labels: Sequence[str], *, label_width: int) -> tuple[str | None, list[str]]:
@@ -30,7 +30,7 @@ def column_labels(labels: Sequence[str], *, label_width: int) -> tuple[str | Non
     is thrown away: two rows reading the same string name neither of them.
     """
     heads = [_head(label) for label in labels]
-    shared = sorted({head for head in heads if head and heads.count(head) > 1})
+    shared = _shared_heads(labels)
     column = [
         _short_label(label, head, shared, label_width)
         for label, head in zip(labels, heads, strict=True)
@@ -40,6 +40,19 @@ def column_labels(labels: Sequence[str], *, label_width: int) -> tuple[str | Non
         column = [elide(label, label_width) for label in labels]
     caption = "specs: " + ", ".join(f"{head}@<provider>" for head in shared) if shared else None
     return caption, column
+
+
+def uncovered_width(labels: Sequence[str], *, cap: int) -> int:
+    """The width the widest row the caption cannot shorten needs, capped at `cap`.
+
+    Those rows are the ones a table exists to compare against: a native endpoint's
+    `target:model` sits next to a column of gateway `@tags`, and cut in the middle it reads
+    as one more of them — the caption names the other model, so the row that is not covered
+    is exactly the one whose name has to survive whole.
+    """
+    shared = set(_shared_heads(labels))
+    widths = [len(label) for label in labels if _head(label) not in shared]
+    return min(cap, max(widths, default=0))
 
 
 def elide(cell: str, width: int, *, keep_end: bool = True) -> str:
@@ -87,6 +100,12 @@ def _head(label: str) -> str:
     """A label's `target:model` part, without its `@provider` suffix."""
     head, at, _ = label.rpartition("@")
     return head if at else label
+
+
+def _shared_heads(labels: Sequence[str]) -> list[str]:
+    """The `target:model` heads at least two rows share: those move into the caption."""
+    heads = [_head(label) for label in labels]
+    return sorted({head for head in heads if head and heads.count(head) > 1})
 
 
 def _short_label(label: str, head: str, shared: Sequence[str], width: int) -> str:

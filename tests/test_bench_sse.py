@@ -15,6 +15,7 @@ from provibench.bench.sse import (
     interpret_event,
     iter_stream_events,
     parse_event_stream,
+    parse_json_message,
     read_stream,
 )
 
@@ -64,6 +65,25 @@ def test_parse_event_stream_error_event() -> None:
     parsed = parse_event_stream(_sse_bytes(events))
     assert parsed.error is not None
     assert "boom" in parsed.error
+
+
+def test_parse_json_message_reads_an_unsuccessful_body_as_the_error() -> None:
+    """OpenRouter's compatibility layer sends the error object itself, not one in `error`."""
+    data = {
+        "type": "not_found_error",
+        "message": "0 endpoints out of 1 requested are available",
+        "error_type": "not_found",
+    }
+    parsed = parse_json_message(data, status=404)
+    assert parsed.error == json.dumps(data)
+    assert parsed.model is None
+
+
+def test_a_successful_body_is_never_read_as_an_error() -> None:
+    """A body with a `message` field is an answer when the status says so."""
+    parsed = parse_json_message({"id": "m", "model": "x", "message": "hello"}, status=200)
+    assert parsed.error is None
+    assert parsed.model == "x"
 
 
 def test_parse_event_stream_ignores_non_data_and_done_lines() -> None:

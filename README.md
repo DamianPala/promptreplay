@@ -90,8 +90,8 @@ What the columns mean:
 | `eff $/M` | What a prompt token costs at that hit rate: `(1 − h)·input + h·cache read`, `h = hit % × prefix %` |
 | `in $/M` | The listed input price that calculation used: the OpenRouter endpoint's, or `targets.toml`'s |
 | `cold ms` / `warm ms` | The first rung's cold and warm prefill; the gap is what the cache saved |
-| `TTFT ms` / `tok/s` | Time to the first streamed output token, and output tokens per second after it; the median over the spec's rungs, so one slow rung cannot set the number |
-| `errors` | Requests that produced no usable answer |
+| `TTFT ms` / `tok/s` | Time to the first streamed output token, and output tokens per second after it; the median over the spec's rungs, so one slow rung cannot set the number. A provider that buffers the answer and flushes it whole leaves no generation window to divide, so its `tok/s` is `-` and the spec's notes say `burst delivery on rung N` |
+| `errors` | Requests that produced no usable answer; when every cold write failed the same way, the notes under the tables say what the provider called it — `skipped, not_found: Paid model training violation (account settings)` for an endpoint the account's OpenRouter settings exclude |
 | `drift` | Short markers versus the reference spec: `provider` (the served provider differs from the pinned one, or varies), `model` (the response model differs or varies), `tokens±N%` (prompt size differs by ≥ 1 %); `-` when nothing drifts |
 | `hits` | One cell per warm read: `x` failed, `1` from 0.98 up, else the cached fraction (`0.9` = a 90 % prefix) |
 | `ttft ms` / `tok/s` | The same two numbers per rung, taken from that rung's streamed request |
@@ -100,9 +100,11 @@ What the columns mean:
 
 When every spec shares one `target:model`, the tables move it into a `specs:` line above them
 and the `spec` column shows just the provider tails (`@novita`, `@gmicloud`); a spec of
-another model keeps its whole name. The tables are planned to fit 120 columns without
-shortening two rows into the same name; a rung that carries a late `--ttl` read is the one
-thing allowed to run longer, because that marker is worth the columns.
+another model keeps its whole name: that row is the reference the `@tags` are compared
+against, so it wins the width it needs to stay readable. The tables are planned to fit 120
+columns without shortening two rows into the same name; a rung that carries a late `--ttl`
+read is allowed to run longer, because that marker is worth the columns, and so is a table
+whose reference row had to be wider than the budget.
 
 A run is persisted under `runs/<trace>/<timestamp>/` as the options, the endpoint snapshot
 and prices it was priced with, and one `<spec>.jsonl` per spec; `report` re-reads it with no
