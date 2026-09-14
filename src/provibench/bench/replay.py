@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from provibench.bench.enrich import enrich_anthropic, enrich_openrouter
 from provibench.bench.nonce import inject_nonce, require_stampable, run_nonce
+from provibench.bench.prices import PriceTable
 from provibench.bench.pricing import CostBreakdown
 from provibench.bench.requests import build_headers, parse_body, post, should_retry_without_thinking
 from provibench.bench.targets import RunSpec, resolve_api_key
@@ -189,6 +190,7 @@ async def replay_run(
     client: httpx.AsyncClient,
     run_hex: str,
     on_progress: Callable[[ReplayResult], None] | None = None,
+    table: PriceTable | None = None,
 ) -> list[ReplayResult]:
     nonce = None if opts.warm else run_nonce(run_hex)
     results: list[ReplayResult] = []
@@ -203,7 +205,7 @@ async def replay_run(
     if spec.target.kind == "openrouter":
         await enrich_openrouter(spec, results, client, api_key)
     else:
-        enrich_anthropic(spec, results)
+        enrich_anthropic(spec, results, table)
     return results
 
 
@@ -215,6 +217,7 @@ async def replay_all(
     *,
     run_hex: str,
     on_progress: Callable[[ReplayResult], None] | None = None,
+    table: PriceTable | None = None,
 ) -> dict[str, list[ReplayResult]]:
     # Resolve keys and check the nonce up front: both fail before any request is sent.
     api_keys = {spec.label: resolve_api_key(spec.target, env) for spec in specs}
@@ -234,6 +237,7 @@ async def replay_all(
                     client=client,
                     run_hex=run_hex,
                     on_progress=on_progress,
+                    table=table,
                 )
                 for spec in specs
             )

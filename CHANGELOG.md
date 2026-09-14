@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `invalid_input` refusal across traces or protocols unless `--force`
 - `--force` for `report`'s `--md` and `--html` and for `scrub --out`, which are otherwise
   refused when the target exists
+- Native prices from LiteLLM's community table, cached under `$XDG_CACHE_HOME` and refetched
+  weekly or on `provibench prices --update`; `targets.toml` `prices` entries override it, and
+  every estimate names its price source (`table`, `litellm` or `openrouter-endpoint`)
 
 ### Changed
 

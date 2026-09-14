@@ -5,15 +5,36 @@ import json
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import pytest
 
 from provibench.app import main
 from provibench.core.context import Process, Streams
 from provibench.core.documents import Document, as_document
+
+FIXTURE_TABLE = Path(__file__).parent / "fixtures" / "litellm-prices.json"
+"""A trimmed real capture of LiteLLM's `model_prices_and_context_window.json`."""
+
+
+@pytest.fixture(autouse=True)
+def no_price_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test reaches the LiteLLM table over the network; the fetch boundary fails instead.
+
+    The failure is the offline case the cache policy is built for, so a test that never
+    installs a copy exercises the `n/a` path. A test that wants real prices calls
+    `install_price_cache` (the fixture table as the cached copy) or replaces
+    `provibench.bench.prices.fetch_payload` with its own fetcher.
+    """
+
+    async def offline(client: httpx.AsyncClient) -> dict[str, object]:
+        raise httpx.ConnectError("no network in tests", request=client.build_request("GET", "x"))
+
+    monkeypatch.setattr("provibench.bench.prices.fetch_payload", offline)
 
 
 class FakeClock:
@@ -125,6 +146,20 @@ def clock() -> FakeClock:
 @pytest.fixture
 def cli(tmp_path: Path, clock: FakeClock) -> Cli:
     return Cli(tmp_path, clock)
+
+
+def install_price_cache(cli: Cli, *, age_s: float = 0.0) -> Path:
+    """The fixture table as this invocation's cached LiteLLM copy, `age_s` seconds old.
+
+    Age is an mtime, which is what the freshness rule reads: a copy stamped a week and a
+    day back is refetched even though it was written a moment ago.
+    """
+    path = cli.home / ".cache" / "provibench" / "litellm-prices.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(FIXTURE_TABLE.read_text(encoding="utf-8"), encoding="utf-8")
+    stamp = time.time() - age_s
+    os.utime(path, (stamp, stamp))
+    return path
 
 
 @dataclass(frozen=True)
