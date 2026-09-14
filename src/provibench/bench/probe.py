@@ -79,8 +79,17 @@ async def run_probe(
     env: Mapping[str, str],
     *,
     on_progress: Callable[[ProbeResult], None] | None = None,
+    parallel: int = 1,
 ) -> ProbeRun:
-    """Send every rung of every spec, one spec at a time, rungs in order."""
+    """Send every rung of every spec, rungs in order, up to `parallel` specs at a time.
+
+    A spec is sequential from its cold write to its last TTL read — the protocol is a
+    timeline, and overlapping its own requests would measure nothing. Concurrency is only
+    ever across specs, which are independent: they hit different providers, so neither the
+    cache they write nor the wall clock they take can leak into another spec's numbers.
+    What does move is latency: with `parallel` above one the prefill and TTFT medians sit
+    next to requests from elsewhere on the same connection pool.
+    """
     # Resolve keys and check the nonce up front: both fail before any request is sent.
     api_keys = {spec.label: resolve_api_key(spec.target, env) for spec in specs}
     resolved = options.resolved(entries)
@@ -98,24 +107,53 @@ async def run_probe(
         rungs=resolved.rungs or [],
         counts=resolved.repeats,
     )
-    records: dict[str, list[ProbeResult]] = {}
     timeout = httpx.Timeout(resolved.timeout_s, connect=30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        for spec in specs:
-            probe = ProbeContext(
-                spec=spec,
-                opts=resolved.replay_options(),
-                api_key=api_keys[spec.label],
-                client=client,
-                throughput=resolved.throughput,
-                ttl_s=resolved.ttl_s,
-                progress=on_progress,
+        gate = asyncio.Semaphore(max(1, parallel))
+        probed = await asyncio.gather(
+            *(
+                _probe_one(
+                    spec,
+                    client=client,
+                    gate=gate,
+                    run=run,
+                    entries=entries,
+                    options=resolved,
+                    api_key=api_keys[spec.label],
+                    on_progress=on_progress,
+                )
+                for spec in specs
             )
-            outcomes: list[ProbeOutcome] = []
-            await _probe_spec(probe, run, entries, outcomes)
-            await _enrich(probe, outcomes)
-            records[spec.label] = [outcome.record for outcome in outcomes]
-    return ProbeRun(run_hex=run.run_hex, options=resolved, records=records)
+        )
+    return ProbeRun(run_hex=run.run_hex, options=resolved, records=dict(probed))
+
+
+async def _probe_one(
+    spec: RunSpec,
+    *,
+    client: httpx.AsyncClient,
+    gate: asyncio.Semaphore,
+    run: _Run,
+    entries: Sequence[TraceEntry],
+    options: ProbeOptions,
+    api_key: str,
+    on_progress: Callable[[ProbeResult], None] | None,
+) -> tuple[str, list[ProbeResult]]:
+    """One spec start to finish, holding one of the run's concurrency slots."""
+    async with gate:
+        probe = ProbeContext(
+            spec=spec,
+            opts=options.replay_options(),
+            api_key=api_key,
+            client=client,
+            throughput=options.throughput,
+            ttl_s=options.ttl_s,
+            progress=on_progress,
+        )
+        outcomes: list[ProbeOutcome] = []
+        await _probe_spec(probe, run, entries, outcomes)
+        await _enrich(probe, outcomes)
+    return spec.label, [outcome.record for outcome in outcomes]
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,6 +15,7 @@ from provibench.commands.record import record as record_command
 from provibench.commands.replay import replay as replay_command
 from provibench.commands.report import report as report_command
 from provibench.commands.scrub import scrub as scrub_command
+from provibench.commands.sweep import sweep as sweep_command
 from provibench.core.clock import SystemClock
 from provibench.core.completion import completion_command
 from provibench.core.config_command import config_group
@@ -85,6 +86,7 @@ def build_cli() -> Root:
     root.add_command(record_command)
     root.add_command(inspect_command)
     root.add_command(probe_command)
+    root.add_command(sweep_command)
     root.add_command(replay_command)
     root.add_command(report_command)
     root.add_command(scrub_command)

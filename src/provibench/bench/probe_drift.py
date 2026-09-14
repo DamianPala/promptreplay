@@ -44,6 +44,7 @@ def apply_drift(
     pinned = [list(spec.providers) for spec in specs] if specs is not None else []
     reference = next((index for index, kind in enumerate(kinds) if kind != "openrouter"), 0)
     ref_requested = _requested(pinned, reference)
+    ref_kind = _kind(kinds, reference)
     ref_rung = largest(summaries[reference])
     ref_models = models_of(summaries[reference])
     for index, summary in enumerate(summaries):
@@ -54,7 +55,12 @@ def apply_drift(
         summary.drift = (
             None
             if index == reference
-            else _markers(summary, _requested(pinned, index) or ref_requested, ref_models)
+            else _markers(
+                summary,
+                _requested(pinned, index) or ref_requested,
+                ref_models,
+                same_kind=_kind(kinds, index) == ref_kind,
+            )
         )
     return list(summaries)
 
@@ -97,8 +103,17 @@ def _requested(pinned: Sequence[list[str]], index: int) -> list[str]:
     return list(pinned[index]) if index < len(pinned) else []
 
 
+def _kind(kinds: Sequence[str], index: int) -> str | None:
+    """A spec's target kind, or `None` when the caller gave no specs to read it from."""
+    return kinds[index] if index < len(kinds) else None
+
+
 def _markers(
-    summary: ProbeSummary, requested: Sequence[str], ref_models: Sequence[str]
+    summary: ProbeSummary,
+    requested: Sequence[str],
+    ref_models: Sequence[str],
+    *,
+    same_kind: bool,
 ) -> str | None:
     """The short drift markers for one spec: provider, model, tokens.
 
@@ -111,7 +126,7 @@ def _markers(
     markers: list[str] = []
     if _provider_drift(summary, requested):
         markers.append("provider")
-    if _model_drift(models_of(summary), ref_models):
+    if _model_drift(models_of(summary), ref_models, same_kind=same_kind):
         markers.append("model")
     delta = summary.tokens_delta_pct
     if delta is not None and abs(delta) >= DRIFT_TOKENS_PCT:
@@ -130,10 +145,16 @@ def _provider_drift(summary: ProbeSummary, requested: Sequence[str]) -> bool:
     return all(normalize_provider(name) not in wanted for name in served)
 
 
-def _model_drift(seen: Sequence[str], ref_seen: Sequence[str]) -> bool:
-    """The responses named more than one model, or a model the reference did not name."""
+def _model_drift(seen: Sequence[str], ref_seen: Sequence[str], *, same_kind: bool) -> bool:
+    """The responses named more than one model, or a model the reference did not name.
+
+    A native endpoint and a gateway of the same weights answer with different `model`
+    strings — `deepseek-flash` against `deepseek/deepseek-v4.1-flash` — so across kinds
+    only a spec that varies within itself is a marker. Within one kind the strings are
+    comparable, and a spec that names another model is the drift the column is for.
+    """
     if len(seen) > 1:
         return True
-    if not seen or not ref_seen:
+    if not same_kind or not seen or not ref_seen:
         return False
     return seen[0] != ref_seen[0]

@@ -22,6 +22,21 @@ from provibench.bench.replay import RunRef
 from provibench.bench.targets import RunSpec
 
 
+class SweepInfo(BaseModel):
+    """What a `sweep` covered: the model slug, the gateway target, and the tag filters.
+
+    Recorded so a reader of one run directory can tell which endpoints the run chose for
+    itself — a sweep of `deepseek/deepseek-v4.1-flash` with `--exclude siliconflow` is a
+    different measurement from the same command without it, and the spec list alone does
+    not say which filter produced it.
+    """
+
+    model: str
+    target: str
+    included: list[str] = Field(default_factory=list)
+    excluded: list[str] = Field(default_factory=list)
+
+
 class ProbeRunMeta(BaseModel):
     """The `run.json` of a persisted probe run."""
 
@@ -37,9 +52,11 @@ class ProbeRunMeta(BaseModel):
     endpoints: dict[str, list[Endpoint]] = Field(default_factory=dict)
     prices: dict[str, SpecPrices] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
+    sweep: SweepInfo | None = None
+    """The sweep this run expanded from; `None` for a run whose specs were given by hand."""
 
 
-def write_probe_run(
+def write_probe_run(  # noqa: PLR0913 (one keyword per part of the record it writes)
     runs_dir: Path,
     trace_name: str,
     conversation: str,
@@ -49,6 +66,7 @@ def write_probe_run(
     endpoints: Mapping[str, list[Endpoint]] | None = None,
     prices: Mapping[str, SpecPrices] | None = None,
     notes: Sequence[str] = (),
+    sweep: SweepInfo | None = None,
 ) -> Path:
     """Write one `<slug>.jsonl` per spec plus the run's `run.json`."""
     created = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
@@ -84,6 +102,7 @@ def write_probe_run(
         endpoints=dict(endpoints or {}),
         prices=dict(prices or {}),
         notes=list(notes),
+        sweep=sweep,
     )
     (run_dir / "run.json").write_text(meta.model_dump_json(indent=2) + "\n", encoding="utf-8")
     return run_dir

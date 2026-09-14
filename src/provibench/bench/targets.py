@@ -11,6 +11,7 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel, Field
 
 _SLUG_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
+_PRESET_PREFIX = "preset/"
 
 
 class Prices(BaseModel):
@@ -28,6 +29,8 @@ class Target(BaseModel):
     api_key_env: str
     kind: Literal["openrouter", "anthropic"]
     prices: dict[str, Prices] = Field(default_factory=dict)
+    aliases: dict[str, str] = Field(default_factory=dict)
+    """`"<openrouter slug>" = "<native model>"`, so a sweep of the slug also probes this target."""
 
 
 def load_targets(path: Path) -> dict[str, Target]:
@@ -54,6 +57,7 @@ def load_targets(path: Path) -> dict[str, Target]:
                 api_key_env=fields["api_key_env"],
                 kind=fields["kind"],
                 prices=fields.get("prices", {}),
+                aliases=fields.get("aliases", {}),
             )
         except KeyError as exc:
             raise ValueError(f"{path}: targets.{name} missing key {exc}") from exc
@@ -85,15 +89,17 @@ class RunSpec(BaseModel):
 
 
 def _split_providers(rest: str) -> tuple[str, list[str]]:
-    """Split "<model>[@p1,p2]" on the LAST '@' whose suffix contains no '/'.
+    """Split "<model>[@p1,p2]" on the LAST '@' whose suffix is not a preset.
 
-    A model id may itself contain '@' (e.g. an OpenRouter preset like
-    "model@preset/foo"); such a suffix has a '/' in it and is not a provider list.
+    A model id may itself carry an OpenRouter preset (`model@preset/foo`), and that suffix
+    stays part of the model. It is the `preset/` prefix that says so, not a slash anywhere
+    in the suffix: a provider tag may hold one too (`@novita/fp8`), and a pin this parser
+    dropped would be a silently unpinned request against a model name that does not exist.
     """
     at = rest.rfind("@")
     while at != -1:
         candidate = rest[at + 1 :]
-        if "/" not in candidate:
+        if not candidate.startswith(_PRESET_PREFIX):
             model = rest[:at]
             providers = [p.strip() for p in candidate.split(",") if p.strip()]
             return model, providers

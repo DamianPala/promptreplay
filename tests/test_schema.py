@@ -28,6 +28,7 @@ EXPECTED_COMMANDS = {
     "replay": ("non_idempotent", True, False),
     "report": ("idempotent", False, False),
     "scrub": ("idempotent", False, False),
+    "sweep": ("non_idempotent", True, False),
 }
 
 
@@ -197,6 +198,7 @@ _SUCCESS_ARGV: dict[str, list[str]] = {
     "report": ["fixture-run"],
     # --force: the schema check runs every command twice, with --json in each position.
     "scrub": ["fixture", "--out", "scrubbed.jsonl", "--force"],
+    "sweep": ["probe-fixture", "fake/model", "--yes"],
 }
 
 
@@ -248,6 +250,8 @@ def _seed_domain_fixtures(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
     targets_path.write_text(
         '[targets.t]\nurl = "https://x.test/v1/messages"\napi_key_env = "X_KEY"\n'
         'kind = "anthropic"\n'
+        '[targets.or]\nurl = "https://openrouter.test/v1/messages"\n'
+        'api_key_env = "OR_KEY"\nkind = "openrouter"\n'
     )
 
     target = Target(

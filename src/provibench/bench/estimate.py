@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import BaseModel, Field
 
+from provibench.bench.labels import column_labels
 from provibench.bench.openrouter import normalize_provider
 from provibench.bench.probe_models import ProbeOptions
 from provibench.bench.probe_stream import STREAM_MAX_TOKENS
@@ -206,8 +207,19 @@ def estimate_total(estimates: Sequence[SpecEstimate]) -> float | None:
 
 
 def render_estimate(estimates: Sequence[SpecEstimate]) -> str:
-    """A fixed-width table of the estimates and their total; `n/a` where unknown."""
-    rows = [_estimate_row(estimate) for estimate in estimates]
+    """A fixed-width table of the estimates and their total; `n/a` where unknown.
+
+    The spec column is the one the probe tables draw: a shared `target:model` moves into a
+    caption above the table and the rows keep their `@provider` tails whole, so a sweep's
+    16 endpoints are told apart here too — a label cut in the middle reads as another
+    endpoint, and this is the table a reader checks before paying for the run.
+    """
+    caption, labels = column_labels(
+        [estimate.label for estimate in estimates], label_width=_LABEL_WIDTH
+    )
+    rows = [
+        _estimate_row(estimate, label) for estimate, label in zip(estimates, labels, strict=True)
+    ]
     total = estimate_total(estimates)
     rows.append(
         [
@@ -228,22 +240,18 @@ def render_estimate(estimates: Sequence[SpecEstimate]) -> str:
     lines.extend(_join(row, widths) for row in rows)
     lines.append(_NOTE)
     lines.extend(f"note: {note}" for estimate in estimates for note in estimate.notes)
-    return "\n".join(lines)
+    return "\n".join([caption, *lines] if caption is not None else lines)
 
 
-def _estimate_row(estimate: SpecEstimate) -> list[str]:
+def _estimate_row(estimate: SpecEstimate, label: str) -> list[str]:
     price = estimate.prices.prices.input if estimate.prices is not None else None
     return [
-        _clip(estimate.label, _LABEL_WIDTH),
+        label,
         f"{estimate.tokens:,}" if estimate.tokens_known else "n/a",
         f"{price:.3f}" if price is not None else "n/a",
         estimate.prices.source if estimate.prices is not None else "n/a",
         f"{estimate.usd:.4f}" if estimate.usd is not None else "n/a",
     ]
-
-
-def _clip(cell: str, width: int) -> str:
-    return cell if len(cell) <= width else f"{cell[: width - 1]}…"
 
 
 def _join(cells: Sequence[str], widths: Sequence[int]) -> str:

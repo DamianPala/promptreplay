@@ -42,6 +42,22 @@ def test_parse_run_spec_preset_suffix_stays_in_model() -> None:
     assert spec.providers == []
 
 
+def test_parse_run_spec_provider_tag_with_a_slash_is_a_pin() -> None:
+    """`@novita/fp8` is an endpoint tag, not a model: dropping it would unpin the request."""
+    targets = {"openrouter": _target()}
+    spec = parse_run_spec("openrouter:deepseek/deepseek-v4.1-flash@novita/fp8", targets)
+    assert spec.model == "deepseek/deepseek-v4.1-flash"
+    assert spec.providers == ["novita/fp8"]
+    assert spec.label == "openrouter:deepseek/deepseek-v4.1-flash@novita/fp8"
+
+
+def test_parse_run_spec_preset_model_can_still_be_pinned() -> None:
+    targets = {"openrouter": _target()}
+    spec = parse_run_spec("openrouter:model@preset/foo@novita/fp8", targets)
+    assert spec.model == "model@preset/foo"
+    assert spec.providers == ["novita/fp8"]
+
+
 def test_parse_run_spec_unknown_target_lists_known() -> None:
     with pytest.raises(ValueError, match=r"unknown target.*deepseek"):
         parse_run_spec("nope:model", {"deepseek": _target("deepseek", "anthropic")})
@@ -88,6 +104,50 @@ output = 0.60
     assert set(targets) == {"openrouter", "deepseek"}
     assert targets["deepseek"].prices["deepseek-flash"].input == 0.15
     assert targets["openrouter"].prices == {}
+
+
+def test_load_targets_parses_aliases(tmp_path: Path) -> None:
+    """`[targets.<name>.aliases]` says which own model an OpenRouter slug means."""
+    path = tmp_path / "targets.toml"
+    path.write_text(
+        '[targets.deepseek]\nurl = "https://x"\napi_key_env = "K"\nkind = "anthropic"\n'
+        "\n[targets.deepseek.aliases]\n"
+        '"deepseek/deepseek-v4.1-flash" = "deepseek-flash"\n'
+        '"deepseek/deepseek-v4-flash-0731" = "deepseek-flash-0731"\n'
+    )
+    targets = load_targets(path)
+    assert targets["deepseek"].aliases == {
+        "deepseek/deepseek-v4.1-flash": "deepseek-flash",
+        "deepseek/deepseek-v4-flash-0731": "deepseek-flash-0731",
+    }
+
+
+def test_load_targets_without_aliases_leaves_the_table_empty(tmp_path: Path) -> None:
+    path = tmp_path / "targets.toml"
+    path.write_text(
+        '[targets.deepseek]\nurl = "https://x"\napi_key_env = "K"\nkind = "anthropic"\n'
+    )
+    assert load_targets(path)["deepseek"].aliases == {}
+
+
+def test_load_targets_rejects_an_alias_that_is_not_a_model_name(tmp_path: Path) -> None:
+    path = tmp_path / "targets.toml"
+    path.write_text(
+        '[targets.deepseek]\nurl = "https://x"\napi_key_env = "K"\nkind = "anthropic"\n'
+        '\n[targets.deepseek.aliases]\n"deepseek/deepseek-v4.1-flash" = 1\n'
+    )
+    with pytest.raises(ValueError, match=r"targets\.deepseek"):
+        load_targets(path)
+
+
+def test_the_packaged_targets_alias_the_deepseek_slug() -> None:
+    """A fresh install can sweep a slug and get the native endpoint's own row."""
+    from importlib import resources
+
+    packaged = resources.files("provibench.data").joinpath("targets.toml")
+    with resources.as_file(packaged) as path:
+        targets = load_targets(path)
+    assert targets["deepseek"].aliases["deepseek/deepseek-v4.1-flash"] == "deepseek-flash"
 
 
 def test_load_targets_missing_key_raises_with_path_and_key(tmp_path: Path) -> None:

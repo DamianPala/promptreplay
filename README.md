@@ -28,9 +28,9 @@ provibench config show             # effective settings and their source
 provibench completion --install    # shell completions
 ```
 
-`record`, `inspect`, `probe`, `replay`, `report`, `scrub`, and `endpoints` are the domain
-commands built on top of `src/provibench/bench/`; see [docs/design.md](docs/design.md) for
-the full design (trace/replay format, `targets.toml`, cost model).
+`record`, `inspect`, `probe`, `sweep`, `replay`, `report`, `scrub`, and `endpoints` are the
+domain commands built on top of `src/provibench/bench/`; see [docs/design.md](docs/design.md)
+for the full design (trace/replay format, `targets.toml`, cost model).
 
 ## Probe
 
@@ -76,7 +76,10 @@ provibench report latest
 providers in one run. Before sending anything, `probe` prints the worst case per spec —
 every prompt token at the listed input price and the throughput request's output tokens at
 the output price, assuming no cache hit — and `--budget` refuses to run above it, because
-weak resellers bill close to that number.
+weak resellers bill close to that number. Its spec column is the tables' one, caption and
+all, so the rows of a 16-endpoint sweep are told apart before the run is paid for; the
+refusal's hint names the ways to fit a budget: fewer specs or rungs, lower `--repeats`, or
+`--no-throughput`.
 
 What the columns mean:
 
@@ -106,6 +109,47 @@ and prices it was priced with, and one `<spec>.jsonl` per spec; `report` re-read
 network. `--json` prints the same summaries for scripts, including the fields the terminal
 tables leave out: the served provider names (`served`), every model the responses named
 (`models_seen`), and the raw per-rung records the columns are folded from.
+
+## Sweep
+
+`probe` measures the specs you name; `sweep` names them for you. It answers "which reseller
+should I use for this model this week" in one command: it lists the model's OpenRouter
+endpoints, probes one spec per endpoint, adds a spec for every native target that carries
+the model, and orders the table by the effective price it measured.
+
+```sh
+provibench sweep sample deepseek/deepseek-v4.1-flash --parallel 4 --budget 3
+provibench sweep sample deepseek/deepseek-v4.1-flash --exclude siliconflow --yes
+provibench sweep sample deepseek/deepseek-v4.1-flash --yes --json >> sweeps.ndjson
+```
+
+Every endpoint becomes a spec pinned to its tag (`@novita`, `@novita/fp8`) — the exact form
+`probe` takes by hand, so the two measure the same endpoint the same way; `provibench
+endpoints MODEL` prints the tags. `--include` and `--exclude` filter by tag prefix, so
+`--include novita` keeps `novita/fp8` too; a tag no endpoint has is an error rather than a
+silently thinner run, and so is a filter that leaves nothing to probe.
+
+Native targets join the sweep through `[targets.<name>.aliases]`, which maps an OpenRouter
+slug to the name that target serves it under:
+
+```toml
+[targets.deepseek.aliases]
+"deepseek/deepseek-v4.1-flash" = "deepseek-flash"
+```
+
+`--target NAME` picks which `kind = "openrouter"` target is swept (the first one in
+`targets.toml` by default). Everything after the spec list is the probe: the same estimate
+and `--budget`, the same confirmation, the same `runs/<trace>/<timestamp>/` record — plus a
+`sweep` block naming the model, the target and the filters — and the same two tables. A
+sweep is the one run that sorts them: by effective $/M ascending, ties to the higher hit
+rate, so the first row is the endpoint to use and the rest are the alternatives.
+
+`--parallel N` probes up to N specs at once. Specs do not share a cache — they are different
+providers — so nothing leaks between them, and one spec is always sequential because its
+requests are a timeline. What does move is the wall clock: with several specs in flight the
+prefill and TTFT numbers sit next to other traffic on the same connection pool, which is
+worth a rerun at `--parallel 1` before believing a latency difference of a few
+milliseconds.
 
 ## Full replay
 

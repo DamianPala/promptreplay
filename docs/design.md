@@ -85,6 +85,13 @@ cache_write = 0.15
 output = 0.60
 ```
 
+`aliases` maps an OpenRouter slug to the model this target serves it under, and is how `sweep`
+knows to include a native endpoint: `provibench sweep TRACE deepseek/deepseek-v4.1-flash`
+adds a spec for the native endpoint of every `kind = "anthropic"` target that aliases the
+slug, and nothing for the targets that do not. A native target without an entry is still
+reachable by naming it in a run spec (`deepseek:deepseek-flash`); the alias is what makes
+`sweep` expand to it.
+
 A run spec on the command line is `<target>:<model>[@<provider>[,<provider>...]]`:
 
 ```

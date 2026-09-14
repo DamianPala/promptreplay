@@ -11,17 +11,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from provibench.bench.labels import column_labels, elide, named, rendered
 from provibench.bench.probe_summary import ProbeSummary, RungSummary, TtlRead
 
 _HIT_FULL = 0.98
 """A cached fraction at or above this renders as a full hit: Claude Code moves the marker."""
 _MAX_CELL = 40
-"""Longest label or drift cell rendered before it is elided."""
+"""Longest drift cell rendered before it is elided; the label is planned from the budget."""
 _LABEL_FLOOR = 16
 """Narrowest label column: below this a row loses the name it is read by."""
 _MIN_DRIFT = 9
 """Narrowest drift column that still shows at least one whole marker."""
-_ELLIPSIS = "…"
 _SEPARATOR = " | "
 _MAX_TABLE = 120
 """The width both tables are planned to fit: the brief's acceptance line."""
@@ -88,7 +88,7 @@ def _blocks(summaries: Sequence[ProbeSummary], *, markdown: bool) -> list[str]:
     rungs = [rung for summary in summaries for rung in summary.rungs]
     rung_columns = _rung_columns(rungs)
     label_width, drift_width = _planned_widths(summaries, rung_columns)
-    caption, labels = column_labels(summaries, label_width=label_width)
+    caption, labels = _labels_of(summaries, label_width=label_width)
     rows = zip(summaries, labels, strict=True)
     run_rows = [_run_cells(summary, label, drift_width) for summary, label in rows]
     rung_rows = _rung_rows(summaries, labels, rung_columns)
@@ -97,65 +97,11 @@ def _blocks(summaries: Sequence[ProbeSummary], *, markdown: bool) -> list[str]:
     return [caption, *blocks] if caption is not None else blocks
 
 
-def column_labels(
-    summaries: Sequence[ProbeSummary], *, label_width: int = _MAX_CELL
+def _labels_of(
+    summaries: Sequence[ProbeSummary], *, label_width: int
 ) -> tuple[str | None, list[str]]:
-    """The caption and the spec column of every row, as one shared decision.
-
-    A `target:model` that at least two specs share moves into the caption, so those rows
-    show their provider tails (`@novita`, `@gmicloud`) while a spec of another model keeps
-    its own name. Both tables take the result, so a rung row is readable next to its spec
-    row. The caption may name several shared prefixes; when nothing is shared there is no
-    caption and every row keeps its whole label. A shortened set that repeats is thrown
-    away: two rows reading the same string name neither of them.
-    """
-    labels = [summary.label for summary in summaries]
-    heads = [_head(label) for label in labels]
-    shared = sorted({head for head in heads if head and heads.count(head) > 1})
-    column = [
-        _short_label(label, head, shared, label_width)
-        for label, head in zip(labels, heads, strict=True)
-    ]
-    if len(set(column)) != len(column):
-        shared = []
-        column = [_elide(label, label_width) for label in labels]
-    caption = "specs: " + ", ".join(f"{head}@<provider>" for head in shared) if shared else None
-    return caption, column
-
-
-def _head(label: str) -> str:
-    """A label's `target:model` part, without its `@provider` suffix."""
-    head, at, _ = label.rpartition("@")
-    return head if at else label
-
-
-def _short_label(label: str, head: str, shared: Sequence[str], width: int) -> str:
-    """`label` without the shared head, or whole when this spec's model is its own."""
-    tail = label[len(head) :] if head in shared else ""
-    return _elide(tail or label, width)
-
-
-def _elide(cell: str, width: int, *, keep_end: bool = True) -> str:
-    """`cell` cut to `width` with the middle dropped: `openrouter:deepseek/…@novita`.
-
-    A label's provider suffix is its shortest distinguishing part, so it survives whole and
-    the head keeps what is left. A label without one keeps both of its ends instead: its
-    model sits at the end and its target at the start, and cutting either loses the pair of
-    names that tell one row from another. `keep_end=False` is for a cell whose start is what
-    matters — a comma-separated list of drift markers — and cuts its tail.
-    """
-    if len(cell) <= width:
-        return cell
-    if not keep_end:
-        return f"{cell[: width - len(_ELLIPSIS)]}{_ELLIPSIS}"
-    at = cell.rfind("@")
-    if at > 0:
-        tail = cell[at:]
-        keep = width - len(tail) - len(_ELLIPSIS)
-        if keep >= 1:
-            return f"{cell[:keep]}{_ELLIPSIS}{tail}"
-    head = max(1, (width - len(_ELLIPSIS)) // 3)
-    return f"{cell[:head]}{_ELLIPSIS}{cell[-(width - len(_ELLIPSIS) - head) :]}"
+    """The caption and the spec column of every row: the shared decision, on the labels."""
+    return column_labels([summary.label for summary in summaries], label_width=label_width)
 
 
 def _planned_widths(
@@ -163,42 +109,50 @@ def _planned_widths(
 ) -> tuple[int, int]:
     """The label and drift widths that hold both tables inside `_MAX_TABLE` columns.
 
-    The spec table's own columns need most of the width, so the label and drift split what
-    is left. The label is as wide as that budget allows, because the wider it is the more of
-    each row's name survives; the drift takes the rest, and the label narrows — but no
-    further than `_LABEL_FLOOR` — until the drift can show a whole marker and both tables
-    fit. A width that would name two rows alike is skipped.
+    The label is planned as wide as the budget allows — it is the column a row is looked up
+    by, and every column it gets back is one fewer name cut short — and the drift is then
+    measured against the label column that actually renders, not against the plan. A shared
+    `target:model` in the caption leaves the rows with `@provider` tails, and the columns
+    the label column does not use are the drift's rather than nobody's: a drift cell is one
+    short marker, `provider,tokens+3%`, and it is worth showing whole.
 
-    A row wider than `_MAX_TABLE` is still possible: a late TTL read writes `(+6)` into the
-    rung table, and that is worth the extra columns. The label is never cut to pay for it.
+    A width that would name two rows alike is skipped, and the label is never cut below
+    `_LABEL_FLOOR` — past that a readable name beats the column budget. A row wider than
+    `_MAX_TABLE` is still possible: a late TTL read writes `(+6)` into the rung table, and
+    so does a drift column squeezed under its floor, which is worth the columns too.
     """
-    room = min(
-        _MAX_TABLE - _drift_width(0, summaries),
+    budget = min(
+        _MAX_TABLE - _spec_middle(summaries) - _MIN_DRIFT,
         _MAX_TABLE - _rung_span(summaries, rung_columns),
     )
-    for width in range(min(_MAX_CELL, max(room, _LABEL_FLOOR)), _LABEL_FLOOR - 1, -1):
-        drift = _drift_width(width, summaries)
-        if drift < _MIN_DRIFT:
-            continue
-        if _named(column_labels(summaries, label_width=width)[1]):
-            return width, drift
+    for width in range(max(budget, _LABEL_FLOOR), _LABEL_FLOOR - 1, -1):
+        labels = _labels_of(summaries, label_width=width)[1]
+        if named(labels):
+            return width, _drift_width(rendered(labels), summaries)
     # nothing fits and names every row; a readable name beats the column budget
-    return _LABEL_FLOOR, max(_MIN_DRIFT, _drift_width(_LABEL_FLOOR, summaries))
-
-
-def _named(labels: Sequence[str]) -> bool:
-    """Whether every row still has a name of its own after the cut."""
-    return len(set(labels)) == len(labels)
+    labels = _labels_of(summaries, label_width=_LABEL_FLOOR)[1]
+    return _LABEL_FLOOR, _drift_width(rendered(labels), summaries)
 
 
 def _drift_width(label_width: int, summaries: Sequence[ProbeSummary]) -> int:
-    """What is left for drift once the label column and every other column is paid for."""
-    fixed = _columns_span(
+    """What is left for drift once the label column and every other column is paid for.
+
+    Never under `_MIN_DRIFT`: a column that cannot show one whole marker is not worth the
+    columns it would render in, so a table squeezed past that runs wide instead. This is
+    reachable whenever the other columns are wide enough that the label's floor costs more
+    than the budget has left for drift.
+    """
+    leftover = _MAX_TABLE - _spec_middle(summaries) - label_width
+    return max(_MIN_DRIFT, min(_MAX_CELL, leftover))
+
+
+def _spec_middle(summaries: Sequence[ProbeSummary]) -> int:
+    """The spec table's width without its label and drift cells, every separator counted."""
+    return _columns_span(
         _RUN_COLUMNS,
         [_run_cells(summary, _PLACEHOLDER, _MAX_CELL) for summary in summaries],
         skip=(0, len(_RUN_COLUMNS) - 1),
     )
-    return min(_MAX_CELL, _MAX_TABLE - fixed - label_width)
 
 
 def _columns_span(
@@ -255,7 +209,7 @@ def _run_cells(summary: ProbeSummary, label: str, drift_width: int) -> list[str]
         _ms(summary.ttft_ms),
         _tok_s(summary.gen_tok_s),
         str(summary.errors),
-        _elide(summary.drift or "-", drift_width, keep_end=False),
+        elide(summary.drift or "-", drift_width, keep_end=False),
     ]
 
 

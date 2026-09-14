@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from provibench.bench.estimate import SpecPrices
+from provibench.bench.labels import column_labels
 from provibench.bench.nonce import inject_nonce, probe_nonce, require_stampable, run_nonce
 from provibench.bench.probe import (
     ProbeOptions,
@@ -33,7 +34,7 @@ from provibench.bench.probe_summary import (
     summarize_probe,
     summarize_rung,
 )
-from provibench.bench.probe_tables import column_labels, render_probe
+from provibench.bench.probe_tables import render_probe
 from provibench.bench.rungs import (
     broadcast_repeats,
     parse_int_list,
@@ -974,12 +975,19 @@ def _summary(
     return summary
 
 
+def _column_labels(
+    summaries: Sequence[ProbeSummary], *, label_width: int = 40
+) -> tuple[str | None, list[str]]:
+    """The label column of a run's summaries; 40 is the widest cell a table renders."""
+    return column_labels([summary.label for summary in summaries], label_width=label_width)
+
+
 def test_column_labels_shorten_the_openrouter_pair_under_a_caption() -> None:
     summaries = [
         _summary("openrouter:deepseek/deepseek-v4.1-flash@novita"),
         _summary("openrouter:deepseek/deepseek-v4.1-flash@gmicloud"),
     ]
-    caption, labels = column_labels(summaries)
+    caption, labels = _column_labels(summaries)
     assert caption == "specs: openrouter:deepseek/deepseek-v4.1-flash@<provider>"
     assert labels == ["@novita", "@gmicloud"]
 
@@ -991,7 +999,7 @@ def test_column_labels_keep_a_native_spec_named_and_shorten_the_rest() -> None:
         _summary("openrouter:deepseek/deepseek-v4.1-flash@novita"),
         _summary("openrouter:deepseek/deepseek-v4.1-flash@gmicloud"),
     ]
-    caption, labels = column_labels(summaries)
+    caption, labels = _column_labels(summaries)
     assert caption == "specs: openrouter:deepseek/deepseek-v4.1-flash@<provider>"
     assert labels == ["deepseek:deepseek-flash", "@novita", "@gmicloud"]
     assert len(set(labels)) == 3
@@ -1003,7 +1011,7 @@ def test_column_labels_never_clip_two_specs_into_one_string() -> None:
         _summary("openrouter:deepseek/deepseek-v4.1-flash"),
         _summary("openrouter:deepseek/deepseek-v4.1-flash-0731"),
     ]
-    caption, labels = column_labels(summaries)
+    caption, labels = _column_labels(summaries)
     assert caption is None  # nothing shared, so nothing moves up
     assert labels[0] != labels[1]
     assert len(set(labels)) == 2
@@ -1014,12 +1022,12 @@ def test_column_labels_elide_a_long_label_keeping_its_provider() -> None:
         _summary("openrouter:deepseek/deepseek-v4.1-flash-0731@novita"),
         _summary("openrouter:deepseek/deepseek-v4.1-flash-0731@gmicloud"),
     ]
-    caption, labels = column_labels(summaries)
+    caption, labels = _column_labels(summaries)
     assert caption is not None
     assert labels == ["@novita", "@gmicloud"]
     assert all(len(label) <= 40 for label in labels)
 
-    lone = column_labels([_summary("openrouter:a-very-long-target-name/and-a-long-model@novita")])[
+    lone = _column_labels([_summary("openrouter:a-very-long-target-name/and-a-long-model@novita")])[
         1
     ]
     assert len(lone[0]) <= 40
@@ -1163,6 +1171,26 @@ def test_model_drift_marks_a_model_the_reference_did_not_name() -> None:
     assert summaries[1].drift == "model"
 
 
+def test_model_drift_does_not_fire_between_a_native_and_a_gateway_spec() -> None:
+    """Each answers with its own name for the same weights: the slug is not drift."""
+    summaries = [
+        _drift_summary("deepseek:deepseek-flash", ["deepseek-flash"]),
+        _drift_summary("or:model@novita", ["deepseek/deepseek-v4.1-flash"]),
+    ]
+    apply_drift(summaries, [_ref("anthropic"), _ref("openrouter")])
+    assert summaries[1].drift is None
+
+
+def test_model_drift_still_fires_on_the_gateway_spec_that_varies_within_itself() -> None:
+    """Across kinds only a spec's own variance is a claim; it is still a claim."""
+    summaries = [
+        _drift_summary("deepseek:deepseek-flash", ["deepseek-flash"]),
+        _drift_summary("or:model@novita", ["deepseek/deepseek-v4.1-flash", "another"]),
+    ]
+    apply_drift(summaries, [_ref("anthropic"), _ref("openrouter")])
+    assert summaries[1].drift == "model"
+
+
 def test_a_single_model_named_by_both_specs_is_not_drift() -> None:
     summaries = [
         _drift_summary("or:model@novita", ["model"]),
@@ -1178,7 +1206,7 @@ def test_column_labels_keep_two_long_labels_of_one_target_apart() -> None:
         _summary("openrouter:deepseek/deepseek-v4.1-flash-0731"),
         _summary("openrouter:deepseek/deepseek-v4.1-flash"),
     ]
-    caption, labels = column_labels(summaries, label_width=23)
+    caption, labels = _column_labels(summaries, label_width=23)
     assert caption is None  # different models: nothing moves into a caption
     assert len(set(labels)) == 2
     assert labels[0].endswith("0731")
@@ -1244,6 +1272,62 @@ def test_fingerprint_is_reported_but_never_a_drift_marker() -> None:
     apply_drift(summaries, [_ref("openrouter"), _ref("openrouter")])
     assert summaries[1].fingerprint_match is False  # reported
     assert summaries[1].drift is None  # but not a drift marker
+
+
+def test_a_label_the_caption_does_not_cover_keeps_its_target_head() -> None:
+    """`deepseek:…-chat-v3.1` names a native endpoint; `deeps…-chat-v3.1` reads as a
+    reseller of the model the caption names, which is the one thing the row must not say."""
+    summaries = [
+        _summary("openrouter:deepseek/deepseek-v4.1-flash@novita"),
+        _summary("openrouter:deepseek/deepseek-v4.1-flash@gmicloud"),
+        _summary("deepseek:deepseek-chat-v3.1"),
+    ]
+    _, labels = _column_labels(summaries, label_width=17)
+    assert labels[2] == "deepseek:…at-v3.1"  # the head whole, the model's tail for the rest
+
+    spec_block = next(
+        block for block in render_probe(summaries).split("\n\n") if block.startswith("spec ")
+    )
+    native = next(line for line in spec_block.splitlines() if line.startswith("deepseek"))
+    assert native.startswith("deepseek:") and "…" in native
+
+
+def test_the_label_column_spends_its_columns_and_the_drift_gets_the_rest() -> None:
+    """The caption leaves `@provider` tails, so the label column renders narrow: the
+    columns it does not use are the drift's, which is why `provider,tokens+3%` is read
+    whole rather than cut to `provider…` while the table still has room for it."""
+    summaries = [
+        _summary("openrouter:deepseek/deepseek-v4.1-flash@novita", drift="provider,tokens+3%"),
+        _summary("openrouter:deepseek/deepseek-v4.1-flash@gmicloud", drift="provider,tokens+3%"),
+    ]
+    spec_block = next(
+        block for block in render_probe(summaries).split("\n\n") if block.startswith("spec ")
+    )
+    assert "provider,tokens+3%" in spec_block
+    assert all(len(line) <= 120 for line in spec_block.splitlines())
+
+
+def test_a_squeezed_table_still_shows_one_whole_drift_marker() -> None:
+    """Numbers wide enough to eat the budget squeeze the drift column: its first marker is
+    still read whole. `provider…` says which marker was cut; `provide…` says nothing."""
+    summaries = [
+        _summary("or:model@novita", drift="provider,tokens+3%"),
+        _summary("or:model@gmicloud", drift="provider,tokens+3%"),
+        _summary("deepseek:deepseek-flash"),
+    ]
+    for summary in summaries:
+        summary.errors = 12345
+        summary.eff_per_m_prompt = 1234.567
+        summary.input_price = 1234.567
+        rung = summary.rungs[0]
+        rung.cold_ms, rung.warm_ms = 12_345_678.0, 87_654_321.0
+        rung.ttft_ms, rung.gen_tok_s = 11_111_111.0, 12_345.6
+
+    spec_block = next(
+        block for block in render_probe(summaries).split("\n\n") if block.startswith("spec ")
+    )
+    cells = [line.split("|")[-1].strip() for line in spec_block.splitlines()[2:]]
+    assert cells == ["provider…", "provider…", "-"]
 
 
 def test_a_late_ttl_read_does_not_shrink_the_label_column() -> None:

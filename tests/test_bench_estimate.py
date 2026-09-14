@@ -7,6 +7,7 @@ from typing import Literal
 import pytest
 
 from provibench.bench.estimate import (
+    SpecEstimate,
     SpecPrices,
     estimate_total,
     probe_estimate,
@@ -239,3 +240,32 @@ def test_render_estimate_without_specs_is_only_a_header_and_a_total() -> None:
     lines = render_estimate([]).splitlines()
     assert lines[0].startswith("spec")
     assert lines[2].startswith("total")
+
+
+def _priced(label: str) -> SpecEstimate:
+    return SpecEstimate(
+        label=label, tokens=100, prices=SpecPrices(prices=_TABLE, source="table"), usd=0.0001
+    )
+
+
+def test_render_estimate_shortens_the_spec_column_like_the_probe_tables() -> None:
+    """A sweep's estimate is read for its endpoints, so the endpoints have to be readable."""
+    text = render_estimate(
+        [
+            _priced("openrouter:deepseek/deepseek-v4.1-flash@relace/fp8"),
+            _priced("openrouter:deepseek/deepseek-v4.1-flash@deepinfra/turbo"),
+            _priced("deepseek:deepseek-flash"),
+        ]
+    )
+    lines = text.splitlines()
+    assert lines[0] == "specs: openrouter:deepseek/deepseek-v4.1-flash@<provider>"
+    assert lines[1].startswith("spec")  # the table itself is unchanged, one line lower
+    assert "@relace/fp8" in text and "@deepinfra/turbo" in text
+    assert "deepseek:deepseek-flash" in text
+    assert "…" not in text  # nothing had to be cut
+
+
+def test_render_estimate_elides_a_lone_long_label_keeping_its_provider() -> None:
+    text = render_estimate([_priced(f"openrouter:{'deepseek/' + 'x' * 60}@novita")])
+    assert "…" in text
+    assert "@novita" in text  # the part that names the row survives the cut

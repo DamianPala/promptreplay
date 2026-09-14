@@ -1,7 +1,11 @@
 """`probe`: measure a provider's prompt cache from a few real turns of a trace.
 
+The command is a thin layer over `execute_probe`, which `sweep` calls too: a sweep is a
+probe whose specs were expanded from an endpoint list, and everything after that — the
+estimate, the confirmation, the protocol, the run directory, the tables — is one flow.
+
 `provibench.bench.*` pulls in httpx and pydantic; its symbols are imported only inside the
-callback, so building the CLI (schema, --help, completion) stays cheap.
+functions that use them, so building the CLI (schema, --help, completion) stays cheap.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from typing import TYPE_CHECKING
 import click
 
 from provibench.commands.inspect import resolve_trace_path
+from provibench.commands.probe_flags import ProbeRequest, options_for, probe_options
 from provibench.commands.run_specs import (
     check_budget,
     endpoint_index,
@@ -31,7 +36,7 @@ from provibench.commands.summary_view import (
 )
 from provibench.core.confirm import require_confirmation
 from provibench.core.context import Invocation
-from provibench.core.documents import Document, array, boolean, integer, obj, string
+from provibench.core.documents import Document, JsonSchema, array, boolean, integer, obj, string
 from provibench.core.errors import InvalidInput, OperationFailed
 from provibench.core.registry import Command, require_invocation
 from provibench.core.spec import CommandSpec, Effects
@@ -41,21 +46,24 @@ if TYPE_CHECKING:
     from provibench.bench.probe import ProbeOptions, ProbeResult, ProbeRun
     from provibench.bench.probe_summary import ProbeSummary
     from provibench.bench.targets import RunSpec
-    from provibench.bench.trace import TraceEntry
 
 _ERROR_TRUNCATE = 120
 
-_OUTPUT = obj(
-    {
-        "run_dir": string(),
-        "run_hex": string(),
-        "conversation": string(),
-        "rungs": array(integer()),
-        "summaries": array(PROBE_SUMMARY),
-        "changed": boolean(),
-    },
-    required=["run_dir", "run_hex", "conversation", "rungs", "summaries", "changed"],
-)
+_PROBE_PROPERTIES: dict[str, JsonSchema] = {
+    "run_dir": string(),
+    "run_hex": string(),
+    "conversation": string(),
+    "rungs": array(integer()),
+    "summaries": array(PROBE_SUMMARY),
+    "changed": boolean(),
+}
+_PROBE_REQUIRED = ["run_dir", "run_hex", "conversation", "rungs", "summaries", "changed"]
+_OUTPUT = obj(_PROBE_PROPERTIES, required=_PROBE_REQUIRED)
+
+
+def output_fields() -> tuple[dict[str, JsonSchema], list[str]]:
+    """The probe document's fields, so `sweep` can publish the same shape plus its own."""
+    return dict(_PROBE_PROPERTIES), list(_PROBE_REQUIRED)
 
 
 @click.command(
@@ -73,55 +81,7 @@ _OUTPUT = obj(
 )
 @click.argument("trace")
 @click.argument("specs", nargs=-1, required=True)
-@click.option(
-    "--rungs",
-    default=None,
-    help="1-based turn indices to probe, comma-separated; each needs a following turn. "
-    "Defaults to the smallest, middle and largest turn of the conversation",
-)
-@click.option(
-    "--repeats",
-    default="6,2,2",
-    show_default=True,
-    help="Warm reads per rung, comma-separated; the last value broadcasts to later rungs",
-)
-@click.option(
-    "--gap",
-    type=click.FloatRange(0.0),
-    default=1.0,
-    show_default=True,
-    help="Seconds between warm reads",
-)
-@click.option("--warm", is_flag=True, help="Send no nonce and measure the cache as found")
-@click.option(
-    "--ttl",
-    default=None,
-    help="Second offsets after the first served rung's warm reads to re-read its cache at, "
-    "comma-separated and ascending (e.g. 60,300,900); off by default, it costs wall time",
-)
-@click.option(
-    "--no-throughput",
-    is_flag=True,
-    help="Skip each rung's streamed generation request, so no TTFT, tok/s or fingerprint",
-)
-@click.option("--conversation", default=None, help="Conversation key; defaults to the main one")
-@click.option("--strip-thinking", is_flag=True, help="Drop thinking blocks from assistant turns")
-@click.option(
-    "--timeout",
-    type=click.FloatRange(0.1),
-    default=300.0,
-    show_default=True,
-    help="Request timeout, seconds",
-)
-@click.option(
-    "--budget",
-    type=click.FloatRange(0.0),
-    default=None,
-    help="Refuse to run when the worst-case estimate exceeds this many USD",
-)
-@click.option(
-    "--yes", is_flag=True, help="Skip the confirmation prompt; the budget check still applies"
-)
+@probe_options
 @click.pass_context
 def probe(  # noqa: PLR0913 (click binds one parameter per flag; there is no group to extract)
     ctx: click.Context,
@@ -140,22 +100,11 @@ def probe(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
     budget: float | None,
     yes: bool,
 ) -> Document:
-    from provibench.bench.estimate import probe_estimate, render_estimate
-    from provibench.bench.probe import run_probe
-    from provibench.bench.probe_drift import apply_drift
-    from provibench.bench.probe_runs import write_probe_run
-    from provibench.bench.probe_summary import summarize_probe
-    from provibench.bench.summary import cache_mode_note
-    from provibench.bench.trace import load_trace
-
     invocation = require_invocation(ctx)
-    run_specs = parse_specs(specs, load_targets(invocation))
-    trace_path = resolve_trace_path(trace, invocation)
-    selected, key = select_conversation(load_trace(trace_path), conversation)
-    if not selected:
-        raise InvalidInput(f"No turns to probe in conversation {key!r}")
-    options = _options(
-        selected,
+    request = ProbeRequest(
+        trace=trace,
+        specs=parse_specs(specs, load_targets(invocation)),
+        conversation=conversation,
         rungs=rungs,
         repeats=repeats,
         gap=gap,
@@ -164,28 +113,79 @@ def probe(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
         throughput=not no_throughput,
         strip_thinking=strip_thinking,
         timeout=timeout,
+        budget=budget,
+        yes=yes,
     )
+    return execute_probe(invocation, request)
 
-    index, lookup_notes = endpoint_index(run_specs)
+
+def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
+    """Estimate, confirm, run and persist one probe-shaped run, and return its document."""
+    from provibench.bench.estimate import probe_estimate, render_estimate
+    from provibench.bench.probe import run_probe
+    from provibench.bench.probe_drift import apply_drift
+    from provibench.bench.probe_runs import write_probe_run
+    from provibench.bench.probe_summary import summarize_probe
+    from provibench.bench.summary import cache_mode_note
+    from provibench.bench.trace import load_trace
+
+    trace_path = resolve_trace_path(request.trace, invocation)
+    selected, key = select_conversation(load_trace(trace_path), request.conversation)
+    if not selected:
+        raise InvalidInput(f"No turns to probe in conversation {key!r}")
+    options = options_for(request, selected)
+
+    if request.endpoints is None:
+        index, lookup_notes = endpoint_index(request.specs)
+    else:
+        index, lookup_notes = dict(request.endpoints), []
     for note in lookup_notes:
         invocation.message(note)
-    prices = spec_price_map(run_specs, index)
+    prices = spec_price_map(request.specs, index)
     estimates = [
-        probe_estimate(spec, selected, options, prices.get(spec.label)) for spec in run_specs
+        probe_estimate(spec, selected, options, prices.get(spec.label)) for spec in request.specs
     ]
     invocation.message(render_estimate(estimates))
-    check_budget(estimates, budget, hint="Raise --budget, or drop a spec or a rung")
-    _confirm(invocation, estimates, options, run_specs, yes=yes)
+    check_budget(
+        estimates,
+        request.budget,
+        hint="Raise --budget, or make the run smaller: drop a spec or a rung, lower "
+        "--repeats, or skip the streamed request with --no-throughput",
+    )
+    _confirm(invocation, estimates, options, request.specs, yes=request.yes)
 
     def on_progress(record: ProbeResult) -> None:
         invocation.message(_progress_line(record))
 
     try:
         run = asyncio.run(
-            run_probe(run_specs, selected, options, invocation.env, on_progress=on_progress)
+            run_probe(
+                request.specs,
+                selected,
+                options,
+                invocation.env,
+                on_progress=on_progress,
+                parallel=request.parallel,
+            )
         )
     except ValueError as exc:
         raise OperationFailed(str(exc)) from exc
+
+    parallel = _parallel_note(request.parallel)
+    notes = [*lookup_notes, cache_mode_note(options.warm), *parallel]
+    summaries = [
+        summarize_probe(
+            spec.label, run.records[spec.label], prices=prices.get(spec.label), notes=notes
+        )
+        for spec in request.specs
+    ]
+    specs: Sequence[RunSpec] = request.specs
+    if request.by_price:
+        # Both the tables and the run directory take the measured order, so a later
+        # `report` of this run reads it exactly as the sweep that produced it did.
+        summaries = _by_price(summaries)
+        specs = _in_order(specs, summaries)
+    summaries = apply_drift(summaries, specs)
 
     runs_dir = Path(invocation.setting("runs_dir") or ".")
     run_dir = write_probe_run(
@@ -193,20 +193,11 @@ def probe(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
         trace_path.stem,
         key,
         run,
-        run_specs,
+        specs,
         endpoints=index,
         prices=prices,
-        notes=lookup_notes,
-    )
-    notes = [*lookup_notes, cache_mode_note(options.warm)]
-    summaries = apply_drift(
-        [
-            summarize_probe(
-                spec.label, run.records[spec.label], prices=prices.get(spec.label), notes=notes
-            )
-            for spec in run_specs
-        ],
-        run_specs,
+        notes=[*lookup_notes, *parallel],
+        sweep=request.sweep,
     )
     document: Document = {
         "run_dir": str(run_dir),
@@ -216,56 +207,44 @@ def probe(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
         "summaries": [probe_summary_to_document(summary) for summary in summaries],
         "changed": True,
     }
+    if request.sweep is not None:
+        # A sweep publishes the same document plus what it expanded from, so a failing
+        # spec reports the model and filters it was part of along with its numbers.
+        document["sweep"] = dict(request.sweep.model_dump())
     _fail_on_partial(invocation, run, summaries, document, run_dir)
     return document
 
 
-def _options(  # noqa: PLR0913 (one keyword per flag the command binds)
-    conversation: Sequence[TraceEntry],
-    *,
-    rungs: str | None,
-    repeats: str,
-    gap: float,
-    warm: bool,
-    ttl: str | None,
-    throughput: bool,
-    strip_thinking: bool,
-    timeout: float,
-) -> ProbeOptions:
-    """The run's options, with rungs and repeats resolved against the conversation."""
-    from pydantic import ValidationError
+def _parallel_note(parallel: int) -> list[str]:
+    """One note for a run that probed several specs at once, and none for a sequential one.
 
-    from provibench.bench.probe import ProbeOptions
-    from provibench.bench.rungs import parse_int_list
-
-    try:
-        parsed_rungs = None if rungs is None else parse_int_list(rungs)
-        parsed_repeats = parse_int_list(repeats)
-        parsed_ttl = None if ttl is None else parse_int_list(ttl)
-        options = ProbeOptions(
-            rungs=parsed_rungs,
-            repeats=parsed_repeats,
-            gap_s=gap,
-            warm=warm,
-            throughput=throughput,
-            ttl_s=parsed_ttl,
-            strip_thinking=strip_thinking,
-            timeout_s=timeout,
-        )
-        return options.resolved(conversation)
-    except (ValueError, ValidationError) as exc:
-        # A bad list, a `--ttl` offset the `--gap` already passed, an impossible rung: all
-        # of them are input errors, and all of them are caught before a request is sent.
-        raise InvalidInput(_first_detail(exc)) from exc
+    A `run.json` reader comparing latency medians between runs has to know which of them
+    were measured with other specs in flight on the same connection pool; the note is part
+    of the run's record, not of its options, because it describes how the numbers were
+    taken rather than what the protocol did.
+    """
+    if parallel <= 1:
+        return []
+    return [f"parallel {parallel}: latency measured with specs in flight together"]
 
 
-def _first_detail(error: Exception) -> str:
-    """One line for a validation error, so the message reads like the other input errors."""
-    from pydantic import ValidationError
+def _by_price(summaries: Sequence[ProbeSummary]) -> list[ProbeSummary]:
+    """The summaries as a sweep reads them: cheapest effective prompt token first.
 
-    if isinstance(error, ValidationError):
-        return str(error.errors()[0]["msg"])
-    return str(error)
+    That is the question a sweep asks — which endpoint to use this week — so the effective
+    price leads and the hit rate breaks its ties, being the other half of why one endpoint
+    is cheaper than another. A spec with no listed price cannot be ranked and sorts last.
+    """
+    return sorted(
+        summaries,
+        key=lambda s: (s.eff_per_m_prompt is None, s.eff_per_m_prompt or 0.0, -(s.hit_rate or 0.0)),
+    )
+
+
+def _in_order(specs: Sequence[RunSpec], summaries: Sequence[ProbeSummary]) -> list[RunSpec]:
+    """The specs in the order their summaries came out, for the run directory."""
+    by_label = {spec.label: spec for spec in specs}
+    return [by_label[summary.label] for summary in summaries]
 
 
 def _requests(options: ProbeOptions) -> int:
