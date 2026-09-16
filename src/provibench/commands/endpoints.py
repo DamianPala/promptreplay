@@ -28,7 +28,7 @@ from provibench.core.documents import (
     obj,
     string,
 )
-from provibench.core.errors import OperationFailed
+from provibench.core.errors import InvalidInput, NotFound, OperationFailed
 from provibench.core.registry import Command, require_invocation
 from provibench.core.spec import CommandSpec, Effects
 from provibench.core.terminal_text import escape_terminal_text
@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from provibench.bench.openrouter import Endpoint
 
 _FETCH_TIMEOUT_S = 30.0
+_NOT_FOUND = 404
 
 _PRICES = obj(
     {
@@ -142,7 +143,12 @@ def render_endpoints(invocation: Invocation, document: Document) -> None:
     "endpoints",
     cls=Command,
     spec=CommandSpec(effects=Effects.READ_ONLY, output=_OUTPUT, render=render_endpoints),
-    help="List the OpenRouter endpoints serving MODEL, with prices and recent health.",
+    help="List the OpenRouter endpoints serving MODEL, with prices and recent health.\n\n"
+    'The listing is fetched with the first kind="openrouter" target\'s API key when its '
+    "environment variable is set, because OpenRouter returns the 30-minute latency and "
+    "throughput percentiles only for a request that carries a key; without one both are null "
+    "(- in the table). This is the same key a sweep's own candidate listing reads, so both "
+    "show the same numbers.",
 )
 @click.argument("model", help="OpenRouter model slug whose endpoints to list")
 @click.option(
@@ -155,22 +161,51 @@ def render_endpoints(invocation: Invocation, document: Document) -> None:
 def endpoints(ctx: click.Context, model: str, sort: str) -> Document:
     import httpx
 
-    require_invocation(ctx)
+    invocation = require_invocation(ctx)
+    api_key = _default_api_key(invocation)
     try:
-        fetched = asyncio.run(_fetch(model))
+        fetched = asyncio.run(_fetch(model, api_key=api_key))
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == _NOT_FOUND:
+            raise NotFound(f"OpenRouter lists no model with slug {model!r}") from exc
+        raise OperationFailed(f"Fetching endpoints for {model!r} failed: {exc}") from exc
     except httpx.HTTPError as exc:
         raise OperationFailed(f"Fetching endpoints for {model!r} failed: {exc}") from exc
     ordered = sorted(fetched, key=_SORT_KEYS[sort])
     return {"model": model, "endpoints": [_endpoint_document(e) for e in ordered]}
 
 
-async def _fetch(model: str) -> list[Endpoint]:
+async def _fetch(model: str, *, api_key: str | None) -> list[Endpoint]:
     import httpx
 
     from provibench.bench.openrouter import fetch_endpoints
 
     async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT_S) as client:
-        return await fetch_endpoints(client, model)
+        # The unkeyed call stays a two-argument one, the same convention
+        # `bench.estimate.fetch_endpoint_index` uses, so a test double with the plain
+        # `(client, model)` signature keeps working when no key is configured.
+        if api_key is None:
+            return await fetch_endpoints(client, model)
+        return await fetch_endpoints(client, model, api_key=api_key)
+
+
+def _default_api_key(invocation: Invocation) -> str | None:
+    """The first configured OpenRouter target's key, best-effort, or `None` without one.
+
+    `endpoints` takes no --target, so it reads the key the way sweep's default (--sort
+    price) listing would: the first kind="openrouter" target's own environment variable,
+    when it is set. OpenRouter returns latency_ms_30m and throughput_30m only for a keyed
+    request, so sharing this resolution with sweep is what makes `endpoints` show the same
+    numbers the sweep candidate table does, instead of nulls from an unauthenticated call.
+    """
+    from provibench.commands.run_specs import gateway_target, load_targets
+
+    try:
+        targets = load_targets(invocation)
+        gateway = gateway_target(None, targets)
+    except InvalidInput:
+        return None
+    return invocation.env.get(gateway.api_key_env) or None
 
 
 def _endpoint_document(endpoint: Endpoint) -> Document:

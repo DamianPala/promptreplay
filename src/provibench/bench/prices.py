@@ -38,7 +38,7 @@ CACHE = XdgPath("XDG_CACHE_HOME", ".cache", "provibench/litellm-prices.json")
 MAX_AGE_S = 7 * 24 * 60 * 60
 """How long a cached copy counts as fresh; past it, the next caller refetches."""
 
-SOURCE_TABLE = "table"
+SOURCE_TARGETS = "targets"
 """The price came from the target's own `targets.toml` `prices` entry."""
 
 SOURCE_LITELLM = "litellm"
@@ -118,7 +118,7 @@ def resolve_target(
     """
     own = target.prices.get(model)
     if own is not None:
-        return own, SOURCE_TABLE
+        return own, SOURCE_TARGETS
     if table is None:
         return None
     found = table.resolve(target.litellm_provider, model)

@@ -130,7 +130,7 @@ After the loop, for `kind = "openrouter"`:
 
 For `kind = "anthropic"`: `prompt_total` and buckets from `usage`; native price resolution is
 `targets.toml` first, then LiteLLM through `litellm_provider`, then none. The selected source is
-recorded per spec (`table`, `litellm`, or no price), so a run does not silently inherit a later
+recorded per spec (`targets`, `litellm`, or no price), so a run does not silently inherit a later
 price-table change.
 
 `ReplayResult` fields: `seq, turn, status, latency_ms, message_id, model, provider, requested_providers, usage, prompt_total, cached, cache_write, output_tokens, cost, billed_total, cache_discount, error, note, generation`.
@@ -181,12 +181,14 @@ Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, con
 | `history [MODEL] [--trace T] [--since DURATION]` | read-only | one row per run and spec, plus a hit-rate sparkline per spec |
 | `inspect TRACE [--conversation KEY]` | read-only | conversation list plus per-turn table of the selected conversation |
 | `prices [MODEL...] [--update]` | idempotent | native model prices and their source |
-| `probe TRACE SPEC... [--rungs] [--repeats] [--gap] [--ttl] [--warm] [--timeout] [--budget] [--yes]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, run_hex, conversation, rungs, summaries, changed}` |
+| `probe TRACE SPEC... [--rungs] [--repeats] [--gap] [--ttl] [--warm] [--timeout] [--budget] [--yes] [--dry-run]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, run_hex, conversation, rungs, summaries, partial, changed}` on a real run; `--dry-run` returns `{estimate, total_usd, pre_check, upper_bound, runs_dir, requires_confirmation, partial: false, changed: false}` instead |
 | `record --name N --upstream URL [--host] [--port] [--append] [--timeout DURATION]` | non-idempotent, runs until SIGINT or the timeout | `{trace, requests, conversations, changed}` |
-| `replay TRACE --run SPEC... [--conversation] [--max-tokens] [--delay] [--strip-thinking] [--limit] [--warm] [--budget] [--yes]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, conversation, turns, summaries, changed}` |
+| `replay TRACE --run SPEC... [--conversation] [--max-tokens] [--delay] [--strip-thinking] [--limit] [--warm] [--budget] [--yes] [--dry-run]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, conversation, turns, summaries, partial, changed}` on a real run; `--dry-run` returns `{estimate, total_usd, runs_dir, requires_confirmation, partial: false, changed: false}` instead |
 | `report RUN [--format text\|md\|html\|json] [--output-file PATH]` | idempotent | summaries table and cache curves; `--output-file` writes the selected rendering, replacing the file (a report is derived from the run alone) |
 | `scrub TRACE OUT [--output-file PATH] [--replace OLD=NEW]... [--user NAME]... [--turns N] [--allow-email ADDR]... [--force]` | idempotent | `{trace, out, output_file, entries_in/out/dropped, selection, bytes_in/out, user_names, rules, changed}` and the rules table |
-| `sweep TRACE MODEL [--top N] [--sort KEY] [--zdr] [--budget USD] [--yes]` | non-idempotent, spends API credit, `confirm=True` | probe summaries plus the recorded selection criteria |
+| `sweep TRACE MODEL [--top N] [--sort KEY] [--zdr] [--budget USD] [--yes] [--dry-run]` | non-idempotent, spends API credit, `confirm=True` | probe summaries plus the recorded selection criteria, `partial` included; `--dry-run` returns the same shape as `probe --dry-run` |
+
+A partial result (a failed request, a skipped rung, or a failed replay turn) still reaches stdout with `partial: true`; the call then exits non-zero with an `operation_failed` error on stderr whose `context` carries only `run_dir` and `run_hex`, not the document again. `--dry-run` prices the run and stops before the confirmation: nothing is sent, `changed` is `false`, and `requires_confirmation` reports whether the same call without `--dry-run` and without `--yes` would be gated in a non-interactive context, which for these three commands is always true because they always reach a request that spends credit; it does not describe whether this particular call could have prompted. `--yes` is accepted and ignored alongside it.
 
 Settings: `targets_path` (`--targets`, `PROVIBENCH_TARGETS`), `traces_dir` (`PROVIBENCH_TRACES_DIR`, default `./traces`), `runs_dir` (`PROVIBENCH_RUNS_DIR`, default `./runs`). A non-empty `NO_INPUT` disables prompts.
 

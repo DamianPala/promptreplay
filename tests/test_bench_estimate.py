@@ -123,7 +123,7 @@ def test_spec_prices_reads_the_targets_table_for_a_native_spec() -> None:
     spec = RunSpec(target=_target("anthropic", {"model": _TABLE}), model="model")
     prices = spec_prices(spec, {})
     assert prices is not None
-    assert prices.source == "table"
+    assert prices.source == "targets"
     assert prices.provider is None
 
 
@@ -132,7 +132,7 @@ def test_spec_prices_reads_the_targets_table_for_a_native_spec() -> None:
 
 def test_probe_estimate_counts_the_cold_write_and_every_warm_read() -> None:
     entries = [_entry(1, 100), _entry(2, 200), _entry(3, 300)]
-    prices = SpecPrices(prices=_TABLE, source="table")
+    prices = SpecPrices(prices=_TABLE, source="targets")
     # rung 1: cold turn 1 (100) + 2 warm reads of turn 2 (2 * 200) + the streamed turn 2
     estimate = probe_estimate(_spec_anthropic(), entries, _options([1], [2]), prices)
     assert estimate.tokens == 100 + 2 * 200 + 200
@@ -143,7 +143,7 @@ def test_probe_estimate_counts_the_cold_write_and_every_warm_read() -> None:
 
 def test_probe_estimate_without_throughput_leaves_the_stream_out() -> None:
     entries = [_entry(1, 100), _entry(2, 200)]
-    prices = SpecPrices(prices=_TABLE, source="table")
+    prices = SpecPrices(prices=_TABLE, source="targets")
     estimate = probe_estimate(
         _spec_anthropic(), entries, _options([1], [1], throughput=False), prices
     )
@@ -153,7 +153,7 @@ def test_probe_estimate_without_throughput_leaves_the_stream_out() -> None:
 
 def test_probe_estimate_counts_the_ttl_reads_of_the_first_rung_only() -> None:
     entries = [_entry(1, 100), _entry(2, 200), _entry(3, 300)]
-    prices = SpecPrices(prices=_TABLE, source="table")
+    prices = SpecPrices(prices=_TABLE, source="targets")
     # an explicit rung list keeps `ttl_s` from tripping the gap check at the default 1 s
     estimate = probe_estimate(
         _spec_anthropic(),
@@ -166,7 +166,7 @@ def test_probe_estimate_counts_the_ttl_reads_of_the_first_rung_only() -> None:
 
 def test_probe_estimate_marks_unknown_tokens_and_prices_nothing() -> None:
     entries = [_entry(1, None), _entry(2, 200)]
-    prices = SpecPrices(prices=_TABLE, source="table")
+    prices = SpecPrices(prices=_TABLE, source="targets")
     estimate = probe_estimate(_spec_anthropic(), entries, _options([1], [1]), prices)
     assert estimate.tokens == 200 + 200  # turn 1's unknown size is not counted
     assert estimate.tokens_known is False
@@ -201,7 +201,7 @@ def test_probe_estimate_without_a_price_is_tokens_only() -> None:
 
 def test_replay_estimate_counts_every_selected_turn_once() -> None:
     entries = [_entry(1, 100), _entry(2, 200), _entry(3, 300)]
-    prices = SpecPrices(prices=_TABLE, source="table")
+    prices = SpecPrices(prices=_TABLE, source="targets")
     estimate = replay_estimate(_spec_anthropic(), entries, prices)
     assert estimate.tokens == 600
     assert estimate.usd == 600 * 1.0 * 1e-6
@@ -216,7 +216,7 @@ def _spec_anthropic() -> RunSpec:
 
 def test_estimate_total_sums_what_is_known() -> None:
     entries = [_entry(1, 100), _entry(2, 100)]
-    table = SpecPrices(prices=_TABLE, source="table")
+    table = SpecPrices(prices=_TABLE, source="targets")
     priced = probe_estimate(_spec_anthropic(), entries, _options([1], [0], throughput=False), table)
     unpriced = probe_estimate(
         _spec_anthropic(), entries, _options([1], [0], throughput=False), None
@@ -232,7 +232,7 @@ def test_render_estimate_says_retries_are_excluded() -> None:
         _spec_anthropic(),
         entries,
         _options([1], [0], throughput=False),
-        SpecPrices(prices=_TABLE, source="table"),
+        SpecPrices(prices=_TABLE, source="targets"),
     )
     text = render_estimate([estimate])
     assert "excluding retries" in text
@@ -247,7 +247,7 @@ def test_render_estimate_without_specs_is_only_a_header_and_a_total() -> None:
 
 def _priced(label: str) -> SpecEstimate:
     return SpecEstimate(
-        label=label, tokens=100, prices=SpecPrices(prices=_TABLE, source="table"), usd=0.0001
+        label=label, tokens=100, prices=SpecPrices(prices=_TABLE, source="targets"), usd=0.0001
     )
 
 

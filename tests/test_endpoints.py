@@ -104,6 +104,41 @@ def test_endpoints_upstream_error_is_operation_failed(
     assert outcome.error["kind"] == "operation_failed"
 
 
+def test_endpoints_not_found_for_an_unknown_slug(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bad slug is a clean not_found, not the raw httpx 404 text (change request 16c)."""
+
+    def missing(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="<html>404 Not Found ... developer.mozilla.org ...</html>")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(missing))
+    outcome = cli.run("endpoints", "deepseek/no-such-model")
+    assert outcome.code == 1
+    assert outcome.error["kind"] == "not_found"
+    assert (
+        outcome.error["message"] == "OpenRouter lists no model with slug 'deepseek/no-such-model'"
+    )
+    assert "mozilla" not in outcome.stderr
+
+
+def test_endpoints_sends_the_default_gateway_key_when_set(
+    cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a key, OpenRouter never returns latency/throughput percentiles (change request
+    16 item 8): `endpoints` reads the same default key `sweep`'s unpinned listing would."""
+    seen: list[str | None] = []
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(200, json=_PAYLOAD)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(capture))
+    outcome = cli.run(
+        "endpoints", "some/model", env={"OPENROUTER_GENERAL_BUILDER_API_KEY": "secret-key"}
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert seen == ["Bearer secret-key"]
+
+
 def test_endpoints_human_table(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(httpx, "AsyncClient", _client_factory(_ok))
     # rich sizes an unfiled (non-fileno) console from the real `os.environ["COLUMNS"]`,

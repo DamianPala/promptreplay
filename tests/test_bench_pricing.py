@@ -14,34 +14,39 @@ def test_compute_cost_basic() -> None:
         cache_write=500_000,
         output_tokens=250_000,
         prices=prices,
-        source="table",
+        source="targets",
     )
     assert cost.input == 1.0
     assert cost.cache_read == 0.5
     assert cost.cache_write == 1.0
     assert cost.output == 1.0
     assert cost.total == 3.5
-    assert cost.source == "table"
+    assert cost.source == "targets"
 
 
 def test_compute_cost_zero_tokens() -> None:
     prices = Prices(input=1, cache_read=1, cache_write=1, output=1)
     cost = compute_cost(
-        input_tokens=0, cache_read=0, cache_write=0, output_tokens=0, prices=prices, source="table"
+        input_tokens=0,
+        cache_read=0,
+        cache_write=0,
+        output_tokens=0,
+        prices=prices,
+        source="targets",
     )
     assert cost.total == 0.0
 
 
 def test_cost_breakdown_add_same_source_keeps_source() -> None:
-    a = CostBreakdown(input=1, cache_read=1, cache_write=1, output=1, source="table")
-    b = CostBreakdown(input=2, cache_read=2, cache_write=2, output=2, source="table")
+    a = CostBreakdown(input=1, cache_read=1, cache_write=1, output=1, source="targets")
+    b = CostBreakdown(input=2, cache_read=2, cache_write=2, output=2, source="targets")
     c = a + b
     assert c.total == 12
-    assert c.source == "table"
+    assert c.source == "targets"
 
 
 def test_cost_breakdown_add_mixed_source() -> None:
-    a = CostBreakdown(input=1, cache_read=0, cache_write=0, output=0, source="table")
+    a = CostBreakdown(input=1, cache_read=0, cache_write=0, output=0, source="targets")
     b = CostBreakdown(input=1, cache_read=0, cache_write=0, output=0, source="openrouter-endpoint")
     c = a + b
     assert c.source == "mixed"

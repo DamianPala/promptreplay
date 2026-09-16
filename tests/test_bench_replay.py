@@ -256,7 +256,7 @@ def test_replay_run_anthropic_end_to_end_uses_price_table() -> None:
     result = results[0]
     assert result.status == 200
     assert result.cost is not None
-    assert result.cost.source == "table"
+    assert result.cost.source == "targets"
     assert result.cost.total == pytest.approx(100 * 1e-6 * 1 + 10 * 1e-6 * 2)
 
 

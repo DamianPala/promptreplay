@@ -226,7 +226,9 @@ def probe_summary_to_document(summary: ProbeSummary) -> Document:
 
 
 def render_probe_run(invocation: Invocation, document: Document) -> None:
-    """Human rendering of a `probe` result: the spec and rung tables."""
+    """Human rendering of a `probe` result: the spec and rung tables, or the dry-run notice."""
+    if _render_dry_run_notice(invocation, document):
+        return
     _render_probe(invocation, document, key="summaries")
 
 
@@ -250,7 +252,7 @@ def probe_report_text(document: Document, *, key: str = "summaries") -> str:
 
 def render_probe_report(invocation: Invocation, document: Document) -> None:
     """Human rendering of `report` for a probe run: the same two tables."""
-    _render_probe(invocation, document, key="probe_summaries")
+    _render_probe(invocation, document, key="summaries")
 
 
 def render_report_document(invocation: Invocation, document: Document) -> None:
@@ -275,9 +277,7 @@ def report_markdown(document: Document) -> str:
         from provibench.bench.probe_tables import probe_markdown
 
         entries = [
-            entry
-            for entry in map(as_document, as_list(document.get("probe_summaries")) or [])
-            if entry
+            entry for entry in map(as_document, as_list(document.get("summaries")) or []) if entry
         ]
         return probe_markdown([_probe_summary(entry) for entry in entries]) + "\n"
     from provibench.bench.summary import render_markdown
@@ -300,6 +300,21 @@ def _render_probe(invocation: Invocation, document: Document, *, key: str) -> No
     escaped = [escape_terminal_text(line) for line in lines]
     stdout.write("\n".join(escaped) + "\n")
     stdout.flush()
+
+
+def _render_dry_run_notice(invocation: Invocation, document: Document) -> bool:
+    """Print the dry-run notice and report `True`, or do nothing and report `False`.
+
+    `estimate` only appears in a `--dry-run` result (`commands.dry_run.build_document`); the
+    tables the estimate itself takes are already on stderr, printed before the confirmation
+    a dry run never reaches, so the result's own rendering is this one line.
+    """
+    if "estimate" not in document:
+        return False
+    stdout = invocation.streams.stdout
+    stdout.write("dry run: nothing sent\n")
+    stdout.flush()
+    return True
 
 
 def message_lines(invocation: Invocation, text: str) -> None:
@@ -344,7 +359,9 @@ def _cost_document(cost: CostBreakdown | None) -> Document | None:
 
 
 def render_summaries(invocation: Invocation, document: Document) -> None:
-    """One table of every run's totals, then one sparkline line per run."""
+    """One table of every run's totals, then one sparkline line per run, or the dry-run notice."""
+    if _render_dry_run_notice(invocation, document):
+        return
     from rich import box
     from rich.markup import escape
     from rich.table import Table

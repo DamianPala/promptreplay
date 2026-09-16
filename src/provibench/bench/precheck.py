@@ -39,6 +39,12 @@ __all__ = ["CheckPlan", "PreCheckResult", "precheck_candidates", "unavailable_re
 _CONNECT_TIMEOUT_S = 30.0
 _REASON_CAP = 80
 _NOT_FOUND = 404
+_PRIVACY_HINT = (
+    " (change this at https://openrouter.ai/settings/privacy: allow this provider to train "
+    "on prompts, or drop the training-data restriction)"
+)
+"""Named for the one guardrail reason the feedback called out: it reads as an account fact
+with no way to act on it, and the account's own privacy settings are exactly that way."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,7 +173,10 @@ def unavailable_reason(*, status: int, payload: object, error: str | None = None
     kind = error_type(error) or _body_error_type(payload)
     if status == _NOT_FOUND or kind == "not_found":
         detail = _first_reason(_message(payload) or error or "") or kind or "not_found"
-        return f"unavailable for this key: {detail[:_REASON_CAP]}"
+        reason = f"unavailable for this key: {detail[:_REASON_CAP]}"
+        if "training" in detail.lower():
+            reason += _PRIVACY_HINT
+        return reason
     if kind is not None:
         return f"unavailable: {kind}"
     if status:

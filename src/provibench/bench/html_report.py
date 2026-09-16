@@ -102,8 +102,12 @@ def _models(document: Document) -> str:
 
 
 def _key(document: Document) -> str:
-    """Which summary list a document carries: a probe run's, or a full replay's."""
-    return "probe_summaries" if document.get("protocol") == "probe" else "summaries"
+    """Which field a report document carries its per-spec summaries under.
+
+    One name for both protocols (a probe run's or a full replay's): `report --json` and
+    `probe`/`sweep`/`replay --json` all use `summaries`.
+    """
+    return "summaries"
 
 
 def _mode(document: Document) -> str:
@@ -125,7 +129,7 @@ def _created(document: Document) -> str:
 
 def _probe_sections(document: Document) -> list[str]:
     """The caption, the two probe tables, the two charts and the notes."""
-    summaries = [summary_from_document(entry) for entry in _entries(document, "probe_summaries")]
+    summaries = [summary_from_document(entry) for entry in _entries(document, _key(document))]
     blocks = probe_blocks(summaries)
     labels = [row[0] for row in blocks.spec.rows]
     sections: list[str] = []

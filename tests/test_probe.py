@@ -260,7 +260,16 @@ def test_probe_runs_a_rung_and_persists_the_run(
     )
     assert outcome.code == 0, outcome.stderr
     doc = outcome.document
-    assert set(doc) == {"run_dir", "run_hex", "conversation", "rungs", "summaries", "changed"}
+    assert set(doc) == {
+        "run_dir",
+        "run_hex",
+        "conversation",
+        "rungs",
+        "summaries",
+        "partial",
+        "changed",
+    }
+    assert doc["partial"] is False
     assert doc["conversation"] == "c1"
     assert doc["rungs"] == [1]
     assert len(str(doc["run_hex"])) == 12
@@ -271,7 +280,7 @@ def test_probe_runs_a_rung_and_persists_the_run(
     assert meta["run_hex"] == doc["run_hex"]
     assert meta["options"]["rungs"] == [1]
     assert meta["options"]["repeats"] == [2, 2] or meta["options"]["repeats"] == [2]
-    assert meta["prices"]["fake:model-a"]["source"] == "table"
+    assert meta["prices"]["fake:model-a"]["source"] == "targets"
 
     lines = (run_dir / "fake-model-a.jsonl").read_text(encoding="utf-8").splitlines()
     records = [json.loads(line) for line in lines]
@@ -289,10 +298,87 @@ def test_probe_runs_a_rung_and_persists_the_run(
     assert summary["label"] == "fake:model-a"
     assert summary["hit_rate"] == 1.0
     assert summary["prefix_fraction"] == pytest.approx(0.9)
-    assert summary["price_source"] == "table"
+    assert summary["price_source"] == "targets"
     assert summary["eff_per_m_prompt"] == pytest.approx((1 - 0.9) * 1.0 + 0.9 * 0.1)
     assert summary["errors"] == 0
     assert summary["skipped"] == 0
+
+
+def test_probe_dry_run_sends_nothing_and_reports_the_estimate(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--dry-run` prices the run and stops there: no request, `requires_confirmation` (R4)."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    sent: list[dict[str, Any]] = []
+    _install(monkeypatch, _transport(lambda index: _ok(), sent=sent))
+
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--dry-run",
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert sent == []  # nothing was sent
+    doc = outcome.document
+    assert doc["partial"] is False
+    assert doc["changed"] is False
+    assert doc["requires_confirmation"] is True
+    assert doc["runs_dir"] == str(bench_paths.runs_dir)
+    [estimate] = [d for d in map(as_document, as_list(doc["estimate"]) or []) if d]
+    assert estimate["label"] == "fake:model-a"
+    assert estimate["worst_case_usd"] is not None
+    assert estimate["source"] == "targets"
+    assert "run_dir" not in doc and "summaries" not in doc
+
+    # --yes is accepted and ignored under --dry-run (R3c): still nothing sent, still gated
+    outcome_with_yes = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--dry-run",
+        "--yes",
+    )
+    assert outcome_with_yes.code == 0, outcome_with_yes.stderr
+    assert sent == []
+    assert outcome_with_yes.document["requires_confirmation"] is True
+
+    # R4c asks about a non-interactive context, not this call's own: a terminal that can
+    # prompt (TTY stdin and stderr) piping the document out still reports the gate as true.
+    from_a_terminal = cli.run(
+        "probe",
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--dry-run",
+        tty_stdin=True,
+        tty_stdout=False,
+        tty_stderr=True,
+        env={**bench_paths.env, **_ENV},
+    )
+    assert from_a_terminal.code == 0, from_a_terminal.stderr
+    assert sent == []
+    assert from_a_terminal.document["requires_confirmation"] is True
 
 
 def test_a_compressed_trace_files_its_run_under_the_name_without_the_suffixes(
@@ -651,10 +737,13 @@ def test_probe_partial_failure_gives_json_callers_the_summaries(
     assert outcome.code == 1
     assert outcome.error["kind"] == "operation_failed"
     context = as_document(outcome.error.get("context"))
-    assert context is not None, "the error must carry the run's numbers"
+    assert context is not None, "the error must carry the run's location"
+    assert set(context) == {"run_dir", "run_hex"}
     assert Path(str(context["run_dir"])).is_dir()
-    assert context["conversation"] == "c1"
-    [summary] = [d for d in map(as_document, as_list(context["summaries"]) or []) if d]
+    doc = outcome.document
+    assert doc["partial"] is True
+    assert doc["conversation"] == "c1"
+    [summary] = [d for d in map(as_document, as_list(doc["summaries"]) or []) if d]
     assert summary["label"] == "fake:model-a"
     assert summary["errors"] == 1
     assert summary["rungs"] != []
@@ -750,6 +839,36 @@ def test_probe_prices_an_openrouter_spec_from_the_endpoint_snapshot(
     assert prices["source"] == "openrouter-endpoint"
 
 
+def test_probe_a_pin_matching_no_endpoint_is_invalid_input(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `@provider` pin that matches no endpoint is `invalid_input` naming the tags that do
+    exist, not a silently unpriced spec that only `--budget` would ever notice (fix)."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    sent: list[dict[str, Any]] = []
+    _install(monkeypatch, _transport(lambda index: _ok(), sent=sent))
+
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "or:model-a@nosuchprovider",
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--yes",
+    )
+    assert outcome.code == 2
+    assert outcome.error["kind"] == "invalid_input"
+    assert "nosuchprovider" in str(outcome.error["message"])
+    assert "novita" in str(outcome.error["message"])  # the tag that does exist
+    assert sent == []
+
+
 def test_report_summarises_a_probe_run_without_the_network(
     cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -783,9 +902,8 @@ def test_report_summarises_a_probe_run_without_the_network(
     assert outcome.code == 0, outcome.stderr
     doc = outcome.document
     assert doc["protocol"] == "probe"
-    assert doc["summaries"] == []
-    assert as_list(doc["probe_summaries"])
-    [summary] = [d for d in map(as_document, as_list(doc["probe_summaries"]) or []) if d]
+    assert as_list(doc["summaries"])
+    [summary] = [d for d in map(as_document, as_list(doc["summaries"]) or []) if d]
     assert summary["hit_rate"] == 1.0
     [rung] = [d for d in map(as_document, as_list(summary["rungs"]) or []) if d]
     assert rung["hits"] == [pytest.approx(0.9)]  # the warm read covered 90 % of the cold prompt
@@ -1034,7 +1152,10 @@ def test_probe_reports_a_failed_stream_without_skipping_the_rung(
     assert "1 request(s) failed" in str(outcome.error["message"])
     context = as_document(outcome.error.get("context"))
     assert context is not None
-    [summary] = [d for d in map(as_document, as_list(context["summaries"]) or []) if d]
+    assert set(context) == {"run_dir", "run_hex"}
+    doc = outcome.document
+    assert doc["partial"] is True
+    [summary] = [d for d in map(as_document, as_list(doc["summaries"]) or []) if d]
     assert summary["skipped"] == 0
     assert summary["hit_rate"] == 1.0
     assert summary["ttft_ms"] is None
@@ -1293,7 +1414,10 @@ def test_probe_does_not_hang_on_a_stream_that_stalls(
     assert "1 request(s) failed" in str(outcome.error["message"])
     context = as_document(outcome.error.get("context"))
     assert context is not None
-    [summary] = [d for d in map(as_document, as_list(context["summaries"]) or []) if d]
+    assert set(context) == {"run_dir", "run_hex"}
+    doc = outcome.document
+    assert doc["partial"] is True
+    [summary] = [d for d in map(as_document, as_list(doc["summaries"]) or []) if d]
     assert summary["hit_rate"] == 1.0  # the warm read was served and is still scored
     assert summary["ttft_ms"] is None
     run_dir = Path(str(context["run_dir"]))

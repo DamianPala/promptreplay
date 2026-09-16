@@ -67,17 +67,21 @@ export DEEPSEEK_API_KEY=...
 
 Write your own `targets.toml` to add a target or change a price; `provibench config show` names the path it reads.
 
+An agent scripting this tool should pin `PROVIBENCH_RUNS_DIR`, or always run from the same project directory, before its first paid run: a run and the `report` that reads it later have to resolve `runs_dir` to the same path, or the report looks in the wrong place, or the packaged default, for a run it already paid for.
+
 Run the packaged sample:
 
 ```sh
 provibench inspect sample
-provibench sweep sample deepseek/deepseek-v4.1-flash --top 3 --budget 0.5
+provibench sweep sample deepseek/deepseek-v4.1-flash --top 3 --dry-run
+provibench sweep sample deepseek/deepseek-v4.1-flash --top 3 --budget 1.2
 provibench report latest
 provibench report latest --format html --output-file report.html
 ```
 
+`--dry-run` prices the run and stops there, sending nothing, so it is the way to read the estimate before deciding on a budget.
 The sweep prints its worst-case estimate before anything is sent, and refuses the run when it exceeds `--budget`.
-With `--top`, the availability check can promote any of the ranked candidates, so the run also prints an upper bound for the priciest promotions and `--budget` is compared against that.
+With `--top`, the availability check can promote any of the ranked candidates, so the run also prints an upper bound for the priciest promotions and `--budget` is compared against that; this sample's own worst case is about 0.62 USD and its upper bound about 1.06 USD, so `--budget 0.5` alone would refuse it outright and the quickstart uses `--budget 1.2` to clear the upper bound with headroom.
 
 Every command documents its flags: `provibench COMMAND --help`.
 
@@ -106,6 +110,7 @@ provibench probe TRACE SPECS... --rungs 1,13,30 --repeats 6,2,2 --budget 0.5
 Repeat `SPECS...` to probe several providers in one run.
 The estimate covers every prompt token at the listed input price plus throughput output tokens at the output price, assuming no cache hit, and appears before requests.
 `--budget` refuses a run above that estimate.
+`--dry-run` prints that same estimate as the result and sends nothing, which is the way to read it before deciding to spend; `--yes` alongside it is accepted and ignored.
 Native prices follow the precedence in [Prices](#prices).
 
 | Column | Meaning |
@@ -128,6 +133,7 @@ Reports also retain the served provider, response models, raw per-rung records, 
 Runs persist under `runs/<trace>/<timestamp>/` as options, endpoint snapshots, prices, and one JSONL file per spec.
 
 Reports: `report RUN --output-file PATH` writes exactly what stdout would have shown to PATH, leaves stdout empty, and replaces an existing file.
+Without `--format`, `report RUN` prints its JSON document on a non-TTY stdout (a script or an agent) and the text table on a terminal; pass `--format text` to get the table regardless of where stdout goes.
 
 ### Sweep
 
@@ -157,7 +163,7 @@ Providers change routing, quantization, cache configuration, and prices from wee
 A cron job keeps the same working directory so its default `./runs` directory is stable:
 
 ```cron
-3 9 * * 1 cd ~/bench && provibench sweep sample deepseek/deepseek-v4.1-flash --top 3 --yes --budget 1 --json >> sweeps.ndjson
+3 9 * * 1 cd ~/bench && provibench sweep sample deepseek/deepseek-v4.1-flash --top 3 --yes --budget 1.2 --json >> sweeps.ndjson
 ```
 
 ```sh
@@ -182,6 +188,7 @@ Each run keeps an endpoint snapshot with the pinned provider, quantization, cont
 `replay` sends every recorded turn and is the path for a per-turn cache curve or the cost of a whole session.
 It requests one output token by default, discards live output, and stamps a run nonce into turns so the run does not inherit an earlier cache; `--warm` disables the nonce and reads the cache as found.
 `--limit` samples a prefix of a trace, and `--run` accepts the same spec shape as `probe`.
+As with `probe`, `--dry-run` prices the run and sends nothing.
 A trace of your own comes from `record`, a proxy in front of the real API.
 
 ```sh
@@ -204,6 +211,9 @@ A missing price remains `n/a`, and a budgeted run refuses an unpriced spec.
 
 The community table lists peak rates.
 A provider can discount off-peak, so the packaged `targets.toml` explicitly prices native `deepseek-flash` at DeepSeek's off-peak rate.
+
+`cache_write` is the per-token price of writing to the cache, separate from reading it back.
+DeepSeek charges its input price for a cache write (0.15); an OpenRouter listing that charges nothing beyond input shows 0.
 
 ### Sharing a trace
 

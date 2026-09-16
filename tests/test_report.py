@@ -453,9 +453,7 @@ def test_probe_report_marks_provider_drift_against_the_reference(
     )
     outcome = cli.run("report", str(run_dir), env=bench_paths.env)
     assert outcome.code == 0, outcome.stderr
-    summaries = [
-        d for d in map(as_document, as_list(outcome.document["probe_summaries"]) or []) if d
-    ]
+    summaries = [d for d in map(as_document, as_list(outcome.document["summaries"]) or []) if d]
     first, second = summaries
     assert first["drift"] is None and first["reference"] is True
     assert second["drift"] == "provider"
@@ -481,7 +479,7 @@ def test_probe_report_renders_a_run_without_stream_records(
     )
     plain = cli.run("report", str(run_dir), env=bench_paths.env)
     assert plain.code == 0, plain.stderr
-    [summary] = [d for d in map(as_document, as_list(plain.document["probe_summaries"]) or []) if d]
+    [summary] = [d for d in map(as_document, as_list(plain.document["summaries"]) or []) if d]
     outcome = cli.run("report", str(run_dir), tty_stdout=True, env=bench_paths.env)
     assert outcome.code == 0, outcome.stderr
     assert as_list(summary["rungs"]) != []

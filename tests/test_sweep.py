@@ -20,6 +20,7 @@ import pytest
 
 from provibench.bench.selection import SweepInfo
 from provibench.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
+from provibench.core.documents import as_document
 from tests.conftest import BenchPaths, Cli
 
 _RealAsyncClient = httpx.AsyncClient
@@ -83,7 +84,11 @@ _GUARDRAIL_404: dict[str, Any] = {
     "1 endpoint excluded; configurable at https://openrouter.ai/settings/privacy",
     "error_type": "not_found",
 }
-_GUARDRAIL_REASON = "unavailable for this key: Paid model training violation (account settings)"
+_GUARDRAIL_REASON = (
+    "unavailable for this key: Paid model training violation (account settings) "
+    "(change this at https://openrouter.ai/settings/privacy: allow this provider to train "
+    "on prompts, or drop the training-data restriction)"
+)
 
 # The 429 the live sweep saw: the gateway wraps the provider's refusal in its own envelope,
 # whose `type` is the word `error`; only the object it wraps names the failure.
@@ -498,7 +503,7 @@ def test_sweep_adds_a_native_spec_through_the_alias(
         f"or:{_MODEL}@novita",
         f"deepseek:{_NATIVE}",
     }
-    native = next(s for s in with_alias.document["summaries"] if s["price_source"] == "table")
+    native = next(s for s in with_alias.document["summaries"] if s["price_source"] == "targets")
     assert native["label"] == f"deepseek:{_NATIVE}"
     # the native spec sends the name its own endpoint serves, not the OpenRouter slug
     assert any(body.get("model") == _NATIVE for body in sent)
@@ -537,7 +542,7 @@ def test_sweep_records_the_sweep_block_and_the_endpoint_snapshot(
     assert native["tag"] is None and native["quantization"] is None
     assert "source" not in native and "price_input" not in native
     native_price = meta["prices"][f"deepseek:{_NATIVE}"]
-    assert native_price["source"] == "table" and native_price["prices"]["input"] > 0
+    assert native_price["source"] == "targets" and native_price["prices"]["input"] > 0
     assert [spec["label"] for spec in meta["specs"]] == _labels(outcome.document["summaries"])
     assert outcome.document["sweep"] == meta["sweep"]
 
@@ -578,7 +583,7 @@ def test_report_of_a_sweep_run_reads_the_same_order_with_no_network(
     _install(monkeypatch, refuse)
     report = cli.run("report", str(outcome.document["run_dir"]), env={**bench_paths.env, **_ENV})
     assert report.code == 0, report.stderr
-    assert _labels(report.document["probe_summaries"]) == _labels(outcome.document["summaries"])
+    assert _labels(report.document["summaries"]) == _labels(outcome.document["summaries"])
 
 
 def test_sweep_ties_are_broken_by_hit_rate(
@@ -736,7 +741,57 @@ def test_sweep_estimates_every_spec_and_the_budget_refuses_above_it(
         assert tag in estimate
     assert f"deepseek:{_NATIVE}" in estimate  # the native spec keeps its whole label
     assert estimate.count("openrouter-endpoint") == 4  # the gateway specs
-    assert "table" in estimate  # the native spec is priced from targets.toml
+    assert "targets" in estimate  # the native spec is priced from targets.toml
+
+
+def test_sweep_dry_run_sends_no_probe_request(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--dry-run` still lists the endpoints to price the estimate, but sends no probe or
+    pre-check request (R4); `requires_confirmation` stays true with or without `--yes` (R3c)."""
+    _write_targets(bench_paths.targets_path)
+    sent: list[dict[str, Any]] = []
+    calls: list[str] = []
+    _install(monkeypatch, _transport(sent=sent, calls=calls))
+
+    outcome = _sweep(
+        cli,
+        bench_paths,
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--no-throughput",
+        "--dry-run",
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert sent == []  # no probe request went out
+    assert all(not path.endswith("/messages") for path in calls)
+    doc = outcome.document
+    assert doc["partial"] is False
+    assert doc["changed"] is False
+    assert doc["requires_confirmation"] is True
+    assert "sweep" not in doc and "run_dir" not in doc
+    assert len(doc["estimate"]) >= 1  # type: ignore[arg-type]
+
+    with_yes = _sweep(
+        cli,
+        bench_paths,
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--no-throughput",
+        "--dry-run",
+        "--yes",
+    )
+    assert with_yes.code == 0, with_yes.stderr
+    assert sent == []
+    assert with_yes.document["requires_confirmation"] is True
 
 
 def test_sweep_row_labels_are_the_run_specs_probe_takes_by_hand(
@@ -1395,6 +1450,32 @@ def test_sweep_failure_output_keeps_the_selection_lines(
     assert "hit %" in outcome.stderr  # the tables the text failure path prints
     assert "selection: sort=price, top=-, zdr=off; dropped: novita/fp8" in outcome.stderr
     assert f"or:{_MODEL}@novita/fp8: not probed, {_GUARDRAIL_REASON}" in outcome.stderr
+
+
+def test_sweep_partial_failure_reaches_stdout_as_json(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sweep that lost a request is O5a's partial result: the document, `partial: true`
+    included, is still written to stdout, and the `operation_failed` error on stderr names
+    only the run, not the document again (fix)."""
+    _write_targets(bench_paths.targets_path)
+    _install(
+        monkeypatch,
+        _transport(
+            endpoints=_RANKED,
+            unavailable={"novita/fp8": _GUARDRAIL_404, _NATIVE: _GUARDRAIL_404},
+        ),
+    )
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--check"))
+    assert outcome.code == 1
+    assert outcome.error["kind"] == "operation_failed"
+    context = as_document(outcome.error.get("context"))
+    assert context is not None
+    assert set(context) == {"run_dir", "run_hex"}
+    doc = outcome.document
+    assert doc["partial"] is True
+    assert doc["sweep"] is not None
 
 
 def test_report_shows_the_selection_of_a_sweep_offline(

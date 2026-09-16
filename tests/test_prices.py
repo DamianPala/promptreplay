@@ -139,7 +139,7 @@ def _never_fetch(calls: list[int]) -> Any:
     return fetch
 
 
-def test_prices_lists_the_native_targets_own_models_with_the_table_source(
+def test_prices_lists_the_native_targets_own_models_with_the_targets_source(
     cli: Cli, bench_paths: BenchPaths
 ) -> None:
     _write_targets(bench_paths.targets_path, override=True)
@@ -166,7 +166,7 @@ def test_prices_lists_the_native_targets_own_models_with_the_table_source(
     # the target names one model: the key of its prices table, which its alias also maps to
     assert [row["model"] for row in _rows(document)] == ["deepseek-flash"]
     row = _row(document, "deepseek-flash")
-    assert row["target"] == "deepseek" and row["source"] == "table"
+    assert row["target"] == "deepseek" and row["source"] == "targets"
     assert (row["input"], row["cache_read"], row["cache_write"], row["output"]) == (
         0.15,
         0.003,
@@ -296,7 +296,7 @@ def test_a_native_estimate_prices_from_the_override(
 
     outcome = _replay(cli, bench_paths, "--run", "deepseek:deepseek-flash", "--yes")
     assert outcome.code == 0, outcome.stderr
-    assert "0.150" in outcome.stderr and "table" in outcome.stderr
+    assert "0.150" in outcome.stderr and "targets" in outcome.stderr
     assert "litellm" not in outcome.stderr
 
 

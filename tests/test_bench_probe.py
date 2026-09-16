@@ -257,7 +257,7 @@ def _ref(kind: str) -> Any:
 
 def _prices() -> SpecPrices:
     return SpecPrices(
-        prices=Prices(input=1.0, cache_read=0.1, cache_write=1.0, output=2.0), source="table"
+        prices=Prices(input=1.0, cache_read=0.1, cache_write=1.0, output=2.0), source="targets"
     )
 
 
@@ -904,7 +904,7 @@ def test_summarize_probe_pools_the_rungs_and_prices_the_result() -> None:
     assert summary.prefix_fraction == pytest.approx((1.0 + 0.5) / 2)
     assert summary.h == pytest.approx(2 / 3 * 0.75)
     assert summary.eff_per_m_prompt == pytest.approx((1 - 0.5) * 1.0 + 0.5 * 0.1)
-    assert summary.price_source == "table"
+    assert summary.price_source == "targets"
     assert summary.errors == 0
     assert summary.skipped == 0
 

@@ -195,6 +195,45 @@ def _selected(tags: Sequence[str], patterns: Sequence[str], *, flag: str) -> set
     return selected
 
 
+def validate_pinned_providers(
+    run_specs: Sequence[RunSpec], index: Mapping[str, list[Endpoint]]
+) -> None:
+    """Fail fast when a pinned gateway spec names a tag or provider no endpoint carries.
+
+    `spec_prices` already returns `None` for a pin that matches nothing, which reads to
+    `--budget` as merely unpriced and invites pricing a provider that will never answer
+    (feedback: the hint suggested adding a targets.toml price for a phantom endpoint). The
+    tags come from the same endpoint list `sweep --include` validates a prefix against, so
+    both name the unknown-tag error the same way and point at the same command.
+
+    A spec whose model has no entry in `index` is left alone: the lookup itself failed or
+    was never attempted, which is reported separately, and guessing "no such provider" from
+    an empty list would be wrong as often as right.
+    """
+    from provibench.bench.openrouter import normalize_provider
+
+    for spec in run_specs:
+        if spec.target.kind != "openrouter" or not spec.providers:
+            continue
+        endpoints = index.get(spec.model, [])
+        if not endpoints:
+            continue
+        wanted = {normalize_provider(name) for name in spec.providers}
+        matched = any(
+            normalize_provider(endpoint.tag) in wanted
+            or normalize_provider(endpoint.provider_name) in wanted
+            for endpoint in endpoints
+        )
+        if matched:
+            continue
+        tags = ", ".join(sorted({endpoint.tag for endpoint in endpoints if endpoint.tag}))
+        bad = ", ".join(repr(name) for name in spec.providers)
+        raise InvalidInput(
+            f"no endpoint tagged {bad} serves {spec.model}; tags: {tags or '(none)'}",
+            hint="provibench endpoints MODEL",
+        )
+
+
 def spec_price_map(
     run_specs: Sequence[RunSpec],
     index: Mapping[str, list[Endpoint]],

@@ -14,8 +14,6 @@ import click
 
 from provibench.commands.run_refs import resolve_run_dir
 from provibench.commands.summary_view import (
-    PROBE_SUMMARY,
-    SUMMARY,
     SWEEP_BLOCK_PROPERTIES,
     probe_summary_to_document,
     render_report_document,
@@ -61,8 +59,7 @@ _OUTPUT = obj(
         "run_hex": nullable_string(),
         "protocol": string(enum=["full", "probe"]),
         "options": _OPTIONS,
-        "summaries": array(SUMMARY),
-        "probe_summaries": array(PROBE_SUMMARY),
+        "summaries": array({}),
         "sweep": nullable_object(SWEEP_BLOCK_PROPERTIES, required=list(SWEEP_BLOCK_PROPERTIES)),
         "output_file": nullable_string(),
         "changed": boolean(),
@@ -76,7 +73,6 @@ _OUTPUT = obj(
         "protocol",
         "options",
         "summaries",
-        "probe_summaries",
         "sweep",
         "output_file",
         "changed",
@@ -91,8 +87,11 @@ _OUTPUT = obj(
         effects=Effects.IDEMPOTENT,
         output=_OUTPUT,
         output_description=(
-            "output_file is set when --output-file writes the selected rendering or JSON "
-            "document; that file contains exactly what stdout would have received."
+            "summaries holds one object per spec: shaped like probe's or sweep's summaries "
+            "(see provibench schema probe) when protocol is 'probe', or like replay's (see "
+            "provibench schema replay) when protocol is 'full'. output_file is set when "
+            "--output-file writes the selected rendering or JSON document; that file "
+            "contains exactly what stdout would have received."
         ),
         render=render_report_document,
     ),
@@ -164,7 +163,6 @@ def _full_report(run_dir: Path) -> Document:
         "protocol": meta.protocol,
         "options": _replay_options(meta.options),
         "summaries": entries,
-        "probe_summaries": [],
         "sweep": None,
         "output_file": None,
         "changed": False,
@@ -196,8 +194,7 @@ def _probe_report(run_dir: Path) -> Document:
         "run_hex": meta.run_hex,
         "protocol": meta.protocol,
         "options": dict(meta.options.model_dump()),
-        "summaries": [],
-        "probe_summaries": [probe_summary_to_document(s) for s in summaries],
+        "summaries": [probe_summary_to_document(s) for s in summaries],
         # The selection the run chose its endpoints by, so the report can print it with no
         # network; `None` for a probe whose specs were given by hand.
         "sweep": None if meta.sweep is None else meta.sweep.to_document(),

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import click
 
+from provibench.commands.dry_run import DRY_RUN_OPTION
 from provibench.core.errors import InvalidInput
 from provibench.core.params import TIMEOUT, parse_duration
 
@@ -60,6 +61,7 @@ class ProbeRequest:
     timeout: float = _DEFAULT_TIMEOUT_S
     budget: float | None = None
     yes: bool = False
+    dry_run: bool = False
     parallel: int = 1
     by_price: bool = False
     """Order the summaries — and the run directory — by measured effective price."""
@@ -171,6 +173,7 @@ def probe_options[FC: Callable[..., Any]](command: FC) -> FC:
                 is_flag=True,
                 help="Skip the confirmation prompt; the budget check still applies",
             ),
+            DRY_RUN_OPTION,
         )
     ):
         command = option(command)

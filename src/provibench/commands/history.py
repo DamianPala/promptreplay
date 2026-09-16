@@ -14,8 +14,10 @@ from pathlib import Path
 
 import click
 
+from provibench.commands.run_specs import load_targets, native_specs
 from provibench.commands.run_tables import render_history
 from provibench.commands.run_view import HISTORY_OUTPUT, history_document
+from provibench.core.context import Invocation
 from provibench.core.documents import Document
 from provibench.core.errors import NotFound
 from provibench.core.params import DURATION
@@ -42,7 +44,9 @@ from provibench.core.spec import CommandSpec, Effects
 @click.argument(
     "model",
     required=False,
-    help="Model to list (deepseek/deepseek-v4.1-flash, or deepseek-flash); default: all of them",
+    help="Model to list (deepseek/deepseek-v4.1-flash, or deepseek-flash); an OpenRouter "
+    "slug also matches the native targets whose targets.toml aliases carry it, the way "
+    "sweep finds them; default: all of them",
 )
 @click.option("--trace", default=None, help="Only runs of this trace")
 @click.option(
@@ -61,13 +65,25 @@ def history(
     from provibench.bench.run_history import history_series, keep_fresh, scan_runs
 
     runs_dir = Path(invocation.setting("runs_dir") or ".")
-    found = scan_runs(runs_dir, model=model, trace=trace)
+    extra_labels = _native_labels(model, invocation) if model is not None else frozenset[str]()
+    found = scan_runs(runs_dir, model=model, trace=trace, extra_labels=extra_labels)
     if not found:
         raise _nothing_found(runs_dir, model=model, trace=trace)
     # The age filter runs after the existence check, so "no run this recent" is an empty
     # table — a legitimate answer — while "no run at all" is a `not_found` with a hint.
     runs = keep_fresh(found, since_s=since_s, now=invocation.clock.now())
     return history_document(runs, history_series(runs))
+
+
+def _native_labels(model: str, invocation: Invocation) -> frozenset[str]:
+    """The run-spec labels of the native targets MODEL's aliases carry it under.
+
+    A native row's `model` is the name its own target serves it under (`deepseek-flash`),
+    not the OpenRouter slug this argument names, so a slug alone would never match it;
+    `native_specs` is the same alias lookup `sweep` uses to add those targets to a run.
+    """
+    targets = load_targets(invocation)
+    return frozenset(spec.label for spec in native_specs(model, targets))
 
 
 def _nothing_found(runs_dir: Path, *, model: str | None, trace: str | None) -> NotFound:

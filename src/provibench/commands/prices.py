@@ -114,12 +114,15 @@ def render_prices(invocation: Invocation, document: Document) -> None:
     spec=CommandSpec(effects=Effects.IDEMPOTENT, output=_OUTPUT, render=render_prices),
     help="Show the prices of the native targets' models and where each one comes from.\n\n"
     "A native target is priced from its targets.toml prices entry when it has one (source "
-    "table) and from LiteLLM's community table otherwise (source litellm); a model neither "
-    "lists is n/a. Without MODEL, every model the native targets name — their prices keys "
-    "and the models their aliases map to — is shown. The community table is cached under "
-    "$XDG_CACHE_HOME/provibench/litellm-prices.json and refetched at most once a week, or "
-    "now with --update; its age is printed beside the path. It lists peak rates, so a "
-    "provider that discounts off-peak needs that rate in targets.toml to be priced right.",
+    "targets) and from LiteLLM's community table otherwise (source litellm); a model "
+    "neither lists is n/a. Without MODEL, every model the native targets name — their "
+    "prices keys and the models their aliases map to — is shown. The community table is "
+    "cached under $XDG_CACHE_HOME/provibench/litellm-prices.json and refetched at most "
+    "once a week, or now with --update; its age is printed beside the path. It lists peak "
+    "rates, so a provider that discounts off-peak needs that rate in targets.toml to be "
+    "priced right. cache_write is the per-token price of writing to the cache: DeepSeek "
+    "charges its input price for it (0.15), and an OpenRouter listing that charges nothing "
+    "beyond input shows 0.",
 )
 @click.option("--update", is_flag=True, help="Refetch the LiteLLM price table before reading it")
 @click.argument("models", nargs=-1, help="Model names to price for every native target")

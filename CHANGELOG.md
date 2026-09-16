@@ -56,10 +56,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exists; `report --output-file` replaces its file, since a report is derived from the run alone
 - Native prices from LiteLLM's community table, cached under `$XDG_CACHE_HOME` and refetched
   weekly or on `provibench prices --update`; `targets.toml` `prices` entries override it, and
-  every estimate names its price source (`table`, `litellm` or `openrouter-endpoint`)
+  every estimate names its price source (`targets`, `litellm` or `openrouter-endpoint`)
+- `--dry-run` on `probe`, `sweep`, and `replay`: prices the run and stops there, sending
+  nothing; the result carries the estimate, the runs directory, and `requires_confirmation`,
+  and `--yes` alongside it is accepted and ignored
 
 ### Changed
 
+- `report --json`'s summaries array is named `summaries` for both a probe and a full-replay
+  run, the name `sweep` and `probe --json` already used; the separate, always-empty
+  `probe_summaries` field is gone
+- `history MODEL` resolves a native target's runs through `targets.toml` aliases, the same
+  way `sweep` matches a native target to `MODEL`
+- The native price source `table` is renamed `targets` everywhere (`prices`, estimates, and
+  run records); `prices --help` and the README document what `cache_write` prices
 - Report now selects text, Markdown, or HTML with `--format` and writes one selected result to
   `--output-file`; scrub takes its trace product as positional OUT and uses the same flag for
   its result document. TTL summaries expose `offset_s`.
@@ -88,5 +98,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The estimate prints line by line instead of escaping its newlines into one line
 - Endpoints that come back untagged are reported instead of silently dropped
 - A mistyped trace name fails before the endpoint listing is fetched
+- A partial `probe`, `sweep`, or `replay` (a failed request, a skipped rung, or a failed
+  turn) now writes its result document to stdout with a required `partial: true`, instead
+  of only on success; the `operation_failed` error on stderr then names just the run
+  (`run_dir`, and `run_hex` for `probe`/`sweep`) rather than repeating the whole document.
+  A replay with a failed turn now also exits non-zero instead of `0`
+- A `@provider` pin that matches no endpoint fails with `invalid_input` naming the tags
+  that do exist, instead of reading as merely unpriced
+- A drop reason naming an OpenRouter training-data restriction now says where to change it
+  (the account's privacy setting)
+- `endpoints` on an unknown model slug fails with a clean `not_found`, instead of printing
+  OpenRouter's raw HTML 404 page
+- `endpoints` reads the same default API key `sweep`'s listing does, so `latency_ms_30m`
+  and `throughput_30m` are populated instead of `null` when a key is configured
 
 [Unreleased]: https://github.com/DamianPala/provibench/commits/main

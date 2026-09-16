@@ -132,6 +132,7 @@ def test_replay_runs_and_persists_a_run(
     doc = outcome.document
     assert doc["conversation"] == "c1"
     assert doc["turns"] == 2
+    assert doc["partial"] is False
     assert doc["changed"] is True
     run_dir = _run_dir(outcome)
     assert (run_dir / "run.json").is_file()
@@ -140,7 +141,40 @@ def test_replay_runs_and_persists_a_run(
     assert summary["ok"] == 2
     assert summary["errors"] == 0
     cost = as_document(summary["cost"]) or {}
-    assert cost["source"] == "table"
+    assert cost["source"] == "targets"
+
+
+def test_replay_exits_non_zero_on_a_failed_turn(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed turn is F1c/O5a: `partial: true` still reaches stdout, exit is non-zero, and
+    the `operation_failed` error's context names only the run, not the document again."""
+    _write_targets(bench_paths.targets_path)
+    trace = bench_paths.traces_dir / "t.jsonl"
+    append_entry(trace, _trace_entry(1, prompt_tokens=100))
+    append_entry(trace, _trace_entry(2, prompt_tokens=100))
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return httpx.Response(500, json={"error": {"message": "boom"}})
+        return _ok_response(request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+
+    outcome = cli.run(
+        "replay", "t", "--run", "t:model-a", "--yes", env={**bench_paths.env, "X_KEY": "secret"}
+    )
+    assert outcome.code == 1
+    assert outcome.error["kind"] == "operation_failed"
+    context = as_document(outcome.error.get("context"))
+    assert context is not None
+    assert set(context) == {"run_dir", "run_hex"}
+    doc = outcome.document
+    assert doc["partial"] is True
+    [summary] = [d for d in map(as_document, as_list(doc["summaries"]) or []) if d]
+    assert summary["errors"] == 1
 
 
 def test_replay_limit_truncates_the_replayed_turns(
@@ -434,6 +468,51 @@ def test_replay_budget_refuses_above_the_estimate_and_sends_nothing(
     assert outcome.error["kind"] == "invalid_input"
     assert calls["n"] == 0
     assert not (bench_paths.runs_dir / "t").exists()
+
+
+def test_replay_dry_run_sends_nothing_and_reports_the_estimate(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--dry-run` prices the run and stops: no request, `requires_confirmation` (R4)."""
+    _write_targets(bench_paths.targets_path)
+    trace = bench_paths.traces_dir / "t.jsonl"
+    append_entry(trace, _trace_entry(1, prompt_tokens=200))
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return _ok_response(request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+
+    outcome = cli.run(
+        "replay", "t", "--run", "t:model-a", "--dry-run", env={**bench_paths.env, "X_KEY": "secret"}
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert calls["n"] == 0
+    assert not (bench_paths.runs_dir / "t").exists()
+    doc = outcome.document
+    assert doc["partial"] is False
+    assert doc["changed"] is False
+    assert doc["requires_confirmation"] is True
+    assert doc["runs_dir"] == str(bench_paths.runs_dir)
+    assert "run_dir" not in doc and "summaries" not in doc
+    [estimate] = [d for d in map(as_document, as_list(doc["estimate"]) or []) if d]
+    assert estimate["label"] == "t:model-a"
+    assert estimate["worst_case_usd"] == pytest.approx(0.0002)
+
+    with_yes = cli.run(
+        "replay",
+        "t",
+        "--run",
+        "t:model-a",
+        "--dry-run",
+        "--yes",
+        env={**bench_paths.env, "X_KEY": "secret"},
+    )
+    assert with_yes.code == 0, with_yes.stderr
+    assert calls["n"] == 0
+    assert with_yes.document["requires_confirmation"] is True
 
 
 def test_replay_budget_within_the_estimate_still_runs(

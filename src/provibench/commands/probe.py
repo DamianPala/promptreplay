@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 
 import click
 
+from provibench.commands.dry_run import build_document as build_dry_run_document
+from provibench.commands.dry_run import dry_run_fields
 from provibench.commands.inspect import resolve_trace_path
 from provibench.commands.prices import native_price_table
 from provibench.commands.probe_flags import ProbeRequest, options_for, probe_options
@@ -36,6 +38,7 @@ from provibench.commands.run_specs import (
     parse_specs,
     select_conversation,
     spec_price_map,
+    validate_pinned_providers,
 )
 from provibench.commands.summary_view import (
     PROBE_SUMMARY,
@@ -51,6 +54,7 @@ from provibench.core.registry import Command, require_invocation
 from provibench.core.spec import CommandSpec, Effects
 
 if TYPE_CHECKING:
+    from provibench.bench.openrouter import Endpoint
     from provibench.bench.probe import ProbeOptions, ProbeResult, ProbeRun
     from provibench.bench.probe_summary import ProbeSummary
     from provibench.bench.targets import RunSpec
@@ -64,9 +68,11 @@ _PROBE_PROPERTIES: dict[str, JsonSchema] = {
     "conversation": string(),
     "rungs": array(integer()),
     "summaries": array(PROBE_SUMMARY),
+    "partial": boolean(),
     "changed": boolean(),
+    **dry_run_fields(precheck=True),
 }
-_PROBE_REQUIRED = ["run_dir", "run_hex", "conversation", "rungs", "summaries", "changed"]
+_PROBE_REQUIRED = ["partial", "changed"]
 _OUTPUT = obj(_PROBE_PROPERTIES, required=_PROBE_REQUIRED)
 
 
@@ -83,9 +89,13 @@ def output_fields() -> tuple[dict[str, JsonSchema], list[str]]:
         confirm=True,
         output=_OUTPUT,
         output_description=(
-            "The successful result contains the persisted run directory and one summary per "
-            "probed spec. If any request or rung fails, the same result is available under "
-            "error.context and the command exits non-zero."
+            "partial is required: true when a request failed or a rung was skipped, false "
+            "otherwise. The result document is always written to stdout, partial run "
+            "included; a partial run also exits non-zero with an operation_failed error on "
+            "stderr whose context carries only run_dir and run_hex. run_dir, run_hex, "
+            "conversation, rungs, and summaries are present only on a real run; --dry-run "
+            "sends nothing and instead returns estimate, total_usd, pre_check, upper_bound, "
+            "runs_dir, and requires_confirmation, with partial: false and changed: false."
         ),
         render=render_probe_run,
     ),
@@ -94,7 +104,8 @@ def output_fields() -> tuple[dict[str, JsonSchema], list[str]]:
     "measure whether the provider cached the prefix and whether later requests found it. "
     "A fresh nonce isolates the run's cache from every earlier one, unless --warm. Costs "
     "prompt tokens only, and far fewer than replaying the whole trace; the confirmation "
-    "shows the worst-case cost of the run before anything is sent.",
+    "shows the worst-case cost of the run before anything is sent. --dry-run prices the run "
+    "and stops there, sending nothing.",
 )
 @click.argument("trace", help="Trace path, name under traces_dir, or 'sample'")
 @click.argument("specs", nargs=-1, required=True, help="One or more target:model[@provider] specs")
@@ -116,6 +127,7 @@ def probe(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
     timeout: float,
     budget: float | None,
     yes: bool,
+    dry_run: bool,
 ) -> Document:
     invocation = require_invocation(ctx)
     request = ProbeRequest(
@@ -132,6 +144,7 @@ def probe(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
         timeout=timeout,
         budget=budget,
         yes=yes,
+        dry_run=dry_run,
     )
     return execute_probe(invocation, request)
 
@@ -157,12 +170,10 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         raise InvalidInput(f"No turns to probe in conversation {key!r}")
     options = options_for(request, selected)
 
-    if request.endpoints is None:
-        index, lookup_notes = endpoint_index(request.specs)
-    else:
-        index, lookup_notes = dict(request.endpoints), []
+    index, lookup_notes = _resolve_index(request)
     for note in lookup_notes:
         invocation.message(note)
+    validate_pinned_providers(request.specs, index)
     table = native_price_table(invocation, request.specs)
     prices = spec_price_map(request.specs, index, table=table)
     plan = request.pre_check
@@ -182,6 +193,11 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         hint="Raise --budget, or make the run smaller: drop a spec or a rung, lower "
         "--repeats, or skip the streamed request with --no-throughput",
     )
+    if request.dry_run:
+        runs_dir = Path(invocation.setting("runs_dir") or ".")
+        return build_dry_run_document(
+            estimates, runs_dir=runs_dir, pre_check=pre_check, upper_bound=upper_bound
+        )
     confirm(
         invocation,
         estimates,
@@ -248,6 +264,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         "conversation": key,
         "rungs": run.options.rungs or [],
         "summaries": [probe_summary_to_document(summary) for summary in summaries],
+        "partial": False,
         "changed": True,
     }
     if sweep is not None:
@@ -257,6 +274,13 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         document["sweep"] = sweep.to_document()
     _fail_on_partial(invocation, run, summaries, document, run_dir)
     return document
+
+
+def _resolve_index(request: ProbeRequest) -> tuple[dict[str, list[Endpoint]], list[str]]:
+    """The endpoint index a sweep already fetched, or a fresh lookup for a plain probe."""
+    if request.endpoints is None:
+        return endpoint_index(request.specs)
+    return dict(request.endpoints), []
 
 
 def _checked(
@@ -310,16 +334,19 @@ def _fail_on_partial(
     document: Document,
     run_dir: Path,
 ) -> None:
-    """Fail the command, after the run is persisted, when anything failed or was skipped.
+    """Set `partial` and, when anything failed or was skipped, fail after the run is written.
 
-    The run is worth money, so the numbers survive the failure: a terminal gets the two
-    tables on stderr before the error lands, and a machine-readable call gets the same
-    document it would have printed, under the error's structured `context`.
+    O5a: the result document is emitted on stdout exactly as a clean run's would be, partial
+    or not, so an agent never has to unwrap it from `error.context`; a terminal instead gets
+    the two tables on stderr before the error, which stays this command's own record and
+    names only the run rather than repeating the document.
     """
     from provibench.bench.probe import is_failed
+    from provibench.core.output import write_document
 
     failed = sum(1 for records in run.records.values() for record in records if is_failed(record))
     skipped = sum(summary.skipped for summary in summaries)
+    document["partial"] = bool(failed or skipped)
     if not failed and not skipped:
         return
     parts: list[str] = []
@@ -327,9 +354,8 @@ def _fail_on_partial(
         parts.append(f"{failed} request(s) failed")
     if skipped:
         parts.append(f"{skipped} rung(s) skipped")
-    context: Document = {"run_dir": str(run_dir), "run_hex": run.run_hex}
     if invocation.machine_readable:
-        context = dict(document)
+        write_document(invocation.streams.stdout, document)
     else:
         message_lines(invocation, probe_report_text(document))
 
@@ -337,7 +363,7 @@ def _fail_on_partial(
         raise OperationFailed(
             f"The probe finished with {' and '.join(parts)}",
             hint=f"The run is saved; inspect it with provibench report {run_dir}",
-            context=context,
+            context={"run_dir": str(run_dir), "run_hex": run.run_hex},
         )
 
     invocation.on_success.append(hook)

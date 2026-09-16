@@ -196,18 +196,20 @@ def test_select_candidates_include_overrides_the_floor_for_that_tag() -> None:
 
 def test_unavailable_reason_quotes_the_first_guardrail_reason() -> None:
     """The 404 an excluded account gets: the reason the settings page would show."""
+    expected = (
+        "unavailable for this key: Paid model training violation (account settings) "
+        "(change this at https://openrouter.ai/settings/privacy: allow this provider to "
+        "train on prompts, or drop the training-data restriction)"
+    )
     assert (
         unavailable_reason(
             status=404, payload={"error_type": "not_found", "message": _GUARDRAIL_MESSAGE}
         )
-        == "unavailable for this key: Paid model training violation (account settings)"
+        == expected
     )
     # the same message at the top level, and without a newline to move the reason to
     inline = {"message": _GUARDRAIL_MESSAGE.replace("\n", " ")}
-    assert (
-        unavailable_reason(status=404, payload=inline)
-        == "unavailable for this key: Paid model training violation (account settings)"
-    )
+    assert unavailable_reason(status=404, payload=inline) == expected
     # a 404 with no message of its own still says what the API called it
     assert unavailable_reason(status=404, payload={"error_type": "not_found"}) == (
         "unavailable for this key: not_found"

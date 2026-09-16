@@ -137,8 +137,7 @@ def probe_document() -> Document:
             "throughput": True,
             "ttl_s": None,
         },
-        "summaries": [],
-        "probe_summaries": [probe_summary_to_document(summary) for summary in summaries],
+        "summaries": [probe_summary_to_document(summary) for summary in summaries],
         "output_file": None,
         "changed": False,
     }
@@ -161,7 +160,6 @@ def replay_document() -> Document:
         "protocol": "full",
         "options": {"max_tokens": 1, "delay_s": 0.0, "strip_thinking": False, "timeout_s": 60.0},
         "summaries": [summary_to_document(summary) for summary in summaries],
-        "probe_summaries": [],
         "output_file": None,
         "changed": False,
     }
@@ -213,7 +211,7 @@ def test_both_tables_keep_the_terminal_columns_and_short_labels() -> None:
 
 def test_html_report_reads_legacy_ttl_offset_field() -> None:
     document = probe_document()
-    summaries = as_list(document["probe_summaries"]) or []
+    summaries = as_list(document["summaries"]) or []
     summary = as_document(summaries[0])
     assert summary is not None
     rungs = as_list(summary["rungs"]) or []
@@ -332,10 +330,8 @@ def test_cost_chart_is_horizontal_bars_in_the_same_series_order() -> None:
 def test_a_spec_without_a_price_keeps_its_row_rather_than_vanishing() -> None:
     """An unknown price reads as `-` next to the other specs, never as a missing bar."""
     document = probe_document()
-    entries = [
-        entry for entry in map(as_document, as_list(document["probe_summaries"]) or []) if entry
-    ]
-    document["probe_summaries"] = [{**entries[0], "eff_per_m_prompt": None}, *entries[1:]]
+    entries = [entry for entry in map(as_document, as_list(document["summaries"]) or []) if entry]
+    document["summaries"] = [{**entries[0], "eff_per_m_prompt": None}, *entries[1:]]
     cost = _SVG.findall(render_html(document))[1]
     assert _bars(cost) == 2  # the priced specs
     assert cost.count('class="row-label"') == 3  # every spec keeps its label
@@ -344,11 +340,9 @@ def test_a_spec_without_a_price_keeps_its_row_rather_than_vanishing() -> None:
 
 def test_specs_past_the_eight_slots_stay_in_the_tables_and_are_named() -> None:
     document = probe_document()
-    entries = [
-        entry for entry in map(as_document, as_list(document["probe_summaries"]) or []) if entry
-    ]
+    entries = [entry for entry in map(as_document, as_list(document["summaries"]) or []) if entry]
     [first] = entries[:1]
-    document["probe_summaries"] = [{**first, "label": f"or:model@r{index}"} for index in range(9)]
+    document["summaries"] = [{**first, "label": f"or:model@r{index}"} for index in range(9)]
     html = render_html(document)
     charts = _SVG.findall(html)
     assert _bars(charts[0]) == MAX_SERIES * 2  # the fixture entry's two rungs, eight times
@@ -359,7 +353,7 @@ def test_specs_past_the_eight_slots_stay_in_the_tables_and_are_named() -> None:
 
 def test_empty_probe_document_still_renders_a_page() -> None:
     document = probe_document()
-    document["probe_summaries"] = []
+    document["summaries"] = []
     html = render_html(document)
     assert html.startswith("<!DOCTYPE html>") and html.rstrip().endswith("</html>")
     assert "<svg" not in html

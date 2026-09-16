@@ -182,6 +182,8 @@ def test_output_schemas_use_only_the_o4_subset(cli: Cli) -> None:
 
     def check(schema: Document) -> None:
         assert set(schema) <= allowed, schema
+        if not schema:
+            return  # O4b: the empty object is a valid schema, meaning "any JSON value"
         assert "type" in schema
         if schema["type"] == "object":
             properties = as_document(schema["properties"]) or {}

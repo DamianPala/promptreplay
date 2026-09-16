@@ -39,7 +39,7 @@ _SORT_KEYS = ("price", "uptime", "throughput", "latency")
 """Every `--sort` key; `bench.selection.SORT_KEYS` owns what each of them ranks by."""
 
 _PROPERTIES, _REQUIRED = output_fields()
-_OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=[*_REQUIRED, "sweep"])
+_OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=_REQUIRED)
 
 
 @click.command(
@@ -50,10 +50,15 @@ _OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=[*_REQUIRED, "swee
         confirm=True,
         output=_OUTPUT,
         output_description=(
-            "The successful result contains the persisted run directory, the measured summary "
-            "for each surviving spec, and sweep selection details. If any request or rung "
-            "fails, the same result is available under error.context and the command exits "
-            "non-zero."
+            "partial is required: true when a request failed or a rung was skipped, false "
+            "otherwise. The result document, sweep block included, is always written to "
+            "stdout, partial run included; a partial run also exits non-zero with an "
+            "operation_failed error on stderr whose context carries only run_dir and run_hex. "
+            "run_dir, run_hex, conversation, rungs, summaries, and sweep are present only on "
+            "a real run; --dry-run sends no probe request and instead returns estimate, "
+            "total_usd, pre_check, upper_bound, runs_dir, and requires_confirmation, with "
+            "partial: false and changed: false; it still lists the endpoints and runs the "
+            "selection to price the estimate."
         ),
         render=render_probe_run,
     ),
@@ -70,7 +75,8 @@ _OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=[*_REQUIRED, "swee
     "reported as not probed instead of eating a slot. What survives is probed like any "
     "other run — the same estimate and --budget, the same confirmation, the same run "
     "directory and tables. The listing only picks candidates; the effective $/M the report "
-    "measures is the verdict.",
+    "measures is the verdict. --dry-run prices the run and stops there, sending no probe "
+    "request; it still lists the model's endpoints to price the estimate.",
 )
 @click.argument("trace", help="Trace path, name under traces_dir, or 'sample'")
 @click.argument("model", help="OpenRouter model slug to sweep")
@@ -156,6 +162,7 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
     timeout: float,
     budget: float | None,
     yes: bool,
+    dry_run: bool,
 ) -> Document:
     invocation = require_invocation(ctx)
     targets = load_targets(invocation)
@@ -217,6 +224,7 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
             timeout=timeout,
             budget=budget,
             yes=yes,
+            dry_run=dry_run,
             parallel=parallel,
             by_price=True,
             endpoints=index,

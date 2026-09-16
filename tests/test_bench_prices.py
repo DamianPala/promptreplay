@@ -118,7 +118,7 @@ def test_resolve_is_exact_and_never_fuzzy() -> None:
 def test_resolve_target_prefers_the_targets_table() -> None:
     table = PriceTable.from_payload(_PAYLOAD)
     found = resolve_target(_target(), "deepseek-flash", table)
-    assert found == (_OWN, "table")
+    assert found == (_OWN, "targets")
 
 
 def test_resolve_target_falls_back_to_litellm() -> None:
@@ -305,7 +305,7 @@ def test_enrich_anthropic_costs_from_the_community_table() -> None:
     overridden = _result()
     enrich_anthropic(RunSpec(target=_target(), model="deepseek-flash"), [overridden], table)
     assert overridden.cost is not None
-    assert overridden.cost.source == "table"
+    assert overridden.cost.source == "targets"
     assert overridden.cost.input == pytest.approx(0.15)
 
     unpriced = _result()

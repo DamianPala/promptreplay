@@ -327,6 +327,55 @@ def test_history_filters_by_model_and_names_the_ones_it_has(
     assert _MODEL in str(missing.error["hint"])
 
 
+def test_history_of_a_slug_also_finds_the_native_target_that_carries_it(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    """`history SLUG` resolves a native target's alias the way `sweep` does (fix): a run
+    filed under the native target's own model name still shows up under the OpenRouter
+    slug its `targets.toml` `aliases` maps to."""
+    bench_paths.targets_path.write_text(
+        "[targets.deepseek]\n"
+        'url = "https://api.deepseek.test/anthropic/v1/messages"\n'
+        'api_key_env = "DS_KEY"\n'
+        'kind = "anthropic"\n'
+        "[targets.deepseek.aliases]\n"
+        '"vendor/slug" = "deepseek-flash"\n'
+    )
+    native_target = Target(
+        name="deepseek",
+        url="https://api.deepseek.test/anthropic/v1/messages",
+        api_key_env="DS_KEY",
+        kind="anthropic",
+    )
+    native_spec = RunSpec(target=native_target, model="deepseek-flash")
+    run = ProbeRun(
+        run_hex="native123456",
+        options=ProbeOptions(rungs=[1], repeats=[2]),
+        records={
+            native_spec.label: [
+                _record(native_spec.label, "cold", attempt=0, cached=0, cache_write=100),
+                _record(native_spec.label, "warm", attempt=1, cached=100),
+                _record(native_spec.label, "warm", attempt=2, cached=100),
+                _record(native_spec.label, "stream", attempt=0, ttft_ms=400.0, gen_tok_s=40.0),
+            ]
+        },
+    )
+    run_dir = write_probe_run(
+        bench_paths.runs_dir, "t", "c1", run, [native_spec], endpoints={}, prices={}
+    )
+    _stamp(run_dir, stamp_at(1.0))
+
+    outcome = cli.run("history", "vendor/slug", "--json", env=bench_paths.env)
+    assert outcome.code == 0, outcome.stderr
+    rows = rows_of(outcome.document)
+    assert any(row["spec"] == native_spec.label for row in rows)
+
+    # a slug no native target's aliases carry, and that owns no run, is still not_found
+    missing = cli.run("history", "no-such/slug", env=bench_paths.env)
+    assert missing.code == 1
+    assert missing.error["kind"] == "not_found"
+
+
 def test_history_with_no_runs_is_not_found(cli: Cli, bench_paths: BenchPaths) -> None:
     outcome = cli.run("history", env=bench_paths.env)
     assert outcome.code == 1

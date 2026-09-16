@@ -8,7 +8,7 @@ both `--json` positions, command help, error handling, confirmation behavior, `c
 The conformance claim remains `0.1.0-draft.7`. Several standard MUST requirements are
 open, so changing the claim to `0.1.0` would be false.
 
-There are 122 applicable rows: 78 `ok`, 16 `fixed`, and 28 `open`. The B1 greenfield rule
+There are 127 applicable rows: 78 `ok`, 24 `fixed`, and 25 `open`. The B1 greenfield rule
 means the B3 and B4 brownfield exceptions do not apply to provibench's own command paths,
 flags, defaults, or result names. The B2 route, claiming `0.1.0` with `conforming: false` per
 command, was considered and rejected: O6b alone would exclude nine commands, and R1b and R2b
@@ -42,9 +42,9 @@ B3 lists retained names and defaults, and B4 covers retained meanings with repla
 | D8 | ok | The schema version is the positive decimal string `"1"`; unknown optional fields remain forward-compatible. |
 | D8a | ok | The added optional output-description metadata does not require a schema-version bump. |
 | D8b | ok | No compatible tool-version range is currently promised; the current command paths, defaults, error kinds, and output fields are tested together. |
-| D9 | open | Partial probe runs have one clear follow-up, `report RUN_DIR`, but it is still a hint rather than a structured `next` breadcrumb. Recommendation: add `next` in a later output-contract change. |
+| D9 | open | A partial `probe`, `sweep`, or `replay` names its one clear follow-up, `report RUN_DIR`, as the `operation_failed` error's `hint` rather than a structured `next` breadcrumb; D9 is a SHOULD, and the run's location is already in the error's `context` for a script to build its own command from. Recommendation: add `next` in a later output-contract change. |
 | D9a | ok | No result or F3 error currently emits `next`, so no malformed argv breadcrumb is exposed. |
-| D9b | open | The partial-probe follow-up is not rendered with the standard `Next:` label. Recommendation: render the same breadcrumb when D9 is implemented. |
+| D9b | open | The partial-run follow-up stays a `hint`, not the standard `Next:` label; unchanged by the O5a fix, which only moved the run's own data (the result document) from `error.context` to stdout and left `context` naming just the run's location. Recommendation: render the same breadcrumb when D9 is implemented. |
 | D9c | ok | Results without a natural continuation omit `next`. |
 | D10 | fixed | `skills/provibench/SKILL.md` adds domain context and points agents to `schema` instead of copying the command catalog. |
 | I1 | fixed | All accepted arguments and flags are generated into descriptors, and a schema test now rejects any empty descriptor name, description, or type. |
@@ -83,7 +83,12 @@ B3 lists retained names and defaults, and B4 covers retained meanings with repla
 | R3 | open | The probe/replay/sweep gate is complete, but `record` can change a trace without the same gate. |
 | R3a | open | `record` has no `--yes` despite writing a new or appended trace. |
 | R3b | ok | Gated probe, replay, and sweep calls resolve estimates/checks first and fail with `confirmation_required` before API requests when consent is unavailable. |
+| R3c | fixed | `probe`, `sweep`, and `replay` accept `--dry-run` and never require `--yes` under it; `--yes` alongside it is accepted and ignored, verified by re-checking `requires_confirmation` and the mocked transport's zero requests with and without `--yes`. |
 | R3d | ok | `--yes` confirms consent and `--force` only overrides existing-destination/precondition checks. |
+| R4 | fixed | `probe`, `sweep`, and `replay` spend real API credit without the caller naming every affected target in advance, so a `--dry-run` preview under R4 applies the same way a wide mutation's would; all three now provide it. |
+| R4a | fixed | `probe`, `sweep`, and `replay` provide `--dry-run`. |
+| R4b | fixed | A `--dry-run` call leaves intended state unchanged (no request is sent), never fails with `confirmation_required`, and still fails for any other reason the real call would, `--budget` included, since `check_budget` runs before the dry-run branch. |
+| R4c | fixed | A `--dry-run` success conforms to the same D7 `output` (the schema now declares its fields as optional, present only under `--dry-run`, per R4c's own rule for a value only the mutation produces), returns `changed: false`, and returns `requires_confirmation` true exactly when the same call without `--dry-run` and without `--yes` would gate in a non-interactive context. `probe`/`sweep` also report the pre-check plan and `--top` upper bound priced into the estimate; `targets` (R4c's own field name) is not applicable here since these commands do not name pre-existing targets, so the estimate's own `estimate` array serves the equivalent role. |
 | R5 | ok | Mutating commands return structured results and report their state transition. |
 | R5a | ok | All non-read-only schemas require boolean `changed`, and successful calls populate it. |
 | R5b | ok | Note: a local `Path.exists()` check can race a concurrent writer, but no authoritative state reports a conflict here, so R5b does not apply to that observation. |
@@ -106,8 +111,8 @@ B3 lists retained names and defaults, and B4 covers retained meanings with repla
 | O4b | ok | Every non-empty schema has an allowed type; nullable values use the two-type form. |
 | O4c | ok | Enumerations describe only current parser/result choices. |
 | O4d | ok | Objects declare properties and required fields; the schema tests enforce required subset of properties. |
-| O5 | open | The normal success documents match their schemas, but partial measurement results are carried in an error context rather than the standard `partial` result contract. |
-| O5a | open | A failed probe can retain usable partial data but emits no result document with `partial: true`; it only places the document in `error.context`. Recommendation: choose and document the standard partial-result shape. |
+| O5 | fixed | Every success document matches its schema, `probe`, `sweep`, and `replay` included, whose `output` now declares a required `partial`. |
+| O5a | fixed | `probe`, `sweep`, and `replay` declare `partial` as required and always emit the result document on stdout, partial run included; a partial run's `operation_failed` error on stderr carries only `run_dir` (and `run_hex` for `probe`/`sweep`) in `context`, not the document again. Guarded by `tests/test_probe.py::test_probe_partial_failure_gives_json_callers_the_summaries` and its replay/sweep counterparts. |
 | O5b | ok | JSON values preserve declared types and the writer does not silently truncate them. |
 | O5d | fixed | Persisted timestamps use RFC 3339; the TTL result field is now `ttl[].offset_s`, and numeric durations carry units such as `_ms`, `_s`, or `_age_s`. Loaders accept legacy `offset` in an old result document. |
 | O6 | open | Several successful documents contain potentially unbounded arrays. |
@@ -116,7 +121,7 @@ B3 lists retained names and defaults, and B4 covers retained meanings with repla
 | O8 | ok | Broken-pipe handling silences the output stream and exits successfully without a traceback. |
 | F1 | open | Most exit meanings are stable, but replay records failed requests in a successful run and `record` treats interruption as success. |
 | F1a | ok | Index and runtime map `0` to success, `1` to failure, and `2` to usage error. |
-| F1c | open | A replay with failed HTTP turns can exit `0` after persisting error records; recommendation: make incomplete replay non-zero with an explicit partial/operation result. |
+| F1c | fixed | A replay with a failed turn now exits non-zero: `partial: true` reaches stdout as an O5a result and an `operation_failed` error follows on stderr. Guarded by `tests/test_replay.py::test_replay_exits_non_zero_on_a_failed_turn`. |
 | F1d | ok | Fine-grained failure reasons are represented by F3 kinds rather than extra exit codes. |
 | F1e | ok | No command-specific exit code refinements are declared. |
 | F2 | ok | Machine-readable failures have one F3 object on stderr, never stdout, and it is the last non-empty stderr line. |
@@ -129,7 +134,7 @@ B3 lists retained names and defaults, and B4 covers retained meanings with repla
 | F3c | ok | Used kinds retain their standard meanings, including `invalid_input`, `confirmation_required`, `operation_failed`, and `precondition_failed`. |
 | F4 | open | Fallbacks are logged, but the selected packaged target fallback is not identified in a structured success result. |
 | F4a | open | A timed-out replay POST can have an unobserved provider-side effect but is stored as a normal failed turn and the command can still exit `0`; recommendation: propagate `outcome_unknown`. |
-| F4b | ok | Partial probe data survives in `error.context`, and the hint identifies its persisted run. |
+| F4b | ok | Partial probe, sweep, and replay data now survives on stdout as the O5a result document rather than in `error.context`; the hint still identifies the persisted run. |
 | F4c | open | Missing configured targets silently continue with packaged defaults after a stderr note; structured probe/replay results do not carry the substitution. Recommendation: fail or record the selected source in the result. |
 | F5 | open | `record` suppresses `KeyboardInterrupt` and returns a success summary after Ctrl-C, contrary to the standard interruption result. Recommendation: distinguish intentional recorder stop from an external interrupt or document an explicit stop protocol. |
 | H1 | fixed | Destination and rendering concepts now use canonical `--output-file PATH` and `--format NAME` names; all command flags remain kebab-case. |
@@ -146,8 +151,8 @@ B3 lists retained names and defaults, and B4 covers retained meanings with repla
 These clauses have no current subject in provibench, so they have no delta row: `I3b` (no
 command currently accepts stdin), `I5b`, `I5c`, and `I5d` (no editor, external approval, or
 pager workflow), `I7b` (no command declares a path root), `R2c` (the `managed` extension is not
-claimed), `R3c` and `R3e` (no `--dry-run` or wide mutation), `R4`, `R4a`, `R4b`, and `R4c` (no
-wide mutation), `R7`, `R7a`, `R7b`, `R7c`, and `R7d` (no work accepted for observation after the
+claimed), `R3e` (no command has declared a wide mutation that would take `--expect-targets`),
+`R7`, `R7a`, `R7b`, `R7c`, and `R7d` (no work accepted for observation after the
 initiating command), `O2f` (no delegating command), `O5c` (no capped single inline value), `O6a`
 (no preview target list), `O7`, `O7a`, `O7b`, `O7c`, and `O7d` (no record-stream command),
 `F1b` (no yes/no command), `H3` (no editor or pager), and `H5a`/`H5b` (the tool does not yet

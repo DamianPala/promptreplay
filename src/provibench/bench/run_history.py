@@ -18,7 +18,7 @@ read `-` where a probe's carry a listed price, a TTFT and a tok/s; the run still
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Sequence, Set
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -140,6 +140,7 @@ def scan_runs(
     *,
     model: str | None = None,
     trace: str | None = None,
+    extra_labels: Set[str] = frozenset(),
 ) -> list[RunNumbers]:
     """Every run under `runs_dir` the filters keep, oldest first.
 
@@ -147,6 +148,12 @@ def scan_runs(
     specs are dropped from it, because `history MODEL` is about that model — and when
     its trace is the one asked for. Age filtering is separate so the command can tell
     "no run was ever recorded" from "no run this recent".
+
+    `extra_labels` keeps a row by its exact `spec` label regardless of `matches_model`: a
+    native spec's `model` is the name its own target serves it under (`deepseek-flash`),
+    not the OpenRouter slug `history` was asked about, so the command resolves that slug
+    through the configured targets' aliases (the same aliases `sweep` reads) and passes the
+    native labels it maps to here — `bench` itself never reads `targets.toml`.
     """
     kept = [run for run in map(read_run, _run_dirs(runs_dir)) if run.rows]
     if model is not None:
@@ -157,6 +164,7 @@ def scan_runs(
                         row
                         for row in run.rows
                         if matches_model(model, carried=row.model, target=row.target)
+                        or row.spec in extra_labels
                     ]
                 }
             )

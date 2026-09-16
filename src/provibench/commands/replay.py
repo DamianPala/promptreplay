@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 import click
 
+from provibench.commands.dry_run import DRY_RUN_OPTION, dry_run_fields
+from provibench.commands.dry_run import build_document as build_dry_run_document
 from provibench.commands.inspect import load_trace_entries, resolve_trace_path
 from provibench.commands.prices import native_price_table
 from provibench.commands.run_specs import (
@@ -24,6 +26,7 @@ from provibench.commands.run_specs import (
     select_conversation,
     spec_price_map,
     unpriced_labels,
+    validate_pinned_providers,
 )
 from provibench.commands.summary_view import SUMMARY, render_summaries, summary_to_document
 from provibench.core.confirm import require_confirmation
@@ -36,6 +39,7 @@ from provibench.core.spec import CommandSpec, Effects
 if TYPE_CHECKING:
     from provibench.bench.estimate import SpecEstimate
     from provibench.bench.replay import ReplayResult
+    from provibench.bench.summary import RunSummary
     from provibench.bench.targets import RunSpec
     from provibench.bench.trace import TraceEntry
 
@@ -47,9 +51,11 @@ _OUTPUT = obj(
         "conversation": string(),
         "turns": integer(),
         "summaries": array(SUMMARY),
+        "partial": boolean(),
         "changed": boolean(),
+        **dry_run_fields(),
     },
-    required=["run_dir", "conversation", "turns", "summaries", "changed"],
+    required=["partial", "changed"],
 )
 
 
@@ -57,7 +63,19 @@ _OUTPUT = obj(
     "replay",
     cls=Command,
     spec=CommandSpec(
-        effects=Effects.NON_IDEMPOTENT, confirm=True, output=_OUTPUT, render=render_summaries
+        effects=Effects.NON_IDEMPOTENT,
+        confirm=True,
+        output=_OUTPUT,
+        output_description=(
+            "partial is required: true when a turn failed against any target, false "
+            "otherwise. The result document is always written to stdout, partial run "
+            "included; a partial run also exits non-zero with an operation_failed error on "
+            "stderr whose context carries only run_dir and run_hex. run_dir, conversation, "
+            "turns, and summaries are present only on a real run; --dry-run sends nothing "
+            "and instead returns estimate, total_usd, runs_dir, and requires_confirmation, "
+            "with partial: false and changed: false."
+        ),
+        render=render_summaries,
     ),
     help="Replay a trace's recorded requests against one or more targets.\n\n"
     "TRACE is either an existing path, a name under traces_dir, or 'sample' (the packaged "
@@ -66,7 +84,9 @@ _OUTPUT = obj(
     "discarded. A nonce is prepended to the first system block so the run measures its own "
     "cache rather than one left behind by an earlier run; --warm sends no nonce and reads "
     "whatever cache exists. Spends API credit, so this asks for confirmation unless --yes "
-    "is given; --budget refuses a run whose worst-case cost exceeds it.",
+    "is given; --budget refuses a run whose worst-case cost exceeds it. The run still "
+    "persists and exits non-zero when a turn failed against any target. --dry-run prices "
+    "the run and stops there, sending nothing.",
 )
 @click.argument("trace", help="Trace path, a name under traces_dir, or 'sample'")
 @click.option(
@@ -91,6 +111,7 @@ _OUTPUT = obj(
 @click.option(
     "--yes", is_flag=True, help="Skip the confirmation prompt; the budget check still applies"
 )
+@DRY_RUN_OPTION
 @click.pass_context
 def replay(  # noqa: PLR0913 (click binds one parameter per flag; there is no group to extract)
     ctx: click.Context,
@@ -105,6 +126,7 @@ def replay(  # noqa: PLR0913 (click binds one parameter per flag; there is no gr
     warm: bool,
     budget: float | None,
     yes: bool,
+    dry_run: bool,
 ) -> Document:
     from provibench.bench.estimate import render_estimate, replay_estimate
     from provibench.bench.nonce import new_run_hex
@@ -125,11 +147,15 @@ def replay(  # noqa: PLR0913 (click binds one parameter per flag; there is no gr
     index, lookup_notes = endpoint_index(specs)
     for note in lookup_notes:
         invocation.message(note)
+    validate_pinned_providers(specs, index)
     table = native_price_table(invocation, specs)
     prices = spec_price_map(specs, index, table=table)
     estimates = [replay_estimate(spec, selected_entries, prices.get(spec.label)) for spec in specs]
     invocation.message(render_estimate(estimates))
     check_budget(estimates, budget, hint="Raise --budget, or drop a target or a turn")
+    if dry_run:
+        runs_dir = Path(invocation.setting("runs_dir") or ".")
+        return build_dry_run_document(estimates, runs_dir=runs_dir)
     _confirm(invocation, estimates, selected_entries, specs, yes=yes)
 
     opts = ReplayOptions(
@@ -171,13 +197,16 @@ def replay(  # noqa: PLR0913 (click binds one parameter per flag; there is no gr
         summarize(spec.label, results[spec.label], spec.providers, notes) for spec in specs
     ]
 
-    return {
+    document: Document = {
         "run_dir": str(run_dir),
         "conversation": selected_key,
         "turns": total,
         "summaries": [summary_to_document(s) for s in summaries],
+        "partial": False,
         "changed": True,
     }
+    _fail_on_partial(invocation, summaries, document, run_dir, run_hex)
+    return document
 
 
 def _confirm(
@@ -200,6 +229,41 @@ def _confirm(
     if unpriced:
         question += f"; no listed price for {', '.join(unpriced)}"
     require_confirmation(invocation, question=question, yes=yes)
+
+
+def _fail_on_partial(
+    invocation: Invocation,
+    summaries: Sequence[RunSummary],
+    document: Document,
+    run_dir: Path,
+    run_hex: str,
+) -> None:
+    """Set `partial` and, when any turn failed, fail after the run is written (O5a, F1c).
+
+    The result document reaches stdout exactly as a clean run's would, partial or not; a
+    terminal instead gets the summary table on stderr before the error, which names only
+    the run rather than repeating the document.
+    """
+    from provibench.core.output import write_document
+
+    failed = sum(summary.errors for summary in summaries)
+    document["partial"] = bool(failed)
+    if not failed:
+        return
+    if invocation.machine_readable:
+        write_document(invocation.streams.stdout, document)
+    else:
+        with invocation.rendering_to(invocation.streams.stderr):
+            render_summaries(invocation, document)
+
+    def hook() -> None:
+        raise OperationFailed(
+            f"The replay finished with {failed} failed turn(s)",
+            hint=f"The run is saved; inspect it with provibench report {run_dir}",
+            context={"run_dir": str(run_dir), "run_hex": run_hex},
+        )
+
+    invocation.on_success.append(hook)
 
 
 def _progress_line(result: ReplayResult, total: int) -> str:
