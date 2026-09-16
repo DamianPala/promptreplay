@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
@@ -978,7 +979,7 @@ def test_render_probe_has_a_spec_table_and_a_rung_table_within_120_columns() -> 
     blocks = [block.splitlines() for block in render_probe([summary]).split("\n\n")]
     spec_table, rung_table = blocks[0], blocks[1]
     spec_header = [cell.strip() for cell in spec_table[0].split("|")]
-    assert spec_header[:3] == ["spec", "hit %", "prefix %"]
+    assert spec_header[:3] == ["spec", "hit %", "1st hit %"]
     assert spec_table[2].startswith("fake:model-a")
     rung_header = [cell.strip() for cell in rung_table[0].split("|")]
     assert rung_header[:5] == ["spec", "rung", "prompt", "cached cold", "hits"]
@@ -1245,6 +1246,10 @@ def test_render_probe_uses_the_same_labels_in_both_tables() -> None:
 
 
 def test_render_probe_fits_120_columns_with_every_cell_populated() -> None:
+    """The columns between the label and drift never truncate a value, and the table stays
+    inside the relaxed plan. Both the label (O2) and the drift column (item 8) are allowed to
+    push a whole table past 120 columns on purpose, so the budget is 120 plus the widest a
+    label may win (`_LABEL_WIN`); past that the plan has stopped meaning anything."""
     summaries = [
         _summary(
             "deepseek:deepseek-v4.1-flash",
@@ -1268,8 +1273,17 @@ def test_render_probe_fits_120_columns_with_every_cell_populated() -> None:
             drift="provider,model,tokens+123%,fingerprint",
         ),
     ]
-    for block in render_probe(summaries).split("\n\n"):
-        assert all(len(line) <= 120 for line in block.splitlines()), block
+    budget = 120 + 24  # `probe_tables._MAX_TABLE` plus `_LABEL_WIN`, the widest a label wins
+    blocks = render_probe(summaries).split("\n\n")
+    spec_block, rung_block = blocks[-2], blocks[-1]
+    for line in spec_block.splitlines():
+        middle = line.split("|", 1)[1].rsplit("|", 1)[0]
+        assert "…" not in middle, line
+        assert len(line.rsplit("|", 1)[0]) <= budget, line
+    for line in rung_block.splitlines():
+        middle = line.split("|", 1)[1]
+        assert "…" not in middle, line
+        assert len(line) <= budget, line
 
 
 def _thinking_provider(sent: list[bytes]) -> Callable[[httpx.Request], httpx.Response]:
@@ -1473,10 +1487,13 @@ def test_fingerprint_is_reported_but_never_a_drift_marker() -> None:
 
 
 def test_a_label_the_caption_does_not_cover_wins_its_width() -> None:
-    """The live shape: fifteen `@tag` rows, and the native reference keeps its whole name.
+    """The live shape: fifteen `@tag` rows, and the native reference keeps its name whole.
 
     The `hits` cells are six readings wide, as the default `--repeats` makes them, which is
-    what squeezes the label column to its floor when the budget alone decides.
+    what squeezes the label column to its floor when the budget alone decides. O2: the
+    reference row's own required width is no longer capped at what the spec table can
+    spare the drift floor, so it wins its full name here even though that runs the table
+    past `_MAX_TABLE` -- the same trade item 8 already made for the drift column.
     """
     tags = [
         "relace/fp8",
@@ -1504,7 +1521,7 @@ def test_a_label_the_caption_does_not_cover_wins_its_width() -> None:
         block for block in render_probe(summaries).split("\n\n") if block.startswith("spec ")
     )
     labels = [line.split("|")[0].strip() for line in spec_block.splitlines()[2:]]
-    assert labels[-1] == "deepseek:deepseek-flash"
+    assert labels[-1] == "deepseek:deepseek-flash"  # whole, not folded
     assert len(set(labels)) == len(labels)  # and no two `@tag` rows were cut together
 
 
@@ -1527,9 +1544,8 @@ def test_a_label_the_caption_does_not_cover_keeps_its_target_head() -> None:
 
 
 def test_the_label_column_spends_its_columns_and_the_drift_gets_the_rest() -> None:
-    """The caption leaves `@provider` tails, so the label column renders narrow: the
-    columns it does not use are the drift's, which is why `provider,tokens+3%` is read
-    whole rather than cut to `provider…` while the table still has room for it."""
+    """The caption leaves `@provider` tails, so the label column renders narrow, and the
+    drift marker `provider,tokens+3%` is read whole regardless of what that costs."""
     summaries = [
         _summary("openrouter:deepseek/deepseek-v4.1-flash@novita", drift="provider,tokens+3%"),
         _summary("openrouter:deepseek/deepseek-v4.1-flash@gmicloud", drift="provider,tokens+3%"),
@@ -1538,12 +1554,16 @@ def test_the_label_column_spends_its_columns_and_the_drift_gets_the_rest() -> No
         block for block in render_probe(summaries).split("\n\n") if block.startswith("spec ")
     )
     assert "provider,tokens+3%" in spec_block
-    assert all(len(line) <= 120 for line in spec_block.splitlines())
 
 
-def test_a_squeezed_table_still_shows_one_whole_drift_marker() -> None:
-    """Numbers wide enough to eat the budget squeeze the drift column: its first marker is
-    still read whole. `provider…` says which marker was cut; `provide…` says nothing."""
+def test_a_squeezed_table_still_renders_the_whole_drift_marker() -> None:
+    """Item 8: numbers wide enough to eat the column budget must not fold the drift marker.
+
+    Before this fix, a squeezed table cut `provider,tokens+3%` down to `provider…`, which
+    told a reader something drifted without saying what. The drift column now folds instead
+    of truncating, so the whole marker is always on the line even when every other column is
+    at its widest.
+    """
     summaries = [
         _summary("or:model@novita", drift="provider,tokens+3%"),
         _summary("or:model@gmicloud", drift="provider,tokens+3%"),
@@ -1561,7 +1581,143 @@ def test_a_squeezed_table_still_shows_one_whole_drift_marker() -> None:
         block for block in render_probe(summaries).split("\n\n") if block.startswith("spec ")
     )
     cells = [line.split("|")[-1].strip() for line in spec_block.splitlines()[2:]]
-    assert cells == ["provider…", "provider…", "-"]
+    assert cells == ["provider,tokens+3%", "provider,tokens+3%", "-"]
+    assert all("…" not in cell for cell in cells)
+
+
+# --- first-read hit rate (item 1) ----------------------------------------------
+
+
+def test_first_hit_rate_pools_only_each_rungs_first_warm_read() -> None:
+    """An agent loop only ever performs a rung's first warm read: later repeats re-read
+    what read 1 just wrote, so pooling every repeat flatters the cache the loop never gets
+    to rely on. Two rungs, read 1 a miss on one and a hit on the other, read 2+ always a
+    hit: `first_hit_rate` must see the 1-of-2 a real agent would, not the pooled 5-of-6."""
+    records = [
+        _record("cold", 0, rung=1, prompt=100),
+        _record("warm", 1, rung=1, cached=0),  # read 1: miss
+        _record("warm", 2, rung=1, cached=100),
+        _record("warm", 3, rung=1, cached=100),
+        _record("cold", 0, rung=2, prompt=100),
+        _record("warm", 1, rung=2, cached=100),  # read 1: hit
+        _record("warm", 2, rung=2, cached=100),
+    ]
+    summary = summarize_probe("fake:model-a", records)
+    assert summary.hit_rate == pytest.approx(4 / 5)  # 4 hits over 5 served warm reads, pooled
+    assert summary.first_hit_rate == pytest.approx(1 / 2)
+    assert summary.first_hit_rate is not None
+    assert summary.first_prefix_fraction is not None
+    assert summary.first_h == pytest.approx(summary.first_hit_rate * summary.first_prefix_fraction)
+
+
+def test_first_hit_rate_equals_hit_rate_with_one_repeat() -> None:
+    """The acceptance line: `--repeats 1` sends exactly one warm read per rung, so pooling
+    every read and pooling only the first read are the same computation."""
+    records = [
+        _record("cold", 0, rung=1, prompt=100),
+        _record("warm", 1, rung=1, cached=100),
+        _record("cold", 0, rung=2, prompt=100),
+        _record("warm", 1, rung=2, cached=0),
+    ]
+    summary = summarize_probe("fake:model-a", records)
+    assert summary.first_hit_rate == summary.hit_rate
+    assert summary.first_prefix_fraction == summary.prefix_fraction
+    assert summary.first_h == summary.h
+
+
+# --- rate limits (item 6) -------------------------------------------------------
+
+
+def test_rate_limited_requests_are_told_apart_from_other_errors() -> None:
+    """A 429 is the run's own pace, not a refusal; it must count in `errors` (nothing about
+    it makes the read usable) but also be named on its own, `rate_limited`, with a note."""
+    records = [
+        _record("cold", 0, prompt=100),
+        _record("warm", 1, status=429, error="rate limited"),
+        _record("warm", 2, status=500, error="boom"),
+    ]
+    summary = summarize_probe("fake:model-a", records)
+    assert summary.errors == 2
+    assert summary.rate_limited == 1
+    assert "1 x 429 rate limit" in summary.notes
+
+
+def test_no_rate_limit_note_when_nothing_was_rate_limited() -> None:
+    records = [_record("cold", 0, prompt=100), _record("warm", 1, cached=100)]
+    summary = summarize_probe("fake:model-a", records)
+    assert summary.rate_limited == 0
+    assert not [note for note in summary.notes if "429" in note]
+
+
+# --- output tokens (item 4) ------------------------------------------------------
+
+
+def test_output_tokens_are_summed_and_noted_past_the_max_tokens_1_budget() -> None:
+    """GMICloud and native DeepSeek return many output tokens despite `max_tokens: 1`; the
+    surplus is worth billing and worth a note, not silently absorbed into the prompt count."""
+    cold = _record("cold", 0, prompt=100)
+    cold.usage = Usage(output_tokens=200)
+    warm = _record("warm", 1, cached=100)
+    warm.usage = Usage(output_tokens=150)
+    summary = summarize_probe("fake:model-a", [cold, warm])
+    assert summary.output_tokens == 350
+    assert "returned 350 output tokens on 2 read(s) meant to return 1" in summary.notes
+
+
+def test_no_output_tokens_note_within_the_max_tokens_1_budget() -> None:
+    cold = _record("cold", 0, prompt=100)
+    cold.usage = Usage(output_tokens=1)
+    summary = summarize_probe("fake:model-a", [cold])
+    assert summary.output_tokens == 1
+    assert not [note for note in summary.notes if "output tokens" in note]
+
+
+# --- session projection (item 9) -------------------------------------------------
+
+
+def test_session_prompt_usd_projects_the_measured_price_over_the_trace() -> None:
+    """`session_prompt_usd` is the effective price times the trace's own total prompt
+    tokens: what a session shaped like the recorded trace would bill in prompt tokens."""
+    records = [_record("cold", 0, prompt=100), _record("warm", 1, cached=50)]
+    summary = summarize_probe(
+        "fake:model-a", records, prices=_prices(), trace_prompt_tokens=2_000_000
+    )
+    assert summary.eff_per_m_prompt is not None
+    assert summary.session_prompt_usd == pytest.approx(summary.eff_per_m_prompt * 2.0)
+
+
+def test_session_prompt_usd_is_none_without_a_trace_prompt_token_total() -> None:
+    records = [_record("cold", 0, prompt=100), _record("warm", 1, cached=50)]
+    summary = summarize_probe("fake:model-a", records, prices=_prices())
+    assert summary.session_prompt_usd is None
+
+
+# --- no token drift on an incomplete rung set (item 7) --------------------------
+
+
+def _load_fixture(name: str) -> list[ProbeResult]:
+    path = Path(__file__).parent / "fixtures" / name
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [ProbeResult.model_validate_json(line) for line in lines if line.strip()]
+
+
+def test_a_skipped_largest_rung_suppresses_the_spurious_token_drift_marker() -> None:
+    """A real case from a tester's run: one spec's largest rung (29) got a 429 on its own
+    cold write and was skipped, so its largest *usable* rung (15) is smaller than every
+    other spec's. Comparing rung 15's prompt size against the reference's rung 29 reads as
+    a huge, spurious `tokens-N%` drift -- two different turns, not two tokenizers -- so the
+    marker must be suppressed and a note left in its place."""
+    reference_records = _load_fixture("probe_skipped_rung_reference.jsonl")
+    candidate_records = _load_fixture("probe_skipped_rung_candidate.jsonl")
+    reference = summarize_probe("deepseek:deepseek-flash", reference_records)
+    candidate = summarize_probe("or:model@deepinfra", candidate_records)
+    assert candidate.rungs[-1].skipped  # rung 29's cold write was refused
+
+    summaries = apply_drift([reference, candidate], [_ref("anthropic"), _ref("openrouter")])
+
+    assert summaries[1].tokens_delta_pct is None
+    assert "token drift n/a (rung skipped)" in summaries[1].notes
+    assert summaries[1].drift is None or "tokens" not in summaries[1].drift
 
 
 def test_a_late_ttl_read_does_not_shrink_the_label_column() -> None:

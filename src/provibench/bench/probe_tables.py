@@ -12,20 +12,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from provibench.bench.labels import (
-    column_labels,
-    elide,
-    named,
-    rendered,
-    text_table,
-    uncovered_width,
-)
+from provibench.bench.labels import column_labels, named, text_table, uncovered_width
 from provibench.bench.probe_summary import ProbeSummary, RungSummary, TtlRead
 
 _HIT_FULL = 0.98
 """A cached fraction at or above this renders as a full hit: Claude Code moves the marker."""
-_MAX_CELL = 40
-"""Longest drift cell rendered before it is elided; the label is planned from the budget."""
 _LABEL_FLOOR = 16
 """Narrowest label column: below this a row loses the name it is read by."""
 _LABEL_WIN = 24
@@ -43,6 +34,7 @@ _PLACEHOLDER = ""
 _RUN_COLUMNS = (
     "spec",
     "hit %",
+    "1st hit %",
     "prefix %",
     "eff $/M",
     "in $/M",
@@ -118,10 +110,10 @@ def probe_blocks(summaries: Sequence[ProbeSummary]) -> ProbeBlocks:
     """
     rungs = [rung for summary in summaries for rung in summary.rungs]
     rung_columns = _rung_columns(rungs)
-    label_width, drift_width = _planned_widths(summaries, rung_columns)
+    label_width = _planned_widths(summaries, rung_columns)
     caption, labels = _labels_of(summaries, label_width=label_width)
     rows = zip(summaries, labels, strict=True)
-    run_rows = [_run_cells(summary, label, drift_width) for summary, label in rows]
+    run_rows = [_run_cells(summary, label) for summary, label in rows]
     return ProbeBlocks(
         caption=caption,
         spec=TableBlock(columns=_RUN_COLUMNS, rows=tuple(tuple(row) for row in run_rows)),
@@ -152,57 +144,44 @@ def _labels_of(
     return column_labels([summary.label for summary in summaries], label_width=label_width)
 
 
-def _planned_widths(
-    summaries: Sequence[ProbeSummary], rung_columns: Sequence[str]
-) -> tuple[int, int]:
-    """The label and drift widths that hold both tables inside `_MAX_TABLE` columns.
+def _planned_widths(summaries: Sequence[ProbeSummary], rung_columns: Sequence[str]) -> int:
+    """The label width that holds both tables inside `_MAX_TABLE` columns, drift aside.
 
     The label is planned as wide as the budget allows — it is the column a row is looked up
-    by, and every column it gets back is one fewer name cut short — and the drift is then
-    measured against the label column that actually renders, not against the plan. A shared
-    `target:model` in the caption leaves the rows with `@provider` tails, and the columns
-    the label column does not use are the drift's rather than nobody's: a drift cell is one
-    short marker, `provider,tokens+3%`, and it is worth showing whole.
+    by, and every column it gets back is one fewer name cut short. The drift column is never
+    truncated (see `_run_cells`): a marker like `provider,tokens+3%` is short and worth
+    showing whole even when that runs the table past `_MAX_TABLE`, so only `_MIN_DRIFT`
+    columns are reserved for it here, as a floor under the label's own budget.
 
     A label the caption does not cover — the native endpoint next to a column of gateway
-    tags — wins the width it needs, up to `_LABEL_WIN` and up to what the spec table can
-    spare the drift: the `@tag` rows are short and can be elided, while that row is the
-    reference every other row is read against, and it wins over the rung table's budget.
+    tags — wins the width it needs, up to `_LABEL_WIN`, even past what the spec table can
+    otherwise spare the drift floor: the `@tag` rows are short and can be elided, while that
+    row is the reference every other row is read against (slice 3c), the same trade item 8
+    made so a drift marker is never elided either. A dense table (many providers plus the
+    `1st hit %` column) can end up past `_MAX_TABLE` by the width of that one label.
 
     A width that would name two rows alike is skipped, and the label is never cut below
     `_LABEL_FLOOR` — past that a readable name beats the column budget. A row wider than
-    `_MAX_TABLE` is still possible: a late TTL read writes `(+6)` into the rung table, and
-    so does a drift column squeezed under its floor, which is worth the columns too.
+    `_MAX_TABLE` is still possible: a late TTL read writes `(+6)` into the rung table, a
+    drift marker longer than the floor, or the uncovered label above, are all worth the
+    columns they cost.
     """
     spare = _MAX_TABLE - _spec_middle(summaries) - _MIN_DRIFT
     budget = min(spare, _MAX_TABLE - _rung_span(summaries, rung_columns))
-    required = min(uncovered_width([summary.label for summary in summaries], cap=_LABEL_WIN), spare)
+    required = uncovered_width([summary.label for summary in summaries], cap=_LABEL_WIN)
     for width in range(max(budget, _LABEL_FLOOR, required), _LABEL_FLOOR - 1, -1):
         labels = _labels_of(summaries, label_width=width)[1]
         if named(labels):
-            return width, _drift_width(rendered(labels), summaries)
+            return width
     # nothing fits and names every row; a readable name beats the column budget
-    labels = _labels_of(summaries, label_width=_LABEL_FLOOR)[1]
-    return _LABEL_FLOOR, _drift_width(rendered(labels), summaries)
-
-
-def _drift_width(label_width: int, summaries: Sequence[ProbeSummary]) -> int:
-    """What is left for drift once the label column and every other column is paid for.
-
-    Never under `_MIN_DRIFT`: a column that cannot show one whole marker is not worth the
-    columns it would render in, so a table squeezed past that runs wide instead. This is
-    reachable whenever the other columns are wide enough that the label's floor costs more
-    than the budget has left for drift.
-    """
-    leftover = _MAX_TABLE - _spec_middle(summaries) - label_width
-    return max(_MIN_DRIFT, min(_MAX_CELL, leftover))
+    return _LABEL_FLOOR
 
 
 def _spec_middle(summaries: Sequence[ProbeSummary]) -> int:
     """The spec table's width without its label and drift cells, every separator counted."""
     return _columns_span(
         _RUN_COLUMNS,
-        [_run_cells(summary, _PLACEHOLDER, _MAX_CELL) for summary in summaries],
+        [_run_cells(summary, _PLACEHOLDER) for summary in summaries],
         skip=(0, len(_RUN_COLUMNS) - 1),
     )
 
@@ -245,10 +224,11 @@ def _rung_rows(
     ]
 
 
-def _run_cells(summary: ProbeSummary, label: str, drift_width: int) -> list[str]:
+def _run_cells(summary: ProbeSummary, label: str) -> list[str]:
     return [
         label,
         _pct(summary.hit_rate),
+        _pct(summary.first_hit_rate),
         _pct(summary.prefix_fraction),
         _money(summary.eff_per_m_prompt, 3),
         _money(summary.input_price, 3),
@@ -257,7 +237,9 @@ def _run_cells(summary: ProbeSummary, label: str, drift_width: int) -> list[str]
         _ms(summary.ttft_ms),
         _tok_s(summary.gen_tok_s),
         str(summary.errors),
-        elide(summary.drift or "-", drift_width, keep_end=False),
+        # Never elided: a drift marker (`provider,tokens+3%`) is short and worth showing
+        # whole, even at the cost of a table wider than `_MAX_TABLE`.
+        summary.drift or "-",
     ]
 
 

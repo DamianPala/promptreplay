@@ -75,6 +75,10 @@ class RunRow(BaseModel):
     """The listed input price at run time, from the run's `prices` block."""
     listed_cache_read: float | None = None
     listed_source: str = NO_PRICE_SOURCE
+    spend_usd: float | None = None
+    """What the spec cost (see `bench.spend.spec_spend`), recomputed from the run's own
+    records, so an older run has one too; `None` when the run recorded no price to compute
+    it from, and always `None` for a full replay."""
     quantization: str | None = None
     context_length: int | None = None
     uptime_1d: float | None = None
@@ -240,7 +244,12 @@ def _probe_run(run_dir: Path) -> RunNumbers:
             trace=meta.trace,
             created=meta.created,
             summary=summarize_probe(
-                ref.label, records[ref.label], prices=meta.prices.get(ref.label)
+                ref.label,
+                records[ref.label],
+                prices=meta.prices.get(ref.label),
+                unpinned_gateway=ref.kind == "openrouter" and not ref.providers,
+                trace_prompt_tokens=meta.trace_prompt_tokens,
+                listing=meta.listing_prices,
             ),
             snapshot=meta.endpoints.get(ref.label),
         )
@@ -260,7 +269,9 @@ def _probe_row(
     summary: ProbeSummary,
     snapshot: EndpointSnapshot | None,
 ) -> RunRow:
-    # the listed price is read off the summary `report` prints, so the two cannot differ
+    # eff_per_m_prompt is read off the summary `report` prints, so the two cannot differ;
+    # listed_input/listed_source are the summary's own listed-price fields, never a fitted
+    # reprice, so two runs of an unpinned spec cannot show a price change that is fit noise
     return RunRow(
         trace=trace,
         created=created,
@@ -275,9 +286,10 @@ def _probe_row(
         ttft_ms=summary.ttft_ms,
         gen_tok_s=summary.gen_tok_s,
         errors=summary.errors,
-        listed_input=summary.input_price,
-        listed_cache_read=summary.cache_read_price,
-        listed_source=summary.price_source,
+        listed_input=summary.listed_input,
+        listed_cache_read=summary.listed_cache_read,
+        listed_source=summary.listed_source,
+        spend_usd=summary.spend_usd,
         quantization=None if snapshot is None else snapshot.quantization,
         context_length=None if snapshot is None else snapshot.context_length,
         uptime_1d=None if snapshot is None else snapshot.uptime_1d,

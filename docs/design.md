@@ -170,6 +170,24 @@ Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, con
 | `latency_p50_ms`, `latency_p95_ms` | with `max_tokens: 1` this is prefill time |
 | `notes` | distinct notes across turns |
 
+`ProbeSummary` per spec (the `probe`/`sweep`/`report` tables and `--json`):
+
+| field | definition |
+|---|---|
+| `hit_rate`, `prefix_fraction`, `h` | pooled over every served warm read: `h` is what `eff_per_m_prompt` is weighted by |
+| `first_hit_rate`, `first_prefix_fraction`, `first_h` | the same three, pooled over only each rung's first warm read — the only read an agent loop performs, so this is what it actually experiences; equal to the unqualified fields with `--repeats 1` |
+| `priced_as` | how `input_price`/`cache_read_price` were chosen: `pinned`, `served: <provider(s)> (listed)` (`, weighted` suffix for more than one) when the run's own `listing_prices` has the served provider(s), `served: <provider(s)> (rates fitted from this run's billed records)` (`weighted,` prefix for more than one) for a run written before `listing_prices` existed, or `worst case: <provider>` when an unpinned spec's served provider could not be repriced. Anything but `pinned` is also a note under the table, because neither a listed nor a fitted reprice is the price the estimate itself used |
+| `listed_input`, `listed_cache_read`, `listed_source` | the price `history`/`compare` treat as this run's listed price: `input_price`/`cache_read_price` again when the reprice came from `listing_prices` (`listed_source: "listing"`), else the original worst-case price, never a fit — so two runs of the same spec never show a price change that is only fit noise |
+| `billed_usd` | what OpenRouter says it billed, summed over enriched requests, or `None` |
+| `spend_usd` | `billed_usd` when there is one, else the usage priced at `input_price`/`cache_read_price` — how a native spec, which never gets a `billed_usd`, gets a spend |
+| `session_prompt_usd` | `eff_per_m_prompt × trace_prompt_tokens / 1e6`: this spec's prompt bill for a session shaped like the recorded trace; `None` without a known trace total |
+| `output_tokens` | output tokens summed over every served read; a surplus over the read count means a provider ignored `max_tokens: 1` |
+| `errors`, `rate_limited` | `rate_limited` is the subset of `errors` that came back HTTP 429 — the run's own pace, not a refusal |
+
+A run's `precheck.jsonl` (present only when the run planned an availability check) holds the pre-check's own requests, role `precheck`; they never enter any spec's own records or the fields above. `ProbeRunMeta.precheck` is their count, spend and worst case, and `ProbeRunMeta.trace_prompt_tokens` is the trace's total prompt tokens (`bench.trace.total_prompt_tokens`), both `None` for a run written before this existed.
+
+`ProbeRunMeta.listing_prices` is the swept/probed OpenRouter model's own endpoint listing at run time, one `Prices` per served provider (keyed by `normalize_provider`); `None` for a run written before this field existed, `{}` for a run with no OpenRouter spec to list. `served_prices` looks the answering provider up here first, and only falls back to fitting its rates from the run's own billed records when this is `None` — see `bench/probe_pricing.py`.
+
 ## Commands
 
 | command | effects | output |
@@ -181,7 +199,7 @@ Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, con
 | `history [MODEL] [--trace T] [--since DURATION]` | read-only | one row per run and spec, plus a hit-rate sparkline per spec |
 | `inspect TRACE [--conversation KEY]` | read-only | conversation list plus per-turn table of the selected conversation |
 | `prices [MODEL...] [--update]` | idempotent | native model prices and their source |
-| `probe TRACE SPEC... [--rungs] [--repeats] [--gap] [--ttl] [--warm] [--timeout] [--budget] [--yes] [--dry-run]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, run_hex, conversation, rungs, summaries, partial, changed}` on a real run; `--dry-run` returns `{estimate, total_usd, pre_check, upper_bound, runs_dir, requires_confirmation, partial: false, changed: false}` instead |
+| `probe TRACE SPEC... [--rungs] [--repeats] [--gap] [--ttl] [--warm] [--timeout] [--budget] [--yes] [--dry-run]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, run_hex, conversation, rungs, summaries, spend_usd, worst_case_usd, precheck, trace_prompt_tokens, listing_prices, partial, changed}` on a real run; `--dry-run` returns `{estimate, total_usd, pre_check, upper_bound, runs_dir, requires_confirmation, partial: false, changed: false}` instead, with none of the spend/precheck/session/listing fields |
 | `record --name N --upstream URL [--host] [--port] [--append] [--timeout DURATION]` | non-idempotent, runs until SIGINT or the timeout | `{trace, requests, conversations, changed}` |
 | `replay TRACE --run SPEC... [--conversation] [--max-tokens] [--delay] [--strip-thinking] [--limit] [--warm] [--budget] [--yes] [--dry-run]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, conversation, turns, summaries, partial, changed}` on a real run; `--dry-run` returns `{estimate, total_usd, runs_dir, requires_confirmation, partial: false, changed: false}` instead |
 | `report RUN [--format text\|md\|html\|json] [--output-file PATH]` | idempotent | summaries table and cache curves; `--output-file` writes the selected rendering, replacing the file (a report is derived from the run alone) |

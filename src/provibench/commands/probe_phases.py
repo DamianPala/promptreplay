@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from provibench.core.confirm import require_confirmation
@@ -24,8 +24,10 @@ from provibench.core.context import Invocation
 
 if TYPE_CHECKING:
     from provibench.bench.estimate import PreCheckCost, SpecEstimate, SpecPrices, UpperBound
+    from provibench.bench.openrouter import Endpoint
     from provibench.bench.precheck import CheckPlan, PreCheckResult
     from provibench.bench.probe import ProbeOptions
+    from provibench.bench.probe_models import ProbeResult
     from provibench.bench.selection import SelectionDrop, SweepInfo
     from provibench.bench.targets import RunSpec
     from provibench.bench.trace import TraceEntry
@@ -38,6 +40,9 @@ class Checked:
 
     specs: list[RunSpec]
     drops: list[SelectionDrop]
+    precheck: list[ProbeResult] = field(default_factory=list["ProbeResult"])
+    """Every request the availability check sent, role `precheck`; persisted separately from
+    any spec's own records (see `bench.probe_runs.write_probe_run`)."""
 
 
 def planned_specs(request: ProbeRequest) -> list[RunSpec]:
@@ -155,6 +160,27 @@ def confirm(
     require_confirmation(invocation, question=question, yes=yes)
 
 
+def resolve_index(request: ProbeRequest) -> tuple[dict[str, list[Endpoint]], list[str]]:
+    """The endpoint index a sweep already fetched, or a fresh lookup for a plain probe."""
+    from provibench.commands.run_specs import endpoint_index
+
+    if request.endpoints is None:
+        return endpoint_index(request.specs)
+    return dict(request.endpoints), []
+
+
+def checked_specs(
+    request: ProbeRequest,
+    selected: Sequence[TraceEntry],
+    options: ProbeOptions,
+    invocation: Invocation,
+) -> Checked:
+    """The availability phase, or every spec when the run planned no check."""
+    if request.pre_check is None:
+        return Checked(list(request.specs), [])
+    return run_check(invocation, request.pre_check, request.specs, selected, options)
+
+
 def run_check(
     invocation: Invocation,
     plan: CheckPlan,
@@ -187,6 +213,7 @@ def run_check(
             *(spec for spec in specs if spec.label not in candidates),
         ],
         drops=[_drop(result) for result in results if not result.kept],
+        precheck=[result.record for result in results if result.record is not None],
     )
 
 

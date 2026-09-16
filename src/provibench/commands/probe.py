@@ -23,17 +23,29 @@ from provibench.commands.inspect import resolve_trace_path
 from provibench.commands.prices import native_price_table
 from provibench.commands.probe_flags import ProbeRequest, options_for, probe_options
 from provibench.commands.probe_phases import (
-    Checked,
+    checked_specs,
     confirm,
     planned_specs,
     recorded_sweep,
-    run_check,
+    resolve_index,
     upper_bound_estimate,
 )
 from provibench.commands.probe_phases import estimates as planned_estimates
+from provibench.commands.probe_result import (
+    by_price,
+    fail_on_partial,
+    in_order,
+    parallel_note,
+    progress_line,
+)
+from provibench.commands.probe_spend import (
+    LISTING_PRICES_SCHEMA,
+    PRECHECK_SCHEMA,
+    listing_prices_document,
+    report_spend,
+)
 from provibench.commands.run_specs import (
     check_budget,
-    endpoint_index,
     load_targets,
     parse_specs,
     select_conversation,
@@ -43,24 +55,28 @@ from provibench.commands.run_specs import (
 from provibench.commands.summary_view import (
     PROBE_SUMMARY,
     message_lines,
-    probe_report_text,
     probe_summary_to_document,
     render_probe_run,
 )
 from provibench.core.context import Invocation
-from provibench.core.documents import Document, JsonSchema, array, boolean, integer, obj, string
+from provibench.core.documents import (
+    Document,
+    JsonSchema,
+    array,
+    boolean,
+    integer,
+    nullable_integer,
+    nullable_number,
+    obj,
+    string,
+)
 from provibench.core.errors import InvalidInput, OperationFailed
 from provibench.core.registry import Command, require_invocation
 from provibench.core.spec import CommandSpec, Effects
 
 if TYPE_CHECKING:
-    from provibench.bench.openrouter import Endpoint
-    from provibench.bench.probe import ProbeOptions, ProbeResult, ProbeRun
-    from provibench.bench.probe_summary import ProbeSummary
+    from provibench.bench.probe import ProbeResult
     from provibench.bench.targets import RunSpec
-    from provibench.bench.trace import TraceEntry
-
-_ERROR_TRUNCATE = 120
 
 _PROBE_PROPERTIES: dict[str, JsonSchema] = {
     "run_dir": string(),
@@ -69,9 +85,17 @@ _PROBE_PROPERTIES: dict[str, JsonSchema] = {
     "rungs": array(integer()),
     "summaries": array(PROBE_SUMMARY),
     "partial": boolean(),
+    "spend_usd": nullable_number(),
+    "worst_case_usd": nullable_number(),
+    "precheck": PRECHECK_SCHEMA,
+    "trace_prompt_tokens": nullable_integer(),
+    "listing_prices": LISTING_PRICES_SCHEMA,
     "changed": boolean(),
     **dry_run_fields(precheck=True),
 }
+# spend_usd, worst_case_usd, precheck, trace_prompt_tokens and listing_prices sit next to
+# summaries: present on a real run, absent (like run_dir and summaries) on a --dry-run
+# document, so only the two fields both shapes always carry are required.
 _PROBE_REQUIRED = ["partial", "changed"]
 _OUTPUT = obj(_PROBE_PROPERTIES, required=_PROBE_REQUIRED)
 
@@ -102,10 +126,11 @@ def output_fields() -> tuple[dict[str, JsonSchema], list[str]]:
     help="Probe a trace's prompt-cache behaviour on a few of its turns.\n\n"
     "For each rung (a turn k) it sends turn k once, cold, then turn k+1 a few times to "
     "measure whether the provider cached the prefix and whether later requests found it. "
-    "A fresh nonce isolates the run's cache from every earlier one, unless --warm. Costs "
-    "prompt tokens only, and far fewer than replaying the whole trace; the confirmation "
-    "shows the worst-case cost of the run before anything is sent. --dry-run prices the run "
-    "and stops there, sending nothing.",
+    "A fresh nonce isolates the run's cache from every earlier one, unless --warm. Every "
+    "read asks for one output token, and far fewer requests than replaying the whole trace; "
+    "the confirmation shows the worst-case cost of the run before anything is sent. A "
+    "provider that ignores the output budget is noted in the run's own summary, not hidden "
+    "from the estimate. --dry-run prices the run and stops there, sending nothing.",
 )
 @click.argument("trace", help="Trace path, name under traces_dir, or 'sample'")
 @click.argument("specs", nargs=-1, required=True, help="One or more target:model[@provider] specs")
@@ -159,10 +184,10 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     from provibench.bench.estimate import precheck_cost, render_estimate
     from provibench.bench.probe import run_probe
     from provibench.bench.probe_drift import apply_drift
-    from provibench.bench.probe_runs import endpoint_snapshot, write_probe_run
+    from provibench.bench.probe_runs import endpoint_snapshot, listing_prices, write_probe_run
     from provibench.bench.probe_summary import summarize_probe
     from provibench.bench.summary import cache_mode_note
-    from provibench.bench.trace import load_trace, trace_name
+    from provibench.bench.trace import load_trace, total_prompt_tokens, trace_name
 
     trace_path = resolve_trace_path(request.trace, invocation)
     selected, key = select_conversation(load_trace(trace_path), request.conversation)
@@ -170,7 +195,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         raise InvalidInput(f"No turns to probe in conversation {key!r}")
     options = options_for(request, selected)
 
-    index, lookup_notes = _resolve_index(request)
+    index, lookup_notes = resolve_index(request)
     for note in lookup_notes:
         invocation.message(note)
     validate_pinned_providers(request.specs, index)
@@ -208,10 +233,10 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         upper_bound=upper_bound,
     )
 
-    checked = _checked(request, selected, options, invocation)
+    checked = checked_specs(request, selected, options, invocation)
 
     def on_progress(record: ProbeResult) -> None:
-        invocation.message(_progress_line(record))
+        invocation.message(progress_line(record))
 
     try:
         run = asyncio.run(
@@ -227,11 +252,19 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     except ValueError as exc:
         raise OperationFailed(str(exc)) from exc
 
-    parallel = _parallel_note(request.parallel)
+    parallel = parallel_note(request.parallel)
     notes = [*lookup_notes, cache_mode_note(options.warm), *parallel]
+    trace_prompt_tokens = total_prompt_tokens(selected)
+    listing = listing_prices(checked.specs, index)
     summaries = [
         summarize_probe(
-            spec.label, run.records[spec.label], prices=prices.get(spec.label), notes=notes
+            spec.label,
+            run.records[spec.label],
+            prices=prices.get(spec.label),
+            notes=notes,
+            unpinned_gateway=spec.kind == "openrouter" and not spec.providers,
+            trace_prompt_tokens=trace_prompt_tokens,
+            listing=listing,
         )
         for spec in checked.specs
     ]
@@ -239,8 +272,8 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     if request.by_price:
         # Both the tables and the run directory take the measured order, so a later
         # `report` of this run reads it exactly as the sweep that produced it did.
-        summaries = _by_price(summaries)
-        specs = _in_order(specs, summaries)
+        summaries = by_price(summaries)
+        specs = in_order(specs, summaries)
     summaries = apply_drift(summaries, specs)
 
     sweep = recorded_sweep(request.sweep, checked)
@@ -257,6 +290,15 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         prices=prices,
         notes=[*lookup_notes, *parallel],
         sweep=sweep,
+        precheck=checked.precheck,
+        trace_prompt_tokens=trace_prompt_tokens,
+        listing_prices=listing,
+    )
+    precheck_document, total, worst = report_spend(
+        summaries,
+        checked.precheck,
+        prices=prices,
+        records=run.records,
     )
     document: Document = {
         "run_dir": str(run_dir),
@@ -265,6 +307,11 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         "rungs": run.options.rungs or [],
         "summaries": [probe_summary_to_document(summary) for summary in summaries],
         "partial": False,
+        "spend_usd": total,
+        "worst_case_usd": worst,
+        "precheck": precheck_document,
+        "trace_prompt_tokens": trace_prompt_tokens,
+        "listing_prices": listing_prices_document(listing),
         "changed": True,
     }
     if sweep is not None:
@@ -272,112 +319,5 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         # spec reports the model, the criteria and the drops it was part of along with
         # its numbers.
         document["sweep"] = sweep.to_document()
-    _fail_on_partial(invocation, run, summaries, document, run_dir)
+    fail_on_partial(invocation, run, summaries, document, run_dir)
     return document
-
-
-def _resolve_index(request: ProbeRequest) -> tuple[dict[str, list[Endpoint]], list[str]]:
-    """The endpoint index a sweep already fetched, or a fresh lookup for a plain probe."""
-    if request.endpoints is None:
-        return endpoint_index(request.specs)
-    return dict(request.endpoints), []
-
-
-def _checked(
-    request: ProbeRequest,
-    selected: Sequence[TraceEntry],
-    options: ProbeOptions,
-    invocation: Invocation,
-) -> Checked:
-    """The availability phase, or every spec when the run planned no check."""
-    if request.pre_check is None:
-        return Checked(list(request.specs), [])
-    return run_check(invocation, request.pre_check, request.specs, selected, options)
-
-
-def _parallel_note(parallel: int) -> list[str]:
-    """One note for a run that probed several specs at once, and none for a sequential one.
-
-    A `run.json` reader comparing latency medians between runs has to know which of them
-    were measured with other specs in flight on the same connection pool; the note is part
-    of the run's record, not of its options, because it describes how the numbers were
-    taken rather than what the protocol did.
-    """
-    if parallel <= 1:
-        return []
-    return [f"parallel {parallel}: latency measured with specs in flight together"]
-
-
-def _by_price(summaries: Sequence[ProbeSummary]) -> list[ProbeSummary]:
-    """The summaries as a sweep reads them: cheapest effective prompt token first.
-
-    That is the question a sweep asks — which endpoint to use this week — so the effective
-    price leads and the hit rate breaks its ties, being the other half of why one endpoint
-    is cheaper than another. A spec with no listed price cannot be ranked and sorts last.
-    """
-    return sorted(
-        summaries,
-        key=lambda s: (s.eff_per_m_prompt is None, s.eff_per_m_prompt or 0.0, -(s.hit_rate or 0.0)),
-    )
-
-
-def _in_order(specs: Sequence[RunSpec], summaries: Sequence[ProbeSummary]) -> list[RunSpec]:
-    """The specs in the order their summaries came out, for the run directory."""
-    by_label = {spec.label: spec for spec in specs}
-    return [by_label[summary.label] for summary in summaries]
-
-
-def _fail_on_partial(
-    invocation: Invocation,
-    run: ProbeRun,
-    summaries: Sequence[ProbeSummary],
-    document: Document,
-    run_dir: Path,
-) -> None:
-    """Set `partial` and, when anything failed or was skipped, fail after the run is written.
-
-    O5a: the result document is emitted on stdout exactly as a clean run's would be, partial
-    or not, so an agent never has to unwrap it from `error.context`; a terminal instead gets
-    the two tables on stderr before the error, which stays this command's own record and
-    names only the run rather than repeating the document.
-    """
-    from provibench.bench.probe import is_failed
-    from provibench.core.output import write_document
-
-    failed = sum(1 for records in run.records.values() for record in records if is_failed(record))
-    skipped = sum(summary.skipped for summary in summaries)
-    document["partial"] = bool(failed or skipped)
-    if not failed and not skipped:
-        return
-    parts: list[str] = []
-    if failed:
-        parts.append(f"{failed} request(s) failed")
-    if skipped:
-        parts.append(f"{skipped} rung(s) skipped")
-    if invocation.machine_readable:
-        write_document(invocation.streams.stdout, document)
-    else:
-        message_lines(invocation, probe_report_text(document))
-
-    def hook() -> None:
-        raise OperationFailed(
-            f"The probe finished with {' and '.join(parts)}",
-            hint=f"The run is saved; inspect it with provibench report {run_dir}",
-            context={"run_dir": str(run_dir), "run_hex": run.run_hex},
-        )
-
-    invocation.on_success.append(hook)
-
-
-def _progress_line(record: ProbeResult) -> str:
-    """One line per request; a TTL read names its offset, a stream names its TTFT."""
-    what = f"ttl {record.attempt}s" if record.role == "ttl" else f"{record.role} {record.attempt}"
-    message = (
-        f"{record.spec_label} rung {record.rung} {what} "
-        f"{record.status} {record.cached}/{record.prompt_total} {record.latency_ms:.0f}ms"
-    )
-    if record.ttft_ms is not None:
-        message += f" ttft={record.ttft_ms:.0f}ms"
-    if record.error:
-        message += f" error={record.error[:_ERROR_TRUNCATE]}"
-    return message

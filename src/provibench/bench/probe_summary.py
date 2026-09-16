@@ -6,21 +6,35 @@ of the cold prefix each hit really covered, and `h` — the two multiplied — i
 effective input price is weighted by. Both are pure functions of the records, so `report`
 rebuilds them from a run directory with no network.
 
+That pooled `hit_rate` still flatters an agent loop, though: reads 2..n of a rung re-read a
+prompt read 1 already wrote, so they hit almost by construction. Only read 1 measures what
+an agent turn actually experiences (does the cache carry from turn k to turn k+1), which is
+why `first_hit_rate`/`first_prefix_fraction`/`first_h` pool only the first warm read of
+every rung, the same way their unqualified counterparts pool all of them.
+
 The other question the probe exists for — which endpoint is fast, and which one is really
 serving the model — is answered by the fields here and the comparisons in `probe_drift`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from statistics import fmean, median
 
 from pydantic import AliasChoices, BaseModel, Field
 
 from provibench.bench.estimate import SpecPrices
-from provibench.bench.probe_errors import skip_note
 from provibench.bench.probe_models import ProbeResult, is_failed, is_served
-from provibench.bench.probe_stream import BURST_NOTE
+from provibench.bench.probe_notes import probe_notes
+from provibench.bench.probe_pricing import choose_prices
+from provibench.bench.probe_reads import (
+    first_read_stats,
+    output_token_stats,
+    output_tokens_note,
+    rate_limited_count,
+)
+from provibench.bench.spend import spec_spend
+from provibench.bench.targets import Prices
 from provibench.core.documents import Document, as_document, as_list
 
 
@@ -61,6 +75,8 @@ class RungSummary(BaseModel):
     ttl: list[TtlRead] = Field(default_factory=list[TtlRead])
     cache_write_cold: int = 0
     errors: int = 0
+    rate_limited: int = 0
+    """Of `errors`, how many were an HTTP 429 -- the run's own rate limit, not a refusal."""
     retries: int = 0
     skipped: bool = False
     cold_error: str | None = None
@@ -74,11 +90,35 @@ class ProbeSummary(BaseModel):
     hit_rate: float | None = None
     prefix_fraction: float | None = None
     h: float | None = None
+    first_hit_rate: float | None = None
+    """Hit rate over only each rung's first warm read (see the module docstring)."""
+    first_prefix_fraction: float | None = None
+    """Mean cached fraction on the first-read hits `first_hit_rate` counts."""
+    first_h: float | None = None
+    """`first_hit_rate * first_prefix_fraction`, the first-read analogue of `h`."""
     input_price: float | None = None
     cache_read_price: float | None = None
     price_source: str = "n/a"
+    priced_as: str = "n/a"
+    """How the two prices above were chosen: `pinned`, `served: <provider(s)> (listed)` or
+    `(rates fitted from this run's billed records)` (`...weighted` for several providers),
+    or `worst case: <provider>` when none could be repriced this way."""
+    listed_input: float | None = None
+    listed_cache_read: float | None = None
+    listed_source: str = "n/a"
+    """What `history`/`compare` read as this spec's listed price: `input_price` unchanged for
+    a pinned spec or a listing reprice, else the worst case, so a noisier fitted reprice
+    never reads there as a genuine price change between two runs (`bench.probe_pricing`)."""
     eff_per_m_prompt: float | None = None
     billed_usd: float | None = None
+    spend_usd: float | None = None
+    """What this spec cost: `billed_usd` when OpenRouter reported one, else the usage priced
+    at the two prices above -- how a native spec, which never gets a `billed_usd`, gets one."""
+    session_prompt_usd: float | None = None
+    """`eff_per_m_prompt` times the trace's total prompt tokens: a session-shaped bill."""
+    output_tokens: int = 0
+    """Output tokens over every served read; a surplus over the read count means a provider
+    ignored `max_tokens: 1`."""
     providers_seen: dict[str, int] = Field(default_factory=dict)
     served: str = "-"
     """The provider names this spec's responses came from, as one string."""
@@ -96,6 +136,8 @@ class ProbeSummary(BaseModel):
     drift: str | None = None
     """Comma-joined markers from `apply_drift`; `-` renders when it is `None`."""
     errors: int = 0
+    rate_limited: int = 0
+    """Of `errors`, how many were an HTTP 429; see `notes` for the count when it is non-zero."""
     retries: int = 0
     skipped: int = 0
     notes: list[str] = Field(default_factory=list)
@@ -186,6 +228,7 @@ def summarize_rung(spec: str, rung: int, records: Sequence[ProbeResult]) -> Rung
         ttl=[_ttl_read(record, prefix) for record in records if record.role == "ttl"],
         cache_write_cold=cold.cache_write if cold is not None else 0,
         errors=sum(1 for record in records if is_failed(record)),
+        rate_limited=rate_limited_count(records),
         retries=sum(record.retries for record in records),
         skipped=cold is None or not is_served(cold),
         cold_error=cold.error if cold is not None else None,
@@ -198,8 +241,20 @@ def summarize_probe(
     *,
     prices: SpecPrices | None = None,
     notes: Sequence[str] = (),
+    unpinned_gateway: bool = False,
+    trace_prompt_tokens: int | None = None,
+    listing: Mapping[str, Prices] | None = None,
 ) -> ProbeSummary:
-    """Pool a spec's rungs: hit rate over every served warm read, and the price it implies."""
+    """Pool a spec's rungs: hit rate over every served warm read, and the price it implies.
+
+    `unpinned_gateway` is whether this spec is an OpenRouter spec with no pinned provider --
+    the only case `priced_as` reprices from what actually served it rather than keeping
+    `prices` as given (see `bench.probe_pricing.choose_prices`). `listing` is the run's own
+    endpoint listing (`None` for a run written before it was persisted); passed straight
+    through to `choose_prices`, which prefers it over fitting a served provider's rate from
+    its billed records. `trace_prompt_tokens`, when known, turns the measured effective price
+    into `session_prompt_usd`, the number a session like the trace would bill.
+    """
     rungs = [summarize_rung(label, rung, _rung_records(records, rung)) for rung in _rungs(records)]
     served = [record for record in records if record.role == "warm" and is_served(record)]
     hits = [record for record in served if cached_of(record) > 0]
@@ -208,19 +263,54 @@ def summarize_probe(
         fmean(_fraction(cached_of(r), _prefix_of(records, r.rung)) for r in hits) if hits else None
     )
     h = hit_rate * (prefix_fraction or 0.0) if hit_rate is not None else None
+    first_hit_rate, first_prefix_fraction, first_h = first_read_stats(records)
     models = models_seen(records)
     names = sorted({record.provider for record in records if is_served(record) and record.provider})
+    priced, priced_as, listed = choose_prices(
+        prices, records, unpinned_gateway=unpinned_gateway, listing=listing
+    )
+    eff_per_m_prompt = _effective_price(h, priced)
+    billed_usd = _billed_total(records)
+    output_tokens, reads = output_token_stats(records)
+    rate_limited = rate_limited_count(records)
+    all_notes = [*notes, *probe_notes(records, models)]
+    all_notes.extend(
+        note
+        for note in (
+            f"{rate_limited} x 429 rate limit" if rate_limited else None,
+            output_tokens_note(output_tokens, reads),
+            # The table's `in $/M` cell cannot say where its number came from, and for an
+            # unpinned spec that is not the listed price the estimate showed; the note is
+            # where a reader of the rendered report is told.
+            f"priced as {priced_as}" if priced_as != "pinned" else None,
+        )
+        if note is not None
+    )
     return ProbeSummary(
         label=label,
         rungs=rungs,
         hit_rate=hit_rate,
         prefix_fraction=prefix_fraction,
         h=h,
-        input_price=prices.prices.input if prices is not None else None,
-        cache_read_price=prices.prices.cache_read if prices is not None else None,
-        price_source=prices.source if prices is not None else "n/a",
-        eff_per_m_prompt=_effective_price(h, prices),
-        billed_usd=_billed_total(records),
+        first_hit_rate=first_hit_rate,
+        first_prefix_fraction=first_prefix_fraction,
+        first_h=first_h,
+        input_price=priced.prices.input if priced is not None else None,
+        cache_read_price=priced.prices.cache_read if priced is not None else None,
+        price_source=priced.source if priced is not None else "n/a",
+        priced_as=priced_as,
+        listed_input=listed.prices.input if listed is not None else None,
+        listed_cache_read=listed.prices.cache_read if listed is not None else None,
+        listed_source=listed.source if listed is not None else "n/a",
+        eff_per_m_prompt=eff_per_m_prompt,
+        billed_usd=billed_usd,
+        spend_usd=spec_spend(records, billed_usd=billed_usd, prices=priced),
+        session_prompt_usd=(
+            eff_per_m_prompt * trace_prompt_tokens / 1e6
+            if eff_per_m_prompt is not None and trace_prompt_tokens is not None
+            else None
+        ),
+        output_tokens=output_tokens,
         providers_seen=_providers_of(records),
         served=", ".join(names) if names else "-",
         model_seen=models[0] if models else None,
@@ -228,9 +318,10 @@ def summarize_probe(
         ttft_ms=_median([rung.ttft_ms for rung in rungs if rung.ttft_ms is not None]),
         gen_tok_s=_median([rung.gen_tok_s for rung in rungs if rung.gen_tok_s is not None]),
         errors=sum(1 for record in records if is_failed(record)),
+        rate_limited=rate_limited,
         retries=sum(record.retries for record in records),
         skipped=sum(1 for rung in rungs if rung.skipped),
-        notes=[*notes, *_probe_notes(records, models)],
+        notes=all_notes,
     )
 
 
@@ -290,50 +381,6 @@ def _providers_of(records: Sequence[ProbeResult]) -> dict[str, int]:
         if is_served(record) and record.provider:
             counts[record.provider] = counts.get(record.provider, 0) + 1
     return counts
-
-
-def _probe_notes(records: Sequence[ProbeResult], models: Sequence[str]) -> list[str]:
-    """What a spec's records amount to beyond the numbers: the notes a reader is owed."""
-    notes = _record_notes(records)
-    for note in (skip_note(records), _burst_note(records)):
-        if note:
-            notes.append(note)
-    fallbacks = sum(1 for r in records if r.cached == 0 and (r.native_tokens_cached or 0) > 0)
-    if fallbacks:
-        notes.append(f"cached taken from the OpenRouter generation for {fallbacks} request(s)")
-    if len(models) > 1:
-        notes.append(f"responses named more than one model: {', '.join(models)}")
-    return notes
-
-
-def _record_notes(records: Sequence[ProbeResult]) -> list[str]:
-    """One note per distinct record note, without the burst marker.
-
-    A burst record's own note says `burst` and nothing else, and the rung it happened on is
-    what a reader needs; `_burst_note` writes that in its place.
-    """
-    notes: list[str] = []
-    for record in records:
-        for part in _note_parts(record.note or ""):
-            if part != BURST_NOTE and part not in notes:
-                notes.append(part)
-    return notes
-
-
-def _note_parts(note: str) -> list[str]:
-    """One record note split into its parts: `append_note` joins them with a semicolon."""
-    return [part.strip() for part in note.split(";") if part.strip()]
-
-
-def _burst_note(records: Sequence[ProbeResult]) -> str | None:
-    """One line naming every rung whose generation arrived in a single flush."""
-    rungs = sorted(
-        {record.rung for record in records if BURST_NOTE in _note_parts(record.note or "")}
-    )
-    if not rungs:
-        return None
-    which = "rung" if len(rungs) == 1 else "rungs"
-    return f"burst delivery on {which} {', '.join(str(rung) for rung in rungs)}"
 
 
 def _rungs(records: Sequence[ProbeResult]) -> list[int]:

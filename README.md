@@ -116,13 +116,14 @@ Native prices follow the precedence in [Prices](#prices).
 | Column | Meaning |
 |---|---|
 | `hit %` | Warm reads that found any part of the prefix divided by warm reads that were served. |
+| `1st hit %` | The same fraction, but counting only each rung's first warm read — the only read an agent loop performs. Pooling every repeat instead (`hit %`) flatters the cache, since reads 2+ re-read what read 1 just wrote. Equal to `hit %` with `--repeats 1`. |
 | `prefix %` | On a hit, the average fraction of the cold prompt cached; 100 % means the whole prefix. |
 | `eff $/M` | Hit-weighted prompt price: `(1 - h) * input + h * cache read`, where `h = hit % * prefix %`. |
-| `in $/M` | The listed input price used for the calculation. |
+| `in $/M` | The listed input price used for the calculation; for an unpinned OpenRouter spec, a rate fitted from what the provider that actually served it billed, not a listed price, and said so in a `priced as served: <provider> (rates fitted…)` note under the table. It falls back to the worst-case listed price (`worst case: <provider>`) when those records could not be fit. Pinned and native specs keep their listed price unchanged. |
 | `cold ms` / `warm ms` | First-rung cold and warm prefill latency; the gap is the cache's latency benefit. |
 | `TTFT ms` / `tok/s` | Median time to the first streamed token and output tokens per second across the spec's rungs. |
-| `errors` | Requests without a usable answer; a failed cold write is not counted as a cache miss. |
-| `drift` | `provider`, `model`, or `tokens±N%` markers versus the reference spec; `-` means no drift. |
+| `errors` | Requests without a usable answer; a failed cold write is not counted as a cache miss. A 429 among them is also counted separately (`rate_limited` in `--json`) and noted, so a run's own pace is not confused with a refusal. |
+| `drift` | `provider`, `model`, or `tokens±N%` markers versus the reference spec; `-` means no drift. Rendered in full, never truncated. A spec whose largest rung was skipped shows no `tokens±N%` marker (comparing prompt sizes across two different turns is not tokenizer drift) and gets a `token drift n/a (rung skipped)` note instead. |
 | `hits` | Per-warm-read cells: `x` failed, `1` is 98 % or better, otherwise the cached fraction. |
 | `ttft ms` / `tok/s` | The same two measurements for each rung. |
 | `ttl` | One cell per requested offset, for example `60s:1` means the cache remained available. |
@@ -131,6 +132,11 @@ Native prices follow the precedence in [Prices](#prices).
 When every spec shares one target and model, the table moves them into a `specs:` caption and shows provider tails; a different model keeps its complete name as the reference row.
 Reports also retain the served provider, response models, raw per-rung records, and the price source in JSON.
 Runs persist under `runs/<trace>/<timestamp>/` as options, endpoint snapshots, prices, and one JSONL file per spec.
+
+A `probe` that spends money prints `spent $X (worst case $Y)` after it runs, and a `report` of the run shows the same line; `X` sums every spec's `spend_usd` (OpenRouter's own bill where it reported one, else the usage priced at the listed rates) plus the availability check's own spend, and `Y` is what the estimate priced beforehand, no cache hit.
+When `--top` ran an availability check, a `pre-check: N requests, $X` line precedes it; the check's own requests persist to `precheck.jsonl`, never inside a spec's own file, and never enter its hit rate, error count, or drift.
+A read that returned more output tokens than its `max_tokens: 1` budget (GMICloud and native DeepSeek both do) is noted and billed for those tokens, not silently absorbed into the prompt count.
+The summary table is followed by one line projecting what a session shaped like the recorded trace would bill in prompt tokens per spec, at each spec's measured effective price — for example `prompt bill for a session like this trace (1.8 M prompt tokens): deepseek:deepseek-flash $0.006, @relace/fp4 $0.07`.
 
 Reports: `report RUN --output-file PATH` writes exactly what stdout would have shown to PATH, leaves stdout empty, and replaces an existing file.
 Without `--format`, `report RUN` prints its JSON document on a non-TTY stdout (a script or an agent) and the text table on a terminal; pass `--format text` to get the table regardless of where stdout goes.
@@ -172,7 +178,7 @@ provibench compare previous latest
 provibench compare runs/sample/20260912-090301 runs/sample/20260919-090302
 ```
 
-`history` reads runs offline and shows date, trace, protocol, spec, hit rate, effective price, TTFT, throughput, errors, and the listed price recorded by that run, plus a hit-rate sparkline per spec, trace, and protocol.
+`history` reads runs offline and shows date, trace, protocol, spec, hit rate, effective price, TTFT, throughput, errors, what the spec spent (`spend $`, recomputed from the run's own records, so an older run gets one too and `-` means the run recorded no price to compute it from), and the listed price recorded by that run, plus a hit-rate sparkline per spec, trace, and protocol.
 With no model it lists every model in the runs directory.
 In a mixed history containing two models, the elided labels of two long model names can collide in the sparkline column; run `history` per trace or widen the terminal.
 
@@ -274,3 +280,7 @@ CI runs Python 3.12, 3.13, and 3.14, lint, formatting, type checks, tests, wheel
 Tables are planned for 120 columns.
 `history` runs wider because it includes trace and protocol columns.
 At 80 columns, rich elides long names.
+A probe/sweep table's label column is planned as wide as its longest label needs, up to 24
+columns, rather than as wide as the rest of the table can spare; that keeps the native
+reference row readable whole and can push a dense table past 120 columns by up to that
+much. A label longer than 24 columns is still elided in the middle.

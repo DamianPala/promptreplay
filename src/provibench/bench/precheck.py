@@ -26,7 +26,7 @@ import httpx
 
 from provibench.bench.probe_context import ProbeContext
 from provibench.bench.probe_errors import error_type
-from provibench.bench.probe_models import ProbeCall, ProbeOptions, is_served
+from provibench.bench.probe_models import ProbeCall, ProbeOptions, ProbeResult, is_served
 from provibench.bench.probe_requests import send
 from provibench.bench.replay import prepare_body
 from provibench.bench.requests import post
@@ -71,6 +71,9 @@ class PreCheckResult:
     status: int = 0
     latency_ms: float = 0.0
     reason: str | None = None
+    record: ProbeResult | None = None
+    """The request the check sent, role `precheck`; written to `precheck.jsonl`, never
+    folded into the spec's own records or its hit/error statistics."""
 
 
 async def precheck_candidates(
@@ -140,11 +143,11 @@ async def _check(
         spec=spec, opts=options.replay_options(), api_key=api_key, client=client, throughput=False
     )
     body = prepare_body(entry.body, spec, probe.opts)
-    outcome = await send(probe, capture, entry, body, ProbeCall(rung, "cold", 0, None))
+    outcome = await send(probe, capture, entry, body, ProbeCall(rung, "precheck", 0, None))
     record = outcome.record
     if is_served(record):
         return PreCheckResult(
-            spec=spec, kept=True, status=record.status, latency_ms=record.latency_ms
+            spec=spec, kept=True, status=record.status, latency_ms=record.latency_ms, record=record
         )
     return PreCheckResult(
         spec=spec,
@@ -154,6 +157,7 @@ async def _check(
         reason=unavailable_reason(
             status=record.status, payload=_payload_of(responses), error=record.error
         ),
+        record=record,
     )
 
 

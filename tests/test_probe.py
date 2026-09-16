@@ -267,6 +267,11 @@ def test_probe_runs_a_rung_and_persists_the_run(
         "rungs",
         "summaries",
         "partial",
+        "spend_usd",
+        "worst_case_usd",
+        "precheck",
+        "trace_prompt_tokens",
+        "listing_prices",
         "changed",
     }
     assert doc["partial"] is False
@@ -302,6 +307,73 @@ def test_probe_runs_a_rung_and_persists_the_run(
     assert summary["eff_per_m_prompt"] == pytest.approx((1 - 0.9) * 1.0 + 0.9 * 0.1)
     assert summary["errors"] == 0
     assert summary["skipped"] == 0
+
+
+def test_the_closing_spend_line_prints_exactly_once_in_human_mode(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O3: a human-mode run's `spent $X (worst case $Y)` line renders once, as the last line
+    of the tables -- not again on stderr before them, the way `report_spend` used to."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    _install(
+        monkeypatch, _transport(lambda index: _ok(cached=90, input_tokens=10) if index else _ok())
+    )
+
+    outcome = cli.run(
+        "probe",
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "2",
+        "--gap",
+        "0",
+        "--no-throughput",
+        "--yes",
+        env={**bench_paths.env, **_ENV},
+        tty_stdout=True,
+        tty_stderr=True,
+    )
+    assert outcome.code == 0, outcome.stderr
+    combined = outcome.stdout + outcome.stderr
+    assert combined.count("spent $") == 1
+    assert "spent $" in outcome.stdout  # the last line of the rendered tables, not stderr
+
+
+def test_probe_and_report_print_the_same_worst_case_for_the_same_run(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O4: `probe`'s own `worst_case_usd` and `report`'s of the same run directory agree --
+    one function (`bench.spend.run_worst_case_usd`) computes both from the run's records."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    _install(
+        monkeypatch, _transport(lambda index: _ok(cached=90, input_tokens=10) if index else _ok())
+    )
+
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "2",
+        "--gap",
+        "0",
+        "--no-throughput",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    probe_worst = outcome.document["worst_case_usd"]
+    assert probe_worst is not None
+
+    report = cli.run("report", str(outcome.document["run_dir"]), env={**bench_paths.env, **_ENV})
+    assert report.code == 0, report.stderr
+    assert report.document["worst_case_usd"] == pytest.approx(probe_worst)
 
 
 def test_probe_dry_run_sends_nothing_and_reports_the_estimate(

@@ -17,8 +17,9 @@ from provibench.bench.replay import ReplayOptions, ReplayResult
 from provibench.bench.rungs import broadcast_repeats, select_rungs, validate_rungs
 from provibench.bench.trace import TraceEntry, Usage
 
-type Role = Literal["cold", "warm", "stream", "ttl"]
-"""What a probe request is for: the write, a warm read, the throughput request, a TTL read."""
+type Role = Literal["cold", "warm", "stream", "ttl", "precheck"]
+"""What a probe request is for: the write, a warm read, the throughput request, a TTL read,
+or an availability pre-check -- never part of a spec's own records, persisted separately."""
 
 _DEFAULT_REPEATS = [6, 2, 2]
 _TWOXX_MIN = 200

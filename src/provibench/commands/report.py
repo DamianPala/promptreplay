@@ -12,6 +12,11 @@ from typing import TYPE_CHECKING
 
 import click
 
+from provibench.commands.probe_spend import (
+    LISTING_PRICES_SCHEMA,
+    PRECHECK_SCHEMA,
+    listing_prices_document,
+)
 from provibench.commands.run_refs import resolve_run_dir
 from provibench.commands.summary_view import (
     SWEEP_BLOCK_PROPERTIES,
@@ -25,6 +30,8 @@ from provibench.core.documents import (
     array,
     boolean,
     integer,
+    nullable_integer,
+    nullable_number,
     nullable_object,
     nullable_string,
     number,
@@ -61,6 +68,11 @@ _OUTPUT = obj(
         "options": _OPTIONS,
         "summaries": array({}),
         "sweep": nullable_object(SWEEP_BLOCK_PROPERTIES, required=list(SWEEP_BLOCK_PROPERTIES)),
+        "spend_usd": nullable_number(),
+        "worst_case_usd": nullable_number(),
+        "precheck": PRECHECK_SCHEMA,
+        "trace_prompt_tokens": nullable_integer(),
+        "listing_prices": LISTING_PRICES_SCHEMA,
         "output_file": nullable_string(),
         "changed": boolean(),
     },
@@ -74,6 +86,11 @@ _OUTPUT = obj(
         "options",
         "summaries",
         "sweep",
+        "spend_usd",
+        "worst_case_usd",
+        "precheck",
+        "trace_prompt_tokens",
+        "listing_prices",
         "output_file",
         "changed",
     ],
@@ -164,6 +181,11 @@ def _full_report(run_dir: Path) -> Document:
         "options": _replay_options(meta.options),
         "summaries": entries,
         "sweep": None,
+        "spend_usd": None,
+        "worst_case_usd": None,
+        "precheck": None,
+        "trace_prompt_tokens": None,
+        "listing_prices": [],
         "output_file": None,
         "changed": False,
     }
@@ -173,6 +195,7 @@ def _probe_report(run_dir: Path) -> Document:
     from provibench.bench.probe_drift import apply_drift
     from provibench.bench.probe_runs import load_probe_run
     from provibench.bench.probe_summary import summarize_probe
+    from provibench.bench.spend import run_worst_case_usd, total_spend
     from provibench.bench.summary import cache_mode_note
 
     meta, records = load_probe_run(run_dir)
@@ -180,11 +203,23 @@ def _probe_report(run_dir: Path) -> Document:
     summaries = apply_drift(
         [
             summarize_probe(
-                ref.label, records[ref.label], prices=meta.prices.get(ref.label), notes=notes
+                ref.label,
+                records[ref.label],
+                prices=meta.prices.get(ref.label),
+                notes=notes,
+                unpinned_gateway=ref.kind == "openrouter" and not ref.providers,
+                trace_prompt_tokens=meta.trace_prompt_tokens,
+                listing=meta.listing_prices,
             )
             for ref in meta.specs
         ],
         meta.specs,
+    )
+    spend = total_spend([summary.spend_usd for summary in summaries])
+    worst = run_worst_case_usd(
+        records,
+        meta.prices,
+        precheck_worst_case_usd=meta.precheck.worst_case_usd if meta.precheck else None,
     )
     return {
         "run_dir": str(run_dir),
@@ -198,6 +233,11 @@ def _probe_report(run_dir: Path) -> Document:
         # The selection the run chose its endpoints by, so the report can print it with no
         # network; `None` for a probe whose specs were given by hand.
         "sweep": None if meta.sweep is None else meta.sweep.to_document(),
+        "spend_usd": total_spend([spend, meta.precheck.spend_usd if meta.precheck else None]),
+        "worst_case_usd": worst,
+        "precheck": meta.precheck.model_dump() if meta.precheck is not None else None,
+        "trace_prompt_tokens": meta.trace_prompt_tokens,
+        "listing_prices": listing_prices_document(meta.listing_prices),
         "output_file": None,
         "changed": False,
     }

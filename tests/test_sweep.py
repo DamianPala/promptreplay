@@ -707,14 +707,21 @@ def test_sweep_prints_the_probe_tables_in_the_measured_order(
         for line in outcome.stdout.splitlines()
         if line.startswith(("@", "deepseek:")) and "|" in line
     ]
-    assert [row.split("|")[0].strip() for row in spec_rows[:5]] == [
-        "deepseek:deepseek-flash",
-        "@novita",
-        "@gmicloud",
-        "@siliconflow",
-        "@novita/fp8",
-    ]
-    assert all(len(line) <= 120 for line in outcome.stdout.splitlines())
+    labels = [row.split("|")[0].strip() for row in spec_rows[:5]]
+    assert labels[0] == f"deepseek:{_NATIVE}"  # O2: the reference row's name is never folded
+    assert labels[1:] == ["@novita", "@gmicloud", "@siliconflow", "@novita/fp8"]
+    # O2: the label column is now planned as wide as the reference row's own name needs
+    # (never capped at what the spec table can spare the drift floor, the same trade item 8
+    # made for the drift column), so every row -- header included -- can run a little past
+    # `_MAX_TABLE`; this table does, by exactly the reference label's width. That is the
+    # relaxed budget, not a licence for the table to grow further. The session-projection
+    # footer (item 9) is prose, not a table cell, and is not held to any column budget.
+    budget = 120 + len(f"deepseek:{_NATIVE}")
+    for line in outcome.stdout.splitlines():
+        if "|" not in line:
+            continue
+        without_drift = line.rsplit("|", 1)[0]
+        assert len(without_drift) <= budget, line
 
 
 def test_sweep_estimates_every_spec_and_the_budget_refuses_above_it(
@@ -1311,6 +1318,37 @@ def test_sweep_availability_check_counts_in_the_estimate_and_the_budget(
     assert within.code == 0, within.stderr
     # turn 1 records 100 prompt tokens, so the plan's six candidate checks are 600 tokens
     assert "pre-check: up to 6 requests, 600 tokens," in within.stderr
+
+
+def test_top_sweep_pre_check_spend_lands_in_the_run_total_exactly_once(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check's own spend is folded into `spend_usd` once: not missing, not doubled.
+
+    O5: the availability check's requests are priced by `report_spend` alongside every
+    probed spec's own records, so the run's published total has to equal exactly the sum of
+    the two -- neither the check's share left out nor counted twice because both paths touch
+    the same `precheck.jsonl`.
+    """
+    _write_targets(bench_paths.targets_path)
+    _install(monkeypatch, _transport(endpoints=_RANKED))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--top", "4", "--budget", "1"))
+    assert outcome.code == 0, outcome.stderr
+
+    precheck = outcome.document["precheck"]
+    assert precheck is not None
+    precheck_spend = precheck["spend_usd"]
+    assert precheck_spend is not None and precheck_spend > 0
+
+    summaries_spend = sum(
+        summary["spend_usd"]
+        for summary in outcome.document["summaries"]
+        if summary["spend_usd"] is not None
+    )
+    assert summaries_spend > 0  # the probed specs themselves billed something too
+
+    assert outcome.document["spend_usd"] == pytest.approx(summaries_spend + precheck_spend)
 
 
 def test_sweep_top_budget_must_cover_the_upper_bound(

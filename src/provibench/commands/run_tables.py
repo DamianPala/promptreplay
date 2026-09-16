@@ -41,6 +41,7 @@ _HISTORY_COLUMNS = (
     "TTFT ms",
     "tok/s",
     "errors",
+    "spend $",
     "in $/M",
 )
 _COMPARE_COLUMNS = ("spec", "hit %", "eff $/M", "TTFT ms", "tok/s")
@@ -144,6 +145,7 @@ def _history_cells(row: Document, labels: dict[str, str]) -> list[str]:
         _number(row.get("ttft_ms"), _MS_DIGITS),
         _number(row.get("gen_tok_s"), _TOK_S_DIGITS),
         str(_count(row.get("errors"))),
+        _number(row.get("spend_usd"), _USD_DIGITS),
         _number(row.get("listed_input"), _USD_DIGITS),
     ]
 

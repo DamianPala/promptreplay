@@ -49,9 +49,12 @@ def apply_drift(
     ref_models = models_of(summaries[reference])
     for index, summary in enumerate(summaries):
         rung = largest(summary)
-        summary.tokens_delta_pct = tokens_delta(rung, ref_rung)
+        incomplete = index != reference and _incomplete(rung, ref_rung)
+        summary.tokens_delta_pct = None if incomplete else tokens_delta(rung, ref_rung)
         summary.fingerprint_match = fingerprint_match(rung, ref_rung)
         summary.reference = index == reference
+        if incomplete:
+            summary.notes = [*summary.notes, "token drift n/a (rung skipped)"]
         summary.drift = (
             None
             if index == reference
@@ -74,6 +77,19 @@ def largest(summary: ProbeSummary) -> RungSummary | None:
     """The rung with the largest cold prompt: the size the token counts are compared at."""
     rungs = [rung for rung in summary.rungs if not rung.skipped and rung.prompt_cold > 0]
     return max(rungs, key=lambda rung: rung.prompt_cold, default=None)
+
+
+def _incomplete(rung: RungSummary | None, reference: RungSummary | None) -> bool:
+    """Whether the compared rungs are different turns: a size gap that is not tokenizer drift.
+
+    Every spec in a run shares the same planned rung set, so a spec whose largest usable
+    rung is not the reference's largest one is missing a rung the reference has -- skipped by
+    a failed cold write, most often. Comparing prompt sizes across two different turns would
+    read as `tokens±N%` drift that is really just two prompts of different sizes.
+    """
+    if rung is None or reference is None:
+        return False
+    return rung.rung != reference.rung
 
 
 def tokens_delta(rung: RungSummary | None, reference: RungSummary | None) -> float | None:

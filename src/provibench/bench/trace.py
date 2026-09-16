@@ -10,7 +10,7 @@ import gzip
 import hashlib
 import json
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from importlib import resources
 from pathlib import Path
 from typing import Any, cast
@@ -264,3 +264,15 @@ def main_conversation(entries: list[TraceEntry]) -> list[TraceEntry]:
     if not groups:
         return []
     return max(groups.values(), key=lambda g: sum(e.body_bytes for e in g))
+
+
+def total_prompt_tokens(entries: Sequence[TraceEntry]) -> int:
+    """The sum of every turn's own recorded prompt size: the bill of replaying them all once.
+
+    Each turn already resends the whole conversation so far, so its `prompt_total` is what
+    that one turn costs; summing them is what a session like this trace bills in prompt
+    tokens end to end, cache hits aside. A turn with no recorded response contributes
+    nothing rather than making the total unknown -- a partially recorded trace still gives
+    a number, understated by exactly what it is missing.
+    """
+    return sum(entry.response.usage.prompt_total for entry in entries if entry.response)

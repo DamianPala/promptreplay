@@ -485,7 +485,7 @@ def test_probe_report_renders_a_run_without_stream_records(
     assert as_list(summary["rungs"]) != []
     run_table = outcome.stdout.split("\n\n")[0].splitlines()
     header = [cell.strip() for cell in run_table[0].split("|")]
-    assert header[:3] == ["spec", "hit %", "prefix %"]
+    assert header[:3] == ["spec", "hit %", "1st hit %"]
     assert "TTFT ms" in header and "tok/s" in header and "drift" in header
     row = [cell.strip() for cell in run_table[2].split("|")]
     assert row[header.index("TTFT ms")] == "-"
