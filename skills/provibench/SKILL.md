@@ -61,6 +61,7 @@ Name the winner from the measured fields of each `summaries` item, never from th
 - `first_hit_rate` (`1st hit %`) counts only the first repeat after each cache write. That is the cold-start case: a fresh session, a restart, a gateway switching providers. A gap below `hit_rate` means the endpoint needs a few requests before its cache helps, and a session bills closer to this rate in its first minutes. In JSON, `h` is `hit_rate * cached_fraction` pooled over every repeat and `first_h` the same over first repeats only; `eff_per_m_prompt` is priced from `h`.
 - `ttft_ms` (`TTFT ms`) and `gen_tok_s` (`tok/s`) are the median time to first token and output tokens per second. A rung answered in one burst has no `gen_tok_s`; the endpoint's median then comes from the rungs that streamed.
 - `errors`, `rate_limited`, `drift` and `notes` hold failed requests, the 429s among them, a served provider or model that differs from the reference row, and the caveats the text report prints under the table.
+- `priced_as` says where an endpoint's price came from; an unpinned OpenRouter endpoint is repriced from the provider that actually served it, so its `eff_per_m_prompt` is not a listed price.
 
 Tell the user the winning endpoint, its `eff_per_m_prompt` next to the listed input price, the session bill, and whether `first_hit_rate` sits well below `hit_rate`.
 Give the date of the run: routing, quantization and prices shift week to week, so one run is one day's measurement.
