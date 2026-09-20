@@ -277,7 +277,7 @@ def selection_line(sweep: SweepInfo) -> str:
         which = f"the {sweep.top} cheapest by listed price"
     else:
         which = f"the {sweep.top} best by {sweep.sort}"
-    line = f"OpenRouter providers: the run took {which}"
+    line = f"Of the OpenRouter providers, the run took {which}"
     if sweep.zdr:
         line += ", zero-data-retention endpoints only"
     line += "."
@@ -319,12 +319,12 @@ def _reason_words(drop: SelectionDrop) -> str:
 
     A pre-check failure already carries its provider's own gateway reason -- that is the
     "words" a reader can act on, and rewriting it would replace one true statement with a
-    guess at what it meant.
+    guess. A status code is left out: the `candidates:` listing and the run file keep it.
     """
     if drop.checked:
         return drop.reason
     if drop.reason.startswith("status "):
-        return f"OpenRouter reports it degraded ({drop.reason})"
+        return "OpenRouter reported it as degraded"
     if drop.reason.startswith("uptime 1d "):
         pct = drop.reason.removeprefix("uptime 1d ").strip()
         return f"its one-day uptime was below the floor ({pct})"

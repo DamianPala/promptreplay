@@ -43,10 +43,12 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
 - The HTML page is written for a person who opens it once: a title naming the model and the
   endpoint count, one sentence of method, the endpoint table captioned cheapest first with
   the prices in the order `in $/M`, `cache $/M`, `eff $/M`, `this trace $` under a price
-  band, every header explained on hover, a chart of the cached share per turn, a
-  session-cost chart (what the price list promises when the cache always hits against what
-  the run measured), the per-turn table folded away, and the caveats as sentences in a fixed
-  order with drop reasons in words and the cache mode stated once
+  band, every header explained on hover, a session-bill chart right under the table (the
+  bill if every repeat had hit the cache against the bill at the measured hit rate), then a
+  chart of the cached share per turn, the per-turn table folded away, and the caveats as
+  sentences in a fixed order with drop reasons in words and the cache mode stated once;
+  chart hovers and captions use the page's own words (turn, repeat request, the short
+  `@tag` label), never the tool's (`rung`, `warm reads`, `h`)
 - The text report separates its sections with blank lines, prefixes notes with the same short
   endpoint labels its tables use, states the cache mode once per run, and prints the session
   bill as one aligned line per endpoint

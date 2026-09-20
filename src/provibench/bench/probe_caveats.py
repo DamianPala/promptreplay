@@ -15,7 +15,6 @@ from html import escape
 
 from provibench.bench.labels import join_and, size_label
 from provibench.bench.probe_charts import reference_size
-from provibench.bench.probe_html_tables import BLANKS_TEXT
 from provibench.bench.probe_summary import ProbeSummary
 from provibench.bench.probe_tables import TableBlock
 from provibench.bench.selection import SweepInfo, not_probed_lines, selection_line
@@ -26,12 +25,14 @@ from provibench.core.documents import Document, as_document, as_list
 __all__ = ["caveats_section", "run_method_sentence", "tok_footnote_cells"]
 
 _NONCE_CAVEATS: dict[bool, str] = {
-    True: cache_mode_sentence(True),
-    False: cache_mode_sentence(False),
+    True: cache_mode_sentence(True, labelled=False, where="on this page"),
+    False: cache_mode_sentence(False, labelled=False, where="on this page"),
 }
 """The run-wide cache-mode caveat, written once instead of once per endpoint. Keyed by
 `options.warm`, both built from `cache_mode_sentence` so this caveat and the text report's
-first note line (`probe_tables.probe_note_lines`) never say the mode in two different words."""
+first note line (`probe_tables.probe_note_lines`) never say the mode in two different words.
+Unlabelled: the page shows `cold (nonce)` nowhere else, so a quoted label here would point
+at nothing."""
 
 _METHOD_NOTES = (cache_mode_note(True), cache_mode_note(False))
 """`warm` and `cold (nonce)`: the short per-endpoint note `_nonce_caveat` already covers once."""
@@ -103,8 +104,6 @@ def caveats_section(
     cost = run_cost_sentence(document)
     if cost:
         add(escape(cost))
-
-    add(BLANKS_TEXT)
 
     _add_remaining_notes(add, summaries, labels)
 
@@ -213,11 +212,32 @@ def _burst_sentence(
         ]
     )
     noun = "turn" if len(rungs) == 1 else "turns"
-    pronoun = "that turn" if len(rungs) == 1 else "those turns"
+    pronoun = "that turn has" if len(rungs) == 1 else "those turns have"
+    others = len({rung.rung for summary in summaries for rung in summary.rungs}) - len(rungs)
     return (
-        f"{names} delivered the {sizes}-token {noun}'s answer in one burst, so tok/s for "
-        f"{pronoun} is -; their tok/s in the summary is the median of the other turns."
+        f"{names} delivered the {sizes}-token {noun}'s answer in one burst, so {pronoun} no "
+        f"tok/s (shown as - in the per-turn table); {_summary_tok_phrase(others)}."
     )
+
+
+def _summary_tok_phrase(others: int) -> str:
+    """What the summary's `tok/s` cell holds once the burst turns are left out of it.
+
+    The only `-` cells a reader meets are the per-turn ones this sentence explains, so the
+    explanation lives here rather than in a caveat of its own about the symbol.
+    """
+    if others <= 0:
+        return "their tok/s in the summary is - as well"
+    if others == 1:
+        return "their tok/s in the summary is the other turn's"
+    return f"their tok/s in the summary is the median of the other {_count_word(others)} turns"
+
+
+_COUNT_WORDS: dict[int, str] = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+
+
+def _count_word(count: int) -> str:
+    return _COUNT_WORDS.get(count, str(count))
 
 
 def _selection_lines(document: Document) -> list[str]:
@@ -238,7 +258,7 @@ def tok_footnote_cells(
 ) -> dict[tuple[int, int], str]:
     """A footnote marker on a `tok/s` cell reading `-` that a burst caveat explains.
 
-    The burst note is about one turn, but the cell it explains is the per-provider row's
+    The burst note is about one turn, but the cell it explains is the per-endpoint row's
     median: that is the cell a reader actually looks at and finds unmeasured, so the link
     goes there rather than to the per-turn table.
     """

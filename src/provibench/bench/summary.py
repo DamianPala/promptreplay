@@ -167,18 +167,27 @@ def cache_mode_note(warm: bool) -> str:
     return "warm" if warm else "cold (nonce)"
 
 
-def cache_mode_sentence(warm: bool) -> str:
+def cache_mode_sentence(warm: bool, *, labelled: bool = True, where: str = "in this table") -> str:
     """`cache_mode_note` in words: the run-wide fact both the HTML caveats and the text
-    report's first note line state once, instead of the short per-endpoint form."""
+    report's first note line state once, instead of the short per-endpoint form.
+
+    The text report keeps the quoted label in front, because `cold (nonce)` is the name the
+    CLI and its notes use; the HTML page shows that label nowhere else, so its caveat drops it
+    (`labelled=False`) and says `on this page` rather than `in this table`.
+    """
     if warm:
-        return (
-            '"warm": the cache was not reset between requests, so a hit in this table may '
-            "have been written by earlier traffic, not by this run."
+        body = (
+            f"the cache was not reset between requests, so a hit {where} may have been "
+            "written by earlier traffic, not by this run."
         )
-    return (
-        '"cold (nonce)": each request carried a unique marker, so every cache hit in this '
-        "table was written by this run and none came from earlier traffic."
-    )
+    else:
+        body = (
+            f"each request carried a unique marker, so every cache hit {where} was written "
+            "by this run; none came from earlier traffic."
+        )
+    if not labelled:
+        return body[0].upper() + body[1:]
+    return f'"{cache_mode_note(warm)}": {body}'
 
 
 SUMMARY_COLUMNS = (

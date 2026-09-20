@@ -320,8 +320,9 @@ def test_selection_line_states_a_status_drop_and_an_uptime_drop_in_words() -> No
         ],
     )
     line = selection_line(sweep)
-    assert line.startswith("OpenRouter providers: the run took the 3 best by uptime.")
-    assert "novita was skipped because OpenRouter reports it degraded (status -2)." in line
+    assert line.startswith("Of the OpenRouter providers, the run took the 3 best by uptime.")
+    assert "novita was skipped because OpenRouter reported it as degraded." in line
+    assert "status -2" not in line  # a code the reader cannot use; the listing keeps it
     assert "gmicloud was skipped because its one-day uptime was below the floor (96.90 %)." in line
 
 
@@ -337,7 +338,7 @@ def test_selection_line_merges_endpoints_that_share_one_drop_reason() -> None:
     line = selection_line(sweep)
     # item 16: the drop sentence names the endpoint the way the table above it does (`@tag`),
     # not the bare provider tag.
-    assert "@a and @b were skipped because OpenRouter reports it degraded (status -2)." in line
+    assert "@a and @b were skipped because OpenRouter reported it as degraded." in line
 
 
 def test_not_probed_lines_keeps_a_precheck_drop_reason_as_is() -> None:

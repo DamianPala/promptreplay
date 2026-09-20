@@ -205,7 +205,7 @@ def _probe_sections(document: Document) -> list[str]:
     cell_extra = tok_footnote_cells(endpoint_block, tok_footnotes)
     sections.append(
         table_section(
-            "Per provider",
+            "Per endpoint",
             endpoint_block,
             caption_html=endpoint_caption_html(
                 labels, _probe_model(document), folded=bool(blocks.caption)
@@ -222,7 +222,7 @@ def _probe_sections(document: Document) -> list[str]:
 
     rung_block, _rung_dropped, rung_titles = rung_view(blocks.rungs, summaries)
     sections.append(
-        '<details class="turns"><summary>Per turn: every request</summary>'
+        '<details class="turns"><summary>Per turn: hits and latency</summary>'
         + table_section(None, rung_block, help=rung_help(), cell_titles=rung_titles)
         + "</details>"
     )
@@ -239,7 +239,11 @@ def _probe_charts(
     trace_prompt_tokens: object,
     document: Document,
 ) -> str:
-    """The cache-share chart and the session-cost chart, or nothing when neither has data.
+    """The session-cost chart, then the cache-share chart, or nothing when neither has data.
+
+    The bill chart comes first because it is the answer (the gap between the listed price
+    and the measured one, per endpoint) and the share chart is the evidence for it; at
+    desktop width that also keeps the answer on the first screen, right under the table.
 
     Only the palette's validated slots are charted: past eight series a grouped bar chart
     stops being readable however it is coloured, so the rest stay in the tables above and
@@ -252,6 +256,18 @@ def _probe_charts(
     rows = session_cost_rows(charted, tokens)
     parts: list[str] = []
     unmeasured = not_charted(summaries, labels)
+    if any(row.light.value is not None or row.dark.value is not None for row in rows):
+        parts.append(
+            "<figure><h3>Prompt bill for a session like this one</h3>"
+            + _shade_legend()
+            + chart(
+                paired_horizontal_bars(rows, label="session bill per endpoint"),
+                "Light: the bill if every repeat had hit the cache, at the listed cache price. "
+                "Dark: the bill at the hit rate this run measured. The gap is what was paid "
+                "at the input price instead.",
+            )
+            + "</figure>"
+        )
     if groups:
         parts.append(
             "<figure><h3>Share of prompt tokens served from cache, per turn</h3>"
@@ -268,25 +284,13 @@ def _probe_charts(
             )
             + "</figure>"
         )
-    if any(row.light.value is not None or row.dark.value is not None for row in rows):
-        parts.append(
-            "<figure><h3>What a session like this one bills</h3>"
-            + _shade_legend()
-            + chart(
-                paired_horizontal_bars(rows, label="session bill per endpoint"),
-                "Light: what the price list promises when the cache always hits. Dark: what "
-                "this run measured. The difference is what the misses cost.",
-            )
-            + "</figure>"
-        )
     return "".join(parts)
 
 
 def _cache_chart_caption(summaries: Sequence[ProbeSummary], document: Document) -> str:
     caption = (
-        "For each turn, the share of prompt tokens that repeat requests got from the "
-        "cache: hit rate times cached share, the quantity <code>eff $/M</code> is priced "
-        "from. 100 means every repeat hit and the whole prompt was cached."
+        "Bar height is hit rate times cached share, the same share <code>eff $/M</code> is "
+        "built on. 100 means every repeat hit and the whole prompt was cached."
     )
     tail = _repeat_reads_tail(summaries, document)
     if tail:
@@ -318,7 +322,7 @@ def _repeat_reads_tail(summaries: Sequence[ProbeSummary], document: Document) ->
         return None
     return (
         f"At {join_and(sizes)} each bar is {_count_word(count)} reads, so "
-        f"{round(100 / count)} means one miss."
+        f"{round(100 / count)} means one of them missed."
     )
 
 
@@ -329,8 +333,7 @@ def _count_word(count: int) -> str:
 def _shade_legend() -> str:
     return (
         '<ul class="legend">'
-        '<li><span class="swatch shade-light"></span>at the listed cache price, every '
-        "repeat a hit</li>"
+        '<li><span class="swatch shade-light"></span>if every repeat had hit</li>'
         '<li><span class="swatch shade-dark"></span>at the measured hit rate</li>'
         "</ul>"
     )

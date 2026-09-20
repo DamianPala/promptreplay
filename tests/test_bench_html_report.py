@@ -480,25 +480,27 @@ def test_hits_cell_counts_what_hit_percent_counts() -> None:
 
 
 def test_the_page_follows_the_new_reading_order() -> None:
-    """Item 11: header, method sentence, endpoint table, the two charts, then the per-turn
-    table closed inside a `<details>`, then the caveats and the footer."""
+    """Item 11: header, method sentence, endpoint table, the bill chart (the answer) before
+    the cache-share chart (the evidence), then the per-turn table closed inside a
+    `<details>`, then the caveats and the footer."""
     html = render_html(probe_document())
     assert html.count('<section class="table">') == 2
     header = html.index("<header")
     method = html.index('<p class="method">')
-    provider = html.index("<h3>Per provider</h3>")
+    endpoint = html.index("<h3>Per endpoint</h3>")
     caption = html.index(f'<p class="caption">{ENDPOINT_CAPTION_HTML}')
+    cost_chart = html.index("<h3>Prompt bill for a session like this one</h3>")
     cache_chart = html.index("<h3>Share of prompt tokens served from cache, per turn</h3>")
-    cost_chart = html.index("<h3>What a session like this one bills</h3>")
-    details = html.index('<details class="turns"><summary>Per turn: every request</summary>')
+    details = html.index('<details class="turns"><summary>Per turn: hits and latency</summary>')
     caveats = html.index('<section class="caveats">')
     footer = html.index('<footer class="foot">')
     assert (
-        header < method < provider < caption < cache_chart < cost_chart < details < caveats < footer
+        header < method < endpoint < caption < cost_chart < cache_chart < details < caveats < footer
     )
     assert "<h3>Per rung</h3>" not in html
+    assert "<h3>Per provider</h3>" not in html  # "provider" is the OpenRouter upstream, not a row
     assert "<h2>Cache and cost</h2>" not in html
-    assert html.index('class="scroll"', provider) < details  # the endpoint table under its own head
+    assert html.index('class="scroll"', endpoint) < details  # the endpoint table under its own head
 
 
 def test_charts_scale_to_the_page_instead_of_clipping() -> None:
@@ -536,16 +538,16 @@ def test_hit_rate_chart_has_one_bar_per_spec_per_rung() -> None:
     html = render_html(probe_document())
     charts = _SVG.findall(html)
     assert len(charts) == 2
+    # the session-cost chart comes first and draws a light and a dark bar per priced endpoint
+    assert _bars(charts[0]) == 6
     # novita measured two rungs, gmicloud and the third spec one each
-    assert _bars(charts[0]) == 4
-    # the session-cost chart draws a light and a dark bar for every priced endpoint
-    assert _bars(charts[1]) == 6
+    assert _bars(charts[1]) == 4
 
 
 def test_rungs_share_one_x_label_and_the_different_sizes_do_not_split_them() -> None:
     """The third spec's 9k rung is the same rung: one group, one label, sized by the first."""
     html = render_html(probe_document())
-    bars = _SVG.findall(html)[0]
+    bars = _SVG.findall(html)[1]
     labels = re.findall(r'<text class="tick mid"[^>]*>([^<]+)</text>', bars)
     # item 8: "rung" becomes "turn" in the HTML page's own chart and column labels.
     assert labels == ["turn 1 · 20k", "turn 2 · 41k"]
@@ -553,7 +555,7 @@ def test_rungs_share_one_x_label_and_the_different_sizes_do_not_split_them() -> 
 
 
 def test_the_grouped_chart_names_both_axes() -> None:
-    bars = _SVG.findall(render_html(probe_document()))[0]
+    bars = _SVG.findall(render_html(probe_document()))[1]
     assert '<text class="axis-title" x="46.0" y="22.0">share %</text>' in bars
     assert '<text class="axis-title" x="1060.0" y="334.0">prompt size (turn)</text>' in bars
     assert bars.count('class="axis-title"') == 2
@@ -577,14 +579,14 @@ def test_a_clipped_row_label_keeps_its_full_text_on_hover() -> None:
 
 def test_hit_rate_chart_keeps_a_slot_per_spec_and_labels_every_bar() -> None:
     html = render_html(probe_document())
-    bars = _SVG.findall(html)[0]
+    bars = _SVG.findall(html)[1]
     assert 'class="bar s1"' in bars and 'class="bar s2"' in bars and 'class="bar s3"' in bars
     assert bars.count("<title>") == _bars(bars) + 1  # one per bar, plus the chart's own
-    assert (
-        "or:model@novita · rung 1 · 20,410 prompt tokens · "
-        "hit 100.0% (1/1 warm reads) · cached 93.6%" in bars
-    )
-    assert "hit 0.0% (0/1 warm reads)" in bars
+    # the hover speaks the page's words: the short label, `turn`, `repeats`; not `rung` and
+    # `warm reads`, which the page never defines
+    assert "@novita · turn 1 · 20,410 prompt tokens · 1/1 repeats hit · cached 93.6%" in bars
+    assert "0/1 repeats hit" in bars
+    assert "rung" not in bars and "warm reads" not in bars and "or:model@" not in bars
     assert '<text class="tick mid"' in bars
 
 
@@ -592,12 +594,15 @@ def test_session_cost_chart_pairs_a_listed_bar_and_a_measured_bar_per_endpoint()
     """Item 10: the price-bar chart is gone; each endpoint gets two bars, same series colour,
     one at the listed cache price for a session like the trace and one at what it measured."""
     html = render_html(probe_document())
-    cost = _SVG.findall(html)[1]
+    cost = _SVG.findall(html)[0]
     assert _bars(cost) == 6  # a light and a dark bar per endpoint
     assert 'class="bar light s1"' in cost and 'class="bar s1"' in cost
-    assert "listed $0.030/M cache read" in cost
-    assert "eff $0.041/M prompt, hit-weighted h 95.8%" in cost
-    assert "price source: OpenRouter listing" in cost
+    assert "if every repeat had hit: $0.0015 at the listed $0.030/M cache price" in cost
+    assert (
+        "at the measured hit rate: $0.0021 (eff $0.041/M; the cache covered 95.8% of prompt "
+        "tokens; priced from the OpenRouter listing)" in cost
+    )
+    assert "hit-weighted h" not in cost  # `h` is the tool's name, never introduced on the page
     assert '<text class="row-label" x="0.0"' in cost
     # the listed bar and the measured bar both show a session-shaped dollar amount, not $/M
     assert ">$0.0015</text>" in cost and ">$0.0021</text>" in cost and ">$0.0150</text>" in cost
@@ -607,13 +612,16 @@ def test_session_cost_chart_pairs_a_listed_bar_and_a_measured_bar_per_endpoint()
 def test_session_cost_chart_has_its_own_legend_and_caption() -> None:
     html = render_html(probe_document())
     assert (
-        '<ul class="legend"><li><span class="swatch shade-light"></span>at the listed cache '
-        'price, every repeat a hit</li><li><span class="swatch shade-dark"></span>at the '
-        "measured hit rate</li></ul>" in html
+        '<ul class="legend"><li><span class="swatch shade-light"></span>if every repeat had '
+        'hit</li><li><span class="swatch shade-dark"></span>at the measured hit rate</li></ul>'
+        in html
     )
+    # the run measured a hit rate and priced a session at it, and the gap covers partly
+    # cached prompts too, so the caption says "paid at the input price", not "the misses"
     assert (
-        "Light: what the price list promises when the cache always hits. Dark: what this run "
-        "measured. The difference is what the misses cost." in html
+        "Light: the bill if every repeat had hit the cache, at the listed cache price. Dark: "
+        "the bill at the hit rate this run measured. The gap is what was paid at the input "
+        "price instead." in html
     )
 
 
@@ -634,7 +642,7 @@ def test_a_spec_without_a_price_gets_a_dash_row_in_the_session_cost_chart() -> N
         {**entries[0], "cache_read_price": None, "session_prompt_usd": None},
         *entries[1:],
     ]
-    cost = _SVG.findall(render_html(document))[1]
+    cost = _SVG.findall(render_html(document))[0]
     assert _bars(cost) == 4  # the two fully priced specs keep both their bars
     assert cost.count('class="row-label"') == 3  # every spec keeps its label
     assert '<text class="value"' in cost and ">-</text>" in cost
@@ -647,8 +655,8 @@ def test_specs_past_the_eight_slots_stay_in_the_tables_and_are_named() -> None:
     document["summaries"] = [{**first, "label": f"or:model@r{index}"} for index in range(9)]
     html = render_html(document)
     charts = _SVG.findall(html)
-    assert _bars(charts[0]) == MAX_SERIES * 2  # the fixture entry's two rungs, eight times
-    assert _bars(charts[1]) == MAX_SERIES * 2  # a light and a dark bar for each charted spec
+    assert _bars(charts[0]) == MAX_SERIES * 2  # a light and a dark bar for each charted spec
+    assert _bars(charts[1]) == MAX_SERIES * 2  # the fixture entry's two rungs, eight times
     assert "8 of 9 endpoints are charted; the rest are in the tables above: @r8" in html
     assert "<td>@r0</td>" in html and "<td>@r8</td>" in html
 
@@ -696,13 +704,23 @@ def test_a_warm_runs_page_states_the_cache_mode_too() -> None:
     options = as_document(document["options"]) or {}
     document["options"] = {**options, "warm": True}
     html = render_html(document)
-    # `escape()` renders the quotes as `&quot;`, the same as every other caveat sentence.
+    # no quoted `"warm"` label in front: the page shows the mode's name nowhere else (G4)
     sentence = (
-        "&quot;warm&quot;: the cache was not reset between requests, so a hit in this table "
-        "may have been written by earlier traffic, not by this run."
+        "The cache was not reset between requests, so a hit on this page may have been "
+        "written by earlier traffic, not by this run."
     )
     assert sentence in html
     assert html.count(sentence) == 1
+    assert "&quot;warm&quot;" not in html
+
+
+def test_a_cold_runs_page_states_the_nonce_without_the_tools_label() -> None:
+    html = render_html(probe_document())
+    assert (
+        '<li id="cav-1">Each request carried a unique marker, so every cache hit on this page '
+        "was written by this run; none came from earlier traffic.</li>" in html
+    )
+    assert "cold (nonce)" not in html
 
 
 def test_caveats_heading_and_plain_endpoint_label() -> None:
@@ -795,12 +813,15 @@ def test_burst_caveat_merges_endpoints_that_share_the_same_burst_turn() -> None:
     }
     html = render_html(document)
     # `escape()` renders the apostrophe as `&#x27;`, the same as every other caveat sentence.
+    # the run has one turn, so there is no other turn for the summary median to fall back on
     assert (
         "@novita and @gmicloud delivered the 20k-token turn&#x27;s answer in one burst, so "
-        "tok/s for that turn is -; their tok/s in the summary is the median of the other "
-        "turns." in html
+        "that turn has no tok/s (shown as - in the per-turn table); their tok/s in the summary "
+        "is - as well." in html
     )
     assert html.count("delivered the 20k-token turn&#x27;s answer in one burst") == 1
+    # the `-` explanation lives in that sentence, not in a caveat about the symbol
+    assert "in a cell means not measured" not in html
 
 
 def test_run_cost_sentence_names_the_precheck_share_when_there_was_one() -> None:

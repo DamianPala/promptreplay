@@ -444,7 +444,7 @@ def test_probe_report_shortens_the_shared_prefix_into_a_caption(
     # unprefixed, not once per endpoint.
     cold_sentence = (
         '"cold (nonce)": each request carried a unique marker, so every cache hit in this '
-        "table was written by this run and none came from earlier traffic."
+        "table was written by this run; none came from earlier traffic."
     )
     assert out.count(cold_sentence) == 1
     assert f"@novita: {cold_sentence}" not in out

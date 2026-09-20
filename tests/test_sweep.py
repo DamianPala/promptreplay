@@ -1527,7 +1527,7 @@ def test_sweep_failure_output_keeps_the_selection_lines(
     outcome = _sweep(cli, bench_paths, *_one_rung("--check"), tty=True)
     assert outcome.code == 1
     assert "hit %" in outcome.stderr  # the tables the text failure path prints
-    assert "OpenRouter providers: the run took every candidate by price." in outcome.stderr
+    assert "Of the OpenRouter providers, the run took every candidate by price." in outcome.stderr
     assert f"novita/fp8 was skipped because {_GUARDRAIL_REASON}." in outcome.stderr
 
 
@@ -1577,7 +1577,7 @@ def test_report_shows_the_selection_of_a_sweep_offline(
 
     printed = cli.run("report", run_dir, tty_stdout=True, env={**bench_paths.env, **_ENV})
     assert printed.code == 0, printed.stderr
-    assert "OpenRouter providers: the run took the 3 best by uptime." in printed.stdout
+    assert "Of the OpenRouter providers, the run took the 3 best by uptime." in printed.stdout
     assert f"gmicloud was skipped because {_GUARDRAIL_REASON}." in printed.stdout
 
     # the file shared around carries the same lines, from the same document
@@ -1593,7 +1593,7 @@ def test_report_shows_the_selection_of_a_sweep_offline(
     )
     assert written.code == 0, written.stderr
     html = html_path.read_text(encoding="utf-8")
-    assert "OpenRouter providers: the run took the 3 best by uptime." in html
+    assert "Of the OpenRouter providers, the run took the 3 best by uptime." in html
     assert f"gmicloud was skipped because {_GUARDRAIL_REASON}." in html
 
 
@@ -1630,4 +1630,4 @@ def test_report_of_a_probe_by_hand_has_no_selection(
 
     printed = cli.run("report", run_dir, tty_stdout=True, env={**bench_paths.env, **_ENV})
     assert printed.code == 0, printed.stderr
-    assert "OpenRouter providers:" not in printed.stdout
+    assert "Of the OpenRouter providers" not in printed.stdout

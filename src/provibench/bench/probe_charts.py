@@ -71,8 +71,8 @@ def rung_groups(charted: Sequence[tuple[ProbeSummary, str]]) -> list[BarGroup]:
         BarGroup(
             label=_rung_label(number, charted),
             bars=[
-                None if (rung := _at(summary, number)) is None else _bar(index, summary, rung)
-                for index, (summary, _) in enumerate(charted)
+                None if (rung := _at(summary, number)) is None else _bar(index, label, rung)
+                for index, (summary, label) in enumerate(charted)
             ],
         )
         for number in numbers
@@ -85,24 +85,28 @@ def _rung_label(number: int, charted: Sequence[tuple[ProbeSummary, str]]) -> str
     return f"turn {number} · {size_label(size)}" if size else f"turn {number}"
 
 
-def _bar(index: int, summary: ProbeSummary, rung: RungSummary) -> Bar:
+def _bar(index: int, label: str, rung: RungSummary) -> Bar:
     """One endpoint's bar at one rung: `h` (hit x prefix), the quantity the price uses.
 
     A rung with no cached fraction has no `h` to weight by -- it never had a hit, so `h`
     would be zero either way -- and the bar falls back to the bare hit rate with a word
     saying so, rather than silently charting a different number than the other bars.
+
+    The hover speaks the page's words (`turn`, `repeats`, the short `@tag` label), not the
+    tool's (`rung`, `warm reads`, the full spec string): it is the one text a reader meets
+    without the table's tooltips next to it.
     """
     value, fell_back = _h_or_fallback(rung)
     parts = [
-        summary.label,
-        f"rung {rung.rung}",
+        label,
+        f"turn {rung.rung}",
         f"{rung.prompt_cold:,} prompt tokens",
-        f"hit {rung.hit_rate * 100:.1f}% ({_reads(rung)} warm reads)",
+        f"{_reads(rung)} repeats hit",
     ]
     if rung.cached_fraction is not None:
         parts.append(f"cached {rung.cached_fraction * 100:.1f}%")
     if fell_back:
-        parts.append("h unavailable: showing hit rate")
+        parts.append("no cached share measured: bar shows the hit rate")
     return Bar(index, value, " · ".join(parts))
 
 
@@ -140,9 +144,9 @@ def not_charted(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> lis
     """
     charted = list(zip(summaries, labels, strict=True))[:MAX_SERIES]
     lines = [
-        f"{summary.label} rung {rung.rung}: "
-        + ("the cold request failed" if rung.skipped else "no warm read was served")
-        for summary, _ in charted
+        f"{label} turn {rung.rung}: "
+        + ("the cold request failed" if rung.skipped else "no repeat request was served")
+        for summary, label in charted
         for rung in summary.rungs
         if not _measured(rung)
     ]
@@ -184,22 +188,28 @@ def _listed_session_bill(summary: ProbeSummary, trace_prompt_tokens: int | None)
 def _listed_bar(label: str, summary: ProbeSummary, trace_prompt_tokens: int | None) -> PairedBar:
     value = _listed_session_bill(summary, trace_prompt_tokens)
     text = trace_money(value)
-    title = f"{label} at the listed cache price, every repeat a hit: {text}"
+    title = f"{label} if every repeat had hit: {text}"
     if summary.cache_read_price is not None:
-        title += f"; listed ${summary.cache_read_price:.3f}/M cache read"
+        title += f" at the listed ${summary.cache_read_price:.3f}/M cache price"
     return PairedBar(value=value, value_text=text, title=title)
 
 
 def _measured_bar(label: str, summary: ProbeSummary) -> PairedBar:
+    """The dark bar's hover: the bill, then how it was priced, in the page's words.
+
+    `h` is the tool's name for hit rate times cached share; the page never introduces it, so
+    the hover says what the number is instead of naming it.
+    """
     value = summary.session_prompt_usd
     text = trace_money(value)
     title = f"{label} at the measured hit rate: {text}"
+    details: list[str] = []
     if summary.eff_per_m_prompt is not None:
-        title += f"; eff ${summary.eff_per_m_prompt:.3f}/M prompt"
+        details.append(f"eff ${summary.eff_per_m_prompt:.3f}/M")
     if summary.h is not None:
-        title += f", hit-weighted h {summary.h * 100:.1f}%"
-    title += f" (price source: {price_source_words(summary.price_source)})"
-    return PairedBar(value=value, value_text=text, title=title)
+        details.append(f"the cache covered {summary.h * 100:.1f}% of prompt tokens")
+    details.append(f"priced from the {price_source_words(summary.price_source)}")
+    return PairedBar(value=value, value_text=text, title=f"{title} ({'; '.join(details)})")
 
 
 def price_source_words(source: str) -> str:

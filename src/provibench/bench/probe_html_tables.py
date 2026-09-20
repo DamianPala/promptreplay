@@ -19,7 +19,6 @@ from provibench.bench.probe_summary import ProbeSummary, RungSummary
 from provibench.bench.probe_tables import TableBlock
 
 __all__ = [
-    "BLANKS_TEXT",
     "ENDPOINT_CAPTION_HTML",
     "GROUPS",
     "endpoint_caption_html",
@@ -39,11 +38,13 @@ _CONSTANT_PLACEHOLDERS = {"-", "0", ""}
 """A column showing only one of these across every row teaches a reader nothing (item 6)."""
 
 ENDPOINT_CAPTION_HTML = (
-    "Cheapest first. A cache miss pays the input price, a hit pays the cache price; "
-    "<code>eff $/M</code> is what this endpoint charged at its measured hit rate."
+    "Cheapest by <code>eff $/M</code> first. A cache miss pays the input price, a hit pays "
+    "the cache price; <code>eff $/M</code> is what each endpoint costs at the hit rate this "
+    "run measured."
 )
 """The endpoint table's caption (item 1): a fact about the table, not a verdict on one row,
-so it survives however the run's own numbers turn out."""
+so it survives however the run's own numbers turn out. It names the column it sorts by,
+because the first row can carry the highest `in $/M` and "cheapest" alone reads as false."""
 
 
 def endpoint_caption_html(labels: Sequence[str], model: str, *, folded: bool) -> str:
@@ -63,10 +64,6 @@ def endpoint_caption_html(labels: Sequence[str], model: str, *, folded: bool) ->
         f"OpenRouter, pinned to the named provider; {serve} {escape(model)}."
     )
 
-
-BLANKS_TEXT = "<code>-</code> in a cell means not measured; the caveats say why."
-"""What `-` means on this page, said once, now among the caveats instead of a stray line
-between the two tables (item 4)."""
 
 _ENDPOINT_TOOLTIP = (
     "Who served the requests: the API, the model and, for OpenRouter rows, the pinned provider."
@@ -144,8 +141,8 @@ def endpoint_help(summaries: Sequence[ProbeSummary], trace_prompt_tokens: object
         "endpoint": _ENDPOINT_TOOLTIP,
         "hit %": "Of all repeat requests, the share the cache answered at least in part.",
         "1st hit %": (
-            "The same, counting only the first repeat after each cache write: what a fresh "
-            "session or a restart sees. A gap below hit % means the cache needs a few "
+            "Of the first repeat after each cache write, the share the cache answered: what a "
+            "fresh session or a restart sees. A gap below hit % means the cache needs a few "
             "requests before it helps."
         ),
         "cached %": (
