@@ -12,12 +12,13 @@ The quickstart's `sweep sample deepseek/deepseek-v4.1-flash --top 3` on 2026-09-
 ```text
 endpoints: openrouter:deepseek/deepseek-v4.1-flash@<provider>
 
-endpoint                | hit % | 1st hit % | cached % | eff $/M | in $/M | cold ms | warm ms | TTFT ms | tok/s | errors | drift
------------------------ | ----- | --------- | -------- | ------- | ------ | ------- | ------- | ------- | ----- | ------ | --------
-deepseek:deepseek-flash | 100.0 | 100.0     | 99.9     | 0.003   | 0.150  | 1690    | 1439    | 1083    | 353.3 | 0      | -
-@relace/fp4             | 80.0  | 100.0     | 99.8     | 0.028   | 0.130  | 4410    | 2116    | 1677    | 86.5  | 0      | provider
-@deepinfra/fp8          | 90.0  | 66.7      | 90.8     | 0.029   | 0.140  | 1589    | 1292    | 1874    | 54.5  | 0      | provider
-@morph                  | 80.0  | 66.7      | 99.9     | 0.030   | 0.135  | 4677    | 2984    | 2837    | 21.4  | 0      | -
+endpoint                | hit % | 1st hit % | cached % | in $/M | cache $/M | eff $/M | cold ms | warm ms | TTFT ms | tok/s | errors | drift
+----------------------- | ----- | --------- | -------- | ------ | --------- | ------- | ------- | ------- | ------- | ----- | ------ | --------
+deepseek:deepseek-flash | 100.0 | 100.0     | 99.9     | 0.150  | 0.003     | 0.003   | 1690    | 1439    | 1083    | 353.3 | 0      | -
+@relace/fp4             | 80.0  | 100.0     | 99.8     | 0.130  | 0.003     | 0.028   | 4410    | 2116    | 1677    | 86.5  | 0      | provider
+@deepinfra/fp8          | 90.0  | 66.7      | 90.8     | 0.140  | 0.004     | 0.029   | 1589    | 1292    | 1874    | 54.5  | 0      | provider
+@morph                  | 80.0  | 66.7      | 99.9     | 0.135  | 0.004     | 0.030   | 4677    | 2984    | 2837    | 21.4  | 0      | -
+
 pre-check: 3 requests, $0.0081
 spent $0.1712 (worst case $0.4708)
 ```

@@ -40,13 +40,16 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
 - `report --format html --output-file PATH`: one self-contained page with the same tables, hit-rate bars per
   rung, effective prompt price bars and the full-replay cache curve, in dark mode, with no
   scripts and no external resources
-- The HTML page opens with a one-sentence answer (cheapest and priciest endpoint, what a
-  session like the trace bills on each), captions the endpoint table cheapest first, adds a
-  `this trace $` column, drops columns that hold no values, reads `hits` as `n/m cached`,
-  labels the rung-1 latencies, explains every header on hover and in a glossary, charts the
-  cached share `h` the price is computed from, and gathers the notes under a Caveats heading
-  as sentences with the failure reason; the `selection:` line under a sweep report reads as
-  a sentence too
+- The HTML page is written for a person who opens it once: a title naming the model and the
+  endpoint count, one sentence of method, the endpoint table captioned cheapest first with
+  the prices in the order `in $/M`, `cache $/M`, `eff $/M`, `this trace $` under a price
+  band, every header explained on hover, a chart of the cached share per turn, a
+  session-cost chart (what the price list promises when the cache always hits against what
+  the run measured), the per-turn table folded away, and the caveats as sentences in a fixed
+  order with drop reasons in words and the cache mode stated once
+- The text report separates its sections with blank lines, prefixes notes with the same short
+  endpoint labels its tables use, states the cache mode once per run, and prints the session
+  bill as one aligned line per endpoint
 - `scrub`: write a shareable copy of a trace with home paths, the encoded Claude Code
   project directories, secrets and e-mail addresses removed, `--user` and `--replace` for
   what the patterns cannot know, and `--turns N` to keep a cheaper prefix
