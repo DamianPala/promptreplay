@@ -83,7 +83,7 @@ Most runs use it or a trace someone shared; recording your own session is option
 Every run prints its worst-case estimate before the first request and refuses to start above `--budget`.
 `--budget 1.2` clears this sample's own `--top 3` upper bound with headroom; see `--top` under [Sweep](#sweep) for why a `--top` run needs one.
 
-Python 3.12 or newer is required; [uv](https://docs.astral.sh/uv/) is optional when installing with pip.
+Python 3.12 or newer is required, on Linux, macOS, or Windows; [uv](https://docs.astral.sh/uv/) is optional when installing with pip.
 Every command documents its flags: `provibench COMMAND --help`.
 
 ## Reference
@@ -269,4 +269,4 @@ uv run pyright
 ```
 
 The test suite includes an architecture seam check.
-CI runs the same gate on Python 3.12, 3.13, and 3.14, then builds the wheel, checks that it carries the packaged data, and smoke-tests it in an isolated environment.
+CI runs the same gate on Python 3.12, 3.13, and 3.14 on Linux and on 3.12 on macOS and Windows, then builds the wheel, checks that it carries the packaged data, and smoke-tests it in an isolated environment.
