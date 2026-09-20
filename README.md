@@ -9,7 +9,7 @@ Replaying the same bytes is what makes the numbers comparable: re-running the ta
 
 ## What a run looks like
 
-`sweep sample deepseek/deepseek-v4.1-flash --top 3` on 2026-09-20, the three cheapest listed OpenRouter endpoints plus native DeepSeek, ranked by measured price:
+`sweep sample-trace deepseek/deepseek-v4.1-flash --top 3` on 2026-09-20, the three cheapest listed OpenRouter endpoints plus native DeepSeek, ranked by measured price:
 
 ```text
 endpoints: openrouter:deepseek/deepseek-v4.1-flash@<provider>
@@ -66,12 +66,12 @@ export DEEPSEEK_API_KEY=...
 
 To add a target or change a price, `provibench config init` copies the packaged `targets.toml` into your config directory; its comments show the shape of a target, a model alias, and a price override.
 
-Run the packaged sample:
+The packaged trace is called `sample-trace`; it goes wherever a command takes a TRACE:
 
 ```sh
-provibench inspect sample
-provibench sweep sample deepseek/deepseek-v4.1-flash --top 3 --dry-run
-provibench sweep sample deepseek/deepseek-v4.1-flash --top 3 --budget 1.2
+provibench inspect sample-trace
+provibench sweep sample-trace deepseek/deepseek-v4.1-flash --top 3 --dry-run
+provibench sweep sample-trace deepseek/deepseek-v4.1-flash --top 3 --budget 1.2
 provibench report latest
 provibench report latest --format html --output-file report.html
 ```
@@ -171,11 +171,7 @@ The measured effective price and cache rate are the verdict; the listing only ch
 ### Runs over time
 
 Providers change routing, quantization, cache configuration, and prices from week to week.
-A cron job keeps the same working directory so its default `./runs` directory is stable:
-
-```cron
-3 9 * * 1 cd ~/bench && provibench sweep sample deepseek/deepseek-v4.1-flash --top 3 --yes --budget 1.2 --json >> sweeps.ndjson
-```
+Run the same sweep on a schedule from one fixed directory, or with `PROVIBENCH_RUNS_DIR` set, so every run lands in one runs directory; then read the runs offline:
 
 ```sh
 provibench history MODEL
@@ -223,8 +219,8 @@ A trace contains request bytes verbatim and can include home paths, instruction 
 Scrub before sharing:
 
 ```sh
-provibench scrub sample shared.jsonl.gz
-provibench scrub sample clean.jsonl --turns 20 --replace acme-corp=example --user NAME
+provibench scrub sample-trace shared.jsonl.gz
+provibench scrub sample-trace clean.jsonl --turns 20 --replace acme-corp=example --user NAME
 ```
 
 `scrub` removes the request's `body.metadata`, rewrites `/home/<name>`, `/Users/<name>`, and encoded Claude Code project paths, and masks API keys, bearer tokens, AWS and GitHub tokens, Slack tokens, and email addresses; `--allow-email` keeps an approved address.

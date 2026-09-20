@@ -171,11 +171,11 @@ def _turn_cells(entry: Document, columns: Sequence[str]) -> list[str]:
     cls=Command,
     spec=CommandSpec(effects=Effects.READ_ONLY, output=_OUTPUT, render=render_inspect_table),
     help="List a trace's conversations and show one conversation's turns.\n\n"
-    "TRACE is either an existing path, a name under traces_dir, or 'sample' (the "
+    "TRACE is either an existing path, a name under traces_dir, or 'sample-trace' (the "
     "packaged example). Without --conversation, the conversation carrying the most "
     "request bytes (the agent's main loop) is selected.",
 )
-@click.argument("trace", help="Trace path, a name under traces_dir, or 'sample'")
+@click.argument("trace", help="Trace path, a name under traces_dir, or 'sample-trace'")
 @click.option(
     "--conversation", default=None, help="Conversation key to inspect; defaults to the main one"
 )
@@ -283,7 +283,7 @@ def _turn_document(turn: int, entry: TraceEntry) -> Document:
 
 
 def resolve_trace_path(trace: str, invocation: Invocation) -> Path:
-    """TRACE as an existing path, as `<traces_dir>/<trace>.jsonl[.gz]`, or the packaged sample."""
+    """TRACE as an existing path, as `<traces_dir>/<trace>.jsonl[.gz]`, or packaged sample-trace."""
     from provibench.bench.trace import PackagedSampleMissing, TraceNotFound, resolve_trace
 
     traces_dir = Path(invocation.setting("traces_dir") or ".")

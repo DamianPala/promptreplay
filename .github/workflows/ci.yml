@@ -72,4 +72,4 @@ jobs:
           uv run --isolated --no-project --python 3.12 --with dist/*.whl \
             provibench schema > /dev/null
           uv run --isolated --no-project --python 3.12 --with dist/*.whl \
-            provibench inspect sample > /dev/null
+            provibench inspect sample-trace > /dev/null

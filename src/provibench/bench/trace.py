@@ -17,10 +17,10 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field, ValidationError
 
-SAMPLE_TRACE = "sample"
+SAMPLE_TRACE = "sample-trace"
 """The literal TRACE argument that resolves to the packaged example trace."""
 
-PACKAGED_SAMPLE = "sample.jsonl.gz"
+PACKAGED_SAMPLE = "sample-trace.jsonl.gz"
 """The packaged example trace, next to `targets.toml` under `provibench.data`."""
 
 TRACE_SUFFIXES = ("jsonl", "gz")
@@ -43,7 +43,7 @@ class TraceNotFound(TraceError):
 
 
 class PackagedSampleMissing(TraceError):
-    """The packaged sample trace is not in the installed distribution."""
+    """The packaged `sample-trace` is not in the installed distribution."""
 
 
 class TraceParseError(TraceError, ValueError):
@@ -138,8 +138,8 @@ def conversation_key(body: dict[str, Any]) -> str:
 def trace_name(path: Path) -> str:
     """A trace's name: its file name without the `.jsonl` and `.gz` suffixes.
 
-    `traces/sample.jsonl.gz`, `traces/sample.jsonl` and `traces/sample.gz` are all the
-    trace `sample`, which is the name runs are filed under.
+    `traces/sample-trace.jsonl.gz`, `traces/sample-trace.jsonl` and `traces/sample-trace.gz`
+    are all the trace `sample-trace`, which is the name runs are filed under.
     """
     name = path.name
     for suffix in reversed(TRACE_SUFFIXES):
@@ -200,16 +200,18 @@ def sample_trace_path() -> Path:
     path = Path(str(resource))
     if not path.is_file():
         raise PackagedSampleMissing(
-            f"The packaged sample trace is missing at {path}",
-            hint="Reinstall provibench; the distribution ships provibench/data/sample.jsonl.gz",
+            f"The packaged trace 'sample-trace' is missing at {path}",
+            hint=(
+                "Reinstall provibench; the distribution ships provibench/data/sample-trace.jsonl.gz"
+            ),
         )
     return path
 
 
 def resolve_trace(arg: str, traces_dir: Path, cwd: Path | None = None) -> Path:
-    """TRACE as an existing path, a name under `traces_dir`, or the packaged `sample`.
+    """TRACE as an existing path, a name under `traces_dir`, or the packaged `sample-trace`.
 
-    A trace of the caller's own named `sample` wins over the packaged example, so a
+    A trace of the caller's own named `sample-trace` wins over the packaged example, so a
     working directory that happens to hold one keeps inspecting its own file.
     """
     candidate = Path(arg)
@@ -225,7 +227,7 @@ def resolve_trace(arg: str, traces_dir: Path, cwd: Path | None = None) -> Path:
         return sample_trace_path()
     raise TraceNotFound(
         f"No trace file at {candidate} or {traces_dir / f'{arg}.jsonl'}",
-        hint="Pass an existing path, a name under traces_dir, or 'sample'",
+        hint="Pass an existing path, a name under traces_dir, or 'sample-trace'",
     )
 
 

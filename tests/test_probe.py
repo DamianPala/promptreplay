@@ -456,7 +456,7 @@ def test_probe_dry_run_sends_nothing_and_reports_the_estimate(
 def test_a_compressed_trace_files_its_run_under_the_name_without_the_suffixes(
     cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`t.jsonl.gz` is the trace `t`, and the packaged `sample.jsonl.gz` is the trace `sample`.
+    """`t.jsonl.gz` is the trace `t`, and the packaged `sample-trace.jsonl.gz` is `sample-trace`.
 
     The run directory is what `report` resolves a trace name to, so a name carrying the
     file's suffixes would be a run only a full path could reach.

@@ -148,6 +148,8 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
   of the model name
 - The `--budget` refusal names the ways to fit: fewer endpoints or rungs, lower `--repeats`, or
   `--no-throughput`
+- The packaged trace is addressed as `sample-trace` (was `sample`), so `inspect sample-trace`
+  no longer reads like a subcommand
 
 ### Fixed
 

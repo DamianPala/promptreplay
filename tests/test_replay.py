@@ -231,7 +231,7 @@ def test_replay_of_the_packaged_sample_files_under_sample(
 
     outcome = cli.run(
         "replay",
-        "sample",
+        "sample-trace",
         "--run",
         "t:model-a",
         "--yes",
@@ -240,7 +240,7 @@ def test_replay_of_the_packaged_sample_files_under_sample(
 
     assert outcome.code == 0, outcome.stderr
     run_dir = Path(str(outcome.document["run_dir"]))
-    assert run_dir.parent == bench_paths.runs_dir / "sample"
+    assert run_dir.parent == bench_paths.runs_dir / "sample-trace"
     assert outcome.document["turns"] == 30
 
 

@@ -132,7 +132,7 @@ def output_fields() -> tuple[dict[str, JsonSchema], list[str]]:
     "provider that ignores the output budget is noted in the run's own summary, not hidden "
     "from the estimate. --dry-run prices the run and stops there, sending nothing.",
 )
-@click.argument("trace", help="Trace path, name under traces_dir, or 'sample'")
+@click.argument("trace", help="Trace path, name under traces_dir, or 'sample-trace'")
 @click.argument(
     "endpoints",
     nargs=-1,
@@ -285,8 +285,9 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     runs_dir = Path(invocation.setting("runs_dir") or ".")
     run_dir = write_probe_run(
         runs_dir,
-        # The trace's own name, so the packaged `sample.jsonl.gz` files under `sample/`
-        # exactly as `sample.jsonl` would, and `report sample` finds it.
+        # The trace's own name, so the packaged `sample-trace.jsonl.gz` files under
+        # `runs/sample-trace/` exactly as `sample-trace.jsonl` would, and
+        # `report sample-trace` finds it.
         trace_name(trace_path),
         key,
         run,

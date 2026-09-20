@@ -30,7 +30,7 @@ src/provibench/
     summary.py                  RunSummary aggregation, sparkline
     scrub.py                    shareability rules, the walker, the report model
   data/targets.toml             packaged default targets
-  data/sample.jsonl.gz          packaged example trace (`TRACE` = sample)
+  data/sample-trace.jsonl.gz    packaged example trace (`TRACE` = sample-trace)
 traces/                         recorded traces (gitignored: they contain repo content)
 runs/                           replay results (gitignored)
 ```
@@ -51,7 +51,7 @@ seq, ts, path, query, headers{anthropic-version, anthropic-beta}, body, conversa
 
 `usage` follows Anthropic semantics: `input_tokens` excludes `cache_read_input_tokens` and `cache_creation_input_tokens`; `prompt_total` is the sum of the three.
 
-A trace reads fine gzipped (`.gz` is decompressed transparently); recording always writes plain jsonl. The literal TRACE name `sample` resolves to the packaged `data/sample.jsonl.gz`, next to `targets.toml`.
+A trace reads fine gzipped (`.gz` is decompressed transparently); recording always writes plain jsonl. The literal TRACE name `sample-trace` resolves to the packaged `data/sample-trace.jsonl.gz`, next to `targets.toml`.
 
 ## Recording
 

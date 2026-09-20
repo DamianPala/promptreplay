@@ -534,11 +534,11 @@ def test_scrub_bad_replacement_is_a_usage_error(cli: Cli, bench_paths: BenchPath
 def test_scrub_resolves_the_packaged_sample(cli: Cli, bench_paths: BenchPaths) -> None:
     out = cli.root / "clean.jsonl"
 
-    outcome = _run(cli, bench_paths, "sample", str(out))
+    outcome = _run(cli, bench_paths, "sample-trace", str(out))
 
     assert outcome.code == 0, outcome.stderr
     assert outcome.document["entries_in"] == 30
-    assert str(outcome.document["trace"]).endswith("sample.jsonl.gz")
+    assert str(outcome.document["trace"]).endswith("sample-trace.jsonl.gz")
     assert len(_lines(out)) == 30
 
 

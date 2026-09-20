@@ -78,7 +78,7 @@ _OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=_REQUIRED)
     "measures is the verdict. --dry-run prices the run and stops there, sending no probe "
     "request; it still lists the model's endpoints to price the estimate.",
 )
-@click.argument("trace", help="Trace path, name under traces_dir, or 'sample'")
+@click.argument("trace", help="Trace path, name under traces_dir, or 'sample-trace'")
 @click.argument("model", help="OpenRouter model slug to sweep")
 @click.option(
     "--target",

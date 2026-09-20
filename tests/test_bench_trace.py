@@ -116,13 +116,13 @@ def test_resolve_trace_finds_the_packaged_sample_last(tmp_path: Path) -> None:
     traces_dir = tmp_path / "traces"
     traces_dir.mkdir()
 
-    assert resolve_trace("sample", traces_dir, tmp_path) == sample_trace_path()
+    assert resolve_trace("sample-trace", traces_dir, tmp_path) == sample_trace_path()
     assert sample_trace_path().name == PACKAGED_SAMPLE
 
-    # A trace of the caller's own named `sample` wins over the packaged example.
-    own = traces_dir / "sample.jsonl"
+    # A trace of the caller's own named `sample-trace` wins over the packaged example.
+    own = traces_dir / "sample-trace.jsonl"
     own.touch()
-    assert resolve_trace("sample", traces_dir, tmp_path) == own
+    assert resolve_trace("sample-trace", traces_dir, tmp_path) == own
 
 
 def test_the_packaged_sample_is_a_scrubbed_thirty_turn_session() -> None:

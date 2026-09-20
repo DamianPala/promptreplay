@@ -120,12 +120,12 @@ def render_scrub(invocation: Invocation, document: Document) -> None:
         render=render_scrub,
     ),
     help="Write a shareable copy of a trace, with home paths, secrets and metadata removed.\n\n"
-    "TRACE is either an existing path, a name under traces_dir, or 'sample' (the packaged "
-    "example). The copy goes to OUT, gzip-compressed when that path ends in .gz, and the "
-    "report lists what each rule replaced. Project-specific names cannot be recognised: "
+    "TRACE is either an existing path, a name under traces_dir, or 'sample-trace' (the "
+    "packaged example). The copy goes to OUT, gzip-compressed when that path ends in .gz, and "
+    "the report lists what each rule replaced. Project-specific names cannot be recognised: "
     "remove those with --replace OLD=NEW, and operator names with --user NAME.",
 )
-@click.argument("trace", help="Trace path, a name under traces_dir, or 'sample'")
+@click.argument("trace", help="Trace path, a name under traces_dir, or 'sample-trace'")
 @click.option(
     "--output-file",
     type=click.Path(),

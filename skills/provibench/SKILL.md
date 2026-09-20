@@ -23,7 +23,7 @@ The packaged `targets.toml` already has an OpenRouter target and native DeepSeek
 Before the first paid run, pin where runs are written: set `PROVIBENCH_RUNS_DIR`, or run every command from the same directory.
 A run and the later `report` that reads it resolve `runs_dir` independently, so an agent that changes directory between them looks for a run it already paid for in the wrong place.
 
-`provibench inspect sample` shows the packaged trace, 30 turns of a real Claude Code session.
+`provibench inspect sample-trace` shows the packaged trace, 30 turns of a real Claude Code session.
 `provibench schema` prints the whole contract, and `provibench schema sweep` the fields of the sweep document.
 
 ## Cost and consent
@@ -41,7 +41,7 @@ provibench sweep TRACE MODEL --top N --dry-run --json
 provibench sweep TRACE MODEL --top N --budget USD --yes --json
 ```
 
-`TRACE` is `sample` or a trace name; `MODEL` is the OpenRouter slug, such as `deepseek/deepseek-v4.1-flash`.
+`TRACE` is `sample-trace` or a trace name; `MODEL` is the OpenRouter slug, such as `deepseek/deepseek-v4.1-flash`.
 The sweep lists the model's OpenRouter endpoints, drops degraded ones and ones below 97 % one-day uptime, ranks the rest by `--sort` (`price` by default, or `uptime`, `throughput`, `latency`; the last two need the OpenRouter key), keeps the N best that pass a one-request availability check, adds the native targets that carry the model, and probes them all.
 Native endpoints are never cut by `--top`.
 `--include PREFIX` keeps only tags starting with PREFIX and keeps them past the stability floor; `--exclude PREFIX` drops them; `--zdr` keeps only Zero Data Retention endpoints.
@@ -85,13 +85,7 @@ Several endpoints in one command are probed in one run.
 
 ## Recipe 3: watch a provider over time
 
-Run the same sweep on a schedule from a fixed directory, so every run lands in one `runs_dir`:
-
-```cron
-3 9 * * 1 cd ~/bench && provibench sweep sample deepseek/deepseek-v4.1-flash --top 3 --yes --budget 1.2 --json >> sweeps.ndjson
-```
-
-Then read the runs offline:
+Run the same sweep on a schedule from a fixed directory, or with `PROVIBENCH_RUNS_DIR` set, so every run lands in one `runs_dir`; then read the runs offline:
 
 ```sh
 provibench history MODEL --since 30d

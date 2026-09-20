@@ -78,8 +78,8 @@ _OUTPUT = obj(
         render=render_summaries,
     ),
     help="Replay a trace's recorded requests against one or more targets.\n\n"
-    "TRACE is either an existing path, a name under traces_dir, or 'sample' (the packaged "
-    "example). Sends every recorded turn of a conversation to each --run target with "
+    "TRACE is either an existing path, a name under traces_dir, or 'sample-trace' (the "
+    "packaged example). Sends every recorded turn of a conversation to each --run target with "
     "max_tokens: 1, so a run costs only prompt tokens; the output-side generation is "
     "discarded. A nonce is prepended to the first system block so the run measures its own "
     "cache rather than one left behind by an earlier run; --warm sends no nonce and reads "
@@ -88,7 +88,7 @@ _OUTPUT = obj(
     "persists and exits non-zero when a turn failed against any target. --dry-run prices "
     "the run and stops there, sending nothing.",
 )
-@click.argument("trace", help="Trace path, a name under traces_dir, or 'sample'")
+@click.argument("trace", help="Trace path, a name under traces_dir, or 'sample-trace'")
 @click.option(
     "--run",
     "run_specs",

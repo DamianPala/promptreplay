@@ -102,11 +102,11 @@ def test_inspect_empty_trace_has_no_selected_conversation(
 
 
 def test_inspect_resolves_the_packaged_sample(cli: Cli, bench_paths: BenchPaths) -> None:
-    outcome = cli.run("inspect", "sample", env=bench_paths.env)
+    outcome = cli.run("inspect", "sample-trace", env=bench_paths.env)
 
     assert outcome.code == 0, outcome.stderr
     document = outcome.document
-    assert str(document["trace"]).endswith("sample.jsonl.gz")
+    assert str(document["trace"]).endswith("sample-trace.jsonl.gz")
     assert document["selected"] is not None
     assert len(as_list(document["turns"]) or []) == 30
 
