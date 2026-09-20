@@ -237,14 +237,17 @@ Nested metadata inside a request body remains, so read the copy before sending i
 ### Configuration
 
 Precedence is flag, environment variable, configuration file, then built-in default, and `provibench config show` prints each effective value and its source.
+In the configuration file, a setting's key is its name.
 The packaged `targets.toml` is a fallback for a fresh install: until one is written to the default `targets_path`, `show` reports it with source `packaged`, and `provibench config init` copies it there so it can be edited (`--force` overwrites an existing file).
 
-| Setting | Flag | Environment | Config key | Default |
-|---|---|---|---|---|
-| `config_path` | `--config`, `-c` | `PROVIBENCH_CONFIG` | none | `$XDG_CONFIG_HOME/provibench/config.toml`, else `~/.config/provibench/config.toml` |
-| `targets_path` | `--targets` | `PROVIBENCH_TARGETS` | `targets_path` | `$XDG_CONFIG_HOME/provibench/targets.toml`, else `~/.config/provibench/targets.toml` |
-| `traces_dir` | none | `PROVIBENCH_TRACES_DIR` | `traces_dir` | `./traces` |
-| `runs_dir` | none | `PROVIBENCH_RUNS_DIR` | `runs_dir` | `./runs` |
+| Setting | Flag | Environment | Default |
+|---|---|---|---|
+| `config_path` | `--config`, `-c` | `PROVIBENCH_CONFIG` | `~/.config/provibench/config.toml` |
+| `targets_path` | `--targets` | `PROVIBENCH_TARGETS` | `~/.config/provibench/targets.toml` |
+| `traces_dir` | none | `PROVIBENCH_TRACES_DIR` | `./traces` |
+| `runs_dir` | none | `PROVIBENCH_RUNS_DIR` | `./runs` |
+
+`~/.config` follows `$XDG_CONFIG_HOME` when that is set.
 
 ### Terminal width
 
