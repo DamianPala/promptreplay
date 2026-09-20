@@ -14,7 +14,7 @@ import pytest
 
 from provibench.bench.estimate import SpecPrices
 from provibench.bench.html_report import render_html
-from provibench.bench.html_svg import MAX_SERIES, PairedBar, PairedBarRow, paired_horizontal_bars
+from provibench.bench.html_svg import MAX_SERIES, BarRow, horizontal_bars
 from provibench.bench.probe_html_tables import ENDPOINT_CAPTION_HTML
 from provibench.bench.probe_models import ProbeResult
 from provibench.bench.probe_summary import summarize_probe
@@ -147,7 +147,7 @@ def probe_document() -> Document:
         "spend_usd": 0.1776,
         "worst_case_usd": 0.4851,
         # Matches the `trace_prompt_tokens=50_000` every summary above was built with, so the
-        # session-cost chart's listed-price bar has the same session size the measured bar does.
+        # `this trace $` tooltip names the same session size the column was priced for.
         "trace_prompt_tokens": 50_000,
         "output_file": None,
         "changed": False,
@@ -480,7 +480,7 @@ def test_hits_cell_counts_what_hit_percent_counts() -> None:
 
 
 def test_the_page_follows_the_new_reading_order() -> None:
-    """Item 11: header, method sentence, endpoint table, the bill chart (the answer) before
+    """Item 11: header, method sentence, endpoint table, the price chart (the answer) before
     the cache-share chart (the evidence), then the per-turn table closed inside a
     `<details>`, then the caveats and the footer."""
     html = render_html(probe_document())
@@ -489,7 +489,7 @@ def test_the_page_follows_the_new_reading_order() -> None:
     method = html.index('<p class="method">')
     endpoint = html.index("<h3>Per endpoint</h3>")
     caption = html.index(f'<p class="caption">{ENDPOINT_CAPTION_HTML}')
-    cost_chart = html.index("<h3>Prompt bill for a session like this one</h3>")
+    cost_chart = html.index("<h3>Price per 1M prompt tokens at the measured hit rate</h3>")
     cache_chart = html.index("<h3>Share of prompt tokens served from cache, per turn</h3>")
     details = html.index('<details class="turns"><summary>Per turn: hits and latency</summary>')
     caveats = html.index('<section class="caveats">')
@@ -538,8 +538,8 @@ def test_hit_rate_chart_has_one_bar_per_spec_per_rung() -> None:
     html = render_html(probe_document())
     charts = _SVG.findall(html)
     assert len(charts) == 2
-    # the session-cost chart comes first and draws a light and a dark bar per priced endpoint
-    assert _bars(charts[0]) == 6
+    # the price chart comes first and draws one bar per priced endpoint
+    assert _bars(charts[0]) == 3
     # novita measured two rungs, gmicloud and the third spec one each
     assert _bars(charts[1]) == 4
 
@@ -562,19 +562,15 @@ def test_the_grouped_chart_names_both_axes() -> None:
 
 
 def test_a_clipped_row_label_keeps_its_full_text_on_hover() -> None:
-    """`_row_label`, shared by every horizontal-bar chart; `horizontal_bars` itself is dead
-    code (no caller since item 10's paired chart replaced the price bars) and was deleted, so
-    this exercises the shared label-clipping through `paired_horizontal_bars` instead."""
     long_label = "openrouter:deepseek/deepseek-v4.1-flash@novita"
-    bar = PairedBar(value=0.041, value_text="0.041", title="cost")
-    row = PairedBarRow(series=0, label=long_label, light=bar, dark=bar)
-    svg = paired_horizontal_bars([row], label="session bill per endpoint")
+    row = BarRow(series=0, label=long_label, value=0.041, value_text="$0.041/M", title="price")
+    svg = horizontal_bars([row], label="eff $/M per endpoint")
     assert f"<title>{long_label}</title>" in svg
     assert "…" in svg
 
-    short = paired_horizontal_bars([replace(row, label="@novita")], label="session bill")
-    # the chart's own title plus one per bar half (light and dark), none for a label that fits
-    assert short.count("<title>") == 3
+    short = horizontal_bars([replace(row, label="@novita")], label="eff $/M per endpoint")
+    # the chart's own title plus the bar's, none for a label that fits
+    assert short.count("<title>") == 2
 
 
 def test_hit_rate_chart_keeps_a_slot_per_spec_and_labels_every_bar() -> None:
@@ -590,39 +586,32 @@ def test_hit_rate_chart_keeps_a_slot_per_spec_and_labels_every_bar() -> None:
     assert '<text class="tick mid"' in bars
 
 
-def test_session_cost_chart_pairs_a_listed_bar_and_a_measured_bar_per_endpoint() -> None:
-    """Item 10: the price-bar chart is gone; each endpoint gets two bars, same series colour,
-    one at the listed cache price for a session like the trace and one at what it measured."""
+def test_price_chart_draws_the_eff_column_one_bar_per_endpoint() -> None:
+    """The author's call after the paired session-bill chart: the chart shows the one number
+    a reader decides by, the table's `eff $/M`, and nothing else."""
     html = render_html(probe_document())
-    cost = _SVG.findall(html)[0]
-    assert _bars(cost) == 6  # a light and a dark bar per endpoint
-    assert 'class="bar light s1"' in cost and 'class="bar s1"' in cost
-    assert "if every repeat had hit: $0.0015 at the listed $0.030/M cache price" in cost
+    price = _SVG.findall(html)[0]
+    assert _bars(price) == 3  # one bar per priced endpoint
+    assert 'class="bar s1"' in price and "light" not in price
     assert (
-        "at the measured hit rate: $0.0021 (eff $0.041/M; the cache covered 95.8% of prompt "
-        "tokens; priced from the OpenRouter listing)" in cost
+        "@novita: $0.041 per 1M prompt tokens at the measured hit rate (the cache covered "
+        "95.8% of prompt tokens; priced from the OpenRouter listing)" in price
     )
-    assert "hit-weighted h" not in cost  # `h` is the tool's name, never introduced on the page
-    assert '<text class="row-label" x="0.0"' in cost
-    # the listed bar and the measured bar both show a session-shaped dollar amount, not $/M
-    assert ">$0.0015</text>" in cost and ">$0.0021</text>" in cost and ">$0.0150</text>" in cost
-    assert "/M<" not in cost  # no $/M label leaks into a value node, only into the titles
+    assert "hit-weighted h" not in price  # `h` is the tool's name, never introduced on the page
+    assert '<text class="row-label" x="0.0"' in price
+    assert ">$0.041/M</text>" in price and ">$0.300/M</text>" in price
+    assert "$0.0021" not in price  # the session bill stays in the table's `this trace $` column
 
 
-def test_session_cost_chart_has_its_own_legend_and_caption() -> None:
+def test_price_chart_has_a_caption_and_no_legend_of_its_own() -> None:
     html = render_html(probe_document())
+    price_figure = html[html.index("<h3>Price per 1M") : html.index("<h3>Share of prompt")]
+    assert '<ul class="legend">' not in price_figure  # one bar per row, the row label names it
     assert (
-        '<ul class="legend"><li><span class="swatch shade-light"></span>if every repeat had '
-        'hit</li><li><span class="swatch shade-dark"></span>at the measured hit rate</li></ul>'
-        in html
+        "The <code>eff $/M</code> column drawn: a cache miss pays the input price, a hit pays "
+        "the cache price, weighted by the hit rate this run measured." in price_figure
     )
-    # the run measured a hit rate and priced a session at it, and the gap covers partly
-    # cached prompts too, so the caption says "paid at the input price", not "the misses"
-    assert (
-        "Light: the bill if every repeat had hit the cache, at the listed cache price. Dark: "
-        "the bill at the hit rate this run measured. The gap is what was paid at the input "
-        "price instead." in html
-    )
+    assert "shade-light" not in html and "shade-dark" not in html
 
 
 def test_prices_show_three_decimals_in_the_endpoint_table() -> None:
@@ -633,19 +622,17 @@ def test_prices_show_three_decimals_in_the_endpoint_table() -> None:
     assert "<td>0.030</td>" in endpoint_table  # cache $/M
 
 
-def test_a_spec_without_a_price_gets_a_dash_row_in_the_session_cost_chart() -> None:
-    """Item 10: a row with either half unknown draws no bars at all, never a lone bar next
-    to an empty slot that would read as a zero it never measured."""
+def test_a_spec_without_a_price_gets_a_dash_row_in_the_price_chart() -> None:
+    """A row without a measured price draws no bar and prints `-`, never a zero-length bar
+    that would read as a price the run never measured."""
     document = probe_document()
     entries = [entry for entry in map(as_document, as_list(document["summaries"]) or []) if entry]
-    document["summaries"] = [
-        {**entries[0], "cache_read_price": None, "session_prompt_usd": None},
-        *entries[1:],
-    ]
-    cost = _SVG.findall(render_html(document))[0]
-    assert _bars(cost) == 4  # the two fully priced specs keep both their bars
-    assert cost.count('class="row-label"') == 3  # every spec keeps its label
-    assert '<text class="value"' in cost and ">-</text>" in cost
+    document["summaries"] = [{**entries[0], "eff_per_m_prompt": None}, *entries[1:]]
+    price = _SVG.findall(render_html(document))[0]
+    assert _bars(price) == 2  # the two priced specs keep their bars
+    assert price.count('class="row-label"') == 3  # every spec keeps its label
+    assert '<text class="value"' in price and ">-</text>" in price
+    assert "@novita: no measured price" in price
 
 
 def test_specs_past_the_eight_slots_stay_in_the_tables_and_are_named() -> None:
@@ -655,7 +642,7 @@ def test_specs_past_the_eight_slots_stay_in_the_tables_and_are_named() -> None:
     document["summaries"] = [{**first, "label": f"or:model@r{index}"} for index in range(9)]
     html = render_html(document)
     charts = _SVG.findall(html)
-    assert _bars(charts[0]) == MAX_SERIES * 2  # a light and a dark bar for each charted spec
+    assert _bars(charts[0]) == MAX_SERIES  # one price bar for each charted spec
     assert _bars(charts[1]) == MAX_SERIES * 2  # the fixture entry's two rungs, eight times
     assert "8 of 9 endpoints are charted; the rest are in the tables above: @r8" in html
     assert "<td>@r0</td>" in html and "<td>@r8</td>" in html

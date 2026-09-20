@@ -138,8 +138,6 @@ ul.legend {
 }
 ul.legend li { display: flex; align-items: center; gap: 6px; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
-.swatch.shade-light { background: var(--ink-2); opacity: 0.35; }
-.swatch.shade-dark { background: var(--ink-2); }
 ul.notes { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 13px; }
 ul.notes li + li { margin-top: 4px; }
 sup a { color: var(--ink-2); text-decoration: none; }
@@ -159,7 +157,6 @@ svg.chart {
 .s6 { fill: var(--series-6); background-color: var(--series-6); }
 .s7 { fill: var(--series-7); background-color: var(--series-7); }
 .s8 { fill: var(--series-8); background-color: var(--series-8); }
-.bar.light { opacity: 0.35; }
 .grid { stroke: var(--grid); stroke-width: 1; }
 .axis { stroke: var(--axis); stroke-width: 1; }
 .line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; }

@@ -71,22 +71,15 @@ class BarGroup:
 
 
 @dataclass(frozen=True, slots=True)
-class PairedBar:
-    """Half of a paired horizontal-bar row: its own value, label text and hover text."""
-
-    value: float | None
-    value_text: str
-    title: str
-
-
-@dataclass(frozen=True, slots=True)
-class PairedBarRow:
-    """One row of two horizontal bars on a shared scale: a light one and a dark one."""
+class BarRow:
+    """One horizontal bar: its series, row label, value (`None` draws `-`), value text
+    and hover text."""
 
     series: int
     label: str
-    light: PairedBar
-    dark: PairedBar
+    value: float | None
+    value_text: str
+    title: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,69 +134,30 @@ def grouped_bars(
     return _svg(parts, f"{label} 0 to 100 percent", height, label)
 
 
-_PAIR_ROW_HEIGHT = 40
-"""Twice a single bar's row, plus room for the gap between the light and the dark bar."""
-_PAIR_GAP = 4
+def horizontal_bars(rows: Sequence[BarRow], *, label: str) -> str:
+    """One bar per row, every bar scaled to the largest value in the chart.
 
-
-def paired_horizontal_bars(rows: Sequence[PairedBarRow], *, label: str) -> str:
-    """Two bars per row, light above dark, both scaled to the largest value either carries.
-
-    A row with either half unknown draws no bars at all -- a bar next to an empty slot would
-    read as a zero it never measured -- and prints `-` instead.
+    A row without a value draws no bar and prints `-` where the value would be: an empty
+    slot would read as a zero the run never measured.
     """
     if not rows:
         return ""
-    height = _PAD_TOP + len(rows) * _PAIR_ROW_HEIGHT + _PAD_BOTTOM - 24
-    values = [
-        value for row in rows for value in (row.light.value, row.dark.value) if value is not None
-    ]
-    largest = max(values, default=0.0)
+    height = _PAD_TOP + len(rows) * _ROW_HEIGHT + _PAD_BOTTOM - 24
+    largest = max((row.value for row in rows if row.value is not None), default=0.0)
     span = _CHART_WIDTH - _LABEL_COLUMN - _PAD_RIGHT - _VALUE_COLUMN
     parts: list[str] = []
     for index, row in enumerate(rows):
-        top = _PAD_TOP + index * _PAIR_ROW_HEIGHT
-        middle = top + _PAIR_ROW_HEIGHT / 2
-        parts.append(_row_label(row.label, middle + 4))
-        light_value, dark_value = row.light.value, row.dark.value
-        if light_value is None or dark_value is None:
-            parts.append(_text(_LABEL_COLUMN, middle + 4, "-", "value"))
+        top = _PAD_TOP + index * _ROW_HEIGHT
+        y = top + (_ROW_HEIGHT - _ROW_BAR) / 2
+        parts.append(_row_label(row.label, y + _ROW_BAR - 2))
+        if row.value is None:
+            parts.append(_text(_LABEL_COLUMN, y + _ROW_BAR - 2, "-", "value", row.title))
             continue
-        light_y = top + _PAIR_GAP
-        dark_y = light_y + _ROW_BAR + _PAIR_GAP
-        parts.append(
-            _paired_bar(
-                row.series,
-                row.light,
-                light_value,
-                y=light_y,
-                largest=largest,
-                span=span,
-                light=True,
-            )
-        )
-        parts.append(
-            _paired_bar(
-                row.series,
-                row.dark,
-                dark_value,
-                y=dark_y,
-                largest=largest,
-                span=span,
-                light=False,
-            )
-        )
+        width = max(_ZERO_HEIGHT, span * (row.value / largest if largest > 0 else 0.0))
+        css = f"bar s{row.series + 1}"
+        parts.append(_path(_rounded(_LABEL_COLUMN, y, width, _ROW_BAR, "right"), css, row.title))
+        parts.append(_text(_LABEL_COLUMN + width + 8, y + _ROW_BAR - 2, row.value_text, "value"))
     return _svg(parts, label, height, label)
-
-
-def _paired_bar(
-    series: int, bar: PairedBar, value: float, *, y: float, largest: float, span: float, light: bool
-) -> str:
-    css = f"bar light s{series + 1}" if light else f"bar s{series + 1}"
-    width = max(_ZERO_HEIGHT, span * (value / largest if largest > 0 else 0.0))
-    path = _path(_rounded(_LABEL_COLUMN, y, width, _ROW_BAR, "right"), css, bar.title)
-    text = _text(_LABEL_COLUMN + width + 8, y + _ROW_BAR - 2, bar.value_text, "value")
-    return path + text
 
 
 def line_chart(points: Sequence[Point], *, label: str, height: int = 220) -> str:
@@ -313,8 +267,8 @@ def _svg(parts: Sequence[str], aria: str, height: int, label: str) -> str:
     )
 
 
-def _text(x: float, y: float, text: str, css: str) -> str:
-    return f'<text class="{css}" x="{x:.1f}" y="{y:.1f}">{escape(text)}</text>'
+def _text(x: float, y: float, text: str, css: str, title: str | None = None) -> str:
+    return f'<text class="{css}" x="{x:.1f}" y="{y:.1f}">{_title(title)}{escape(text)}</text>'
 
 
 def _line(x1: float, y1: float, x2: float, css: str) -> str:

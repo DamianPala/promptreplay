@@ -38,15 +38,15 @@ from provibench.bench.html_layout import (
     table_section,
 )
 from provibench.bench.html_style import CSS
-from provibench.bench.html_svg import Point, grouped_bars, line_chart, paired_horizontal_bars
+from provibench.bench.html_svg import Point, grouped_bars, horizontal_bars, line_chart
 from provibench.bench.labels import join_and, size_label
 from provibench.bench.probe_caveats import caveats_section, run_method_sentence, tok_footnote_cells
 from provibench.bench.probe_charts import (
     not_charted,
+    price_rows,
     reference_size,
     rung_groups,
     series,
-    session_cost_rows,
 )
 from provibench.bench.probe_html_tables import (
     endpoint_caption_html,
@@ -216,7 +216,7 @@ def _probe_sections(document: Document) -> list[str]:
         )
     )
 
-    charts = _probe_charts(summaries, labels, trace_prompt_tokens, document)
+    charts = _probe_charts(summaries, labels, document)
     if charts:
         sections.append(charts)
 
@@ -234,16 +234,14 @@ def _probe_sections(document: Document) -> list[str]:
 
 
 def _probe_charts(
-    summaries: Sequence[ProbeSummary],
-    labels: Sequence[str],
-    trace_prompt_tokens: object,
-    document: Document,
+    summaries: Sequence[ProbeSummary], labels: Sequence[str], document: Document
 ) -> str:
-    """The session-cost chart, then the cache-share chart, or nothing when neither has data.
+    """The price chart, then the cache-share chart, or nothing when neither has data.
 
-    The bill chart comes first because it is the answer (the gap between the listed price
-    and the measured one, per endpoint) and the share chart is the evidence for it; at
-    desktop width that also keeps the answer on the first screen, right under the table.
+    The price chart is the table's `eff $/M` column drawn, one bar per endpoint: the number a
+    reader decides by, first and right under the table. The share chart is the evidence for
+    it. Nothing else is charted on purpose: the listed prices and the session bill are
+    columns of the table, and a second series on the bars was read as a second question.
 
     Only the palette's validated slots are charted: past eight series a grouped bar chart
     stops being readable however it is coloured, so the rest stay in the tables above and
@@ -252,19 +250,16 @@ def _probe_charts(
     """
     charted = series(summaries, labels)
     groups = rung_groups(charted)
-    tokens = trace_prompt_tokens if isinstance(trace_prompt_tokens, int) else None
-    rows = session_cost_rows(charted, tokens)
+    rows = price_rows(charted)
     parts: list[str] = []
     unmeasured = not_charted(summaries, labels)
-    if any(row.light.value is not None or row.dark.value is not None for row in rows):
+    if any(row.value is not None for row in rows):
         parts.append(
-            "<figure><h3>Prompt bill for a session like this one</h3>"
-            + _shade_legend()
+            "<figure><h3>Price per 1M prompt tokens at the measured hit rate</h3>"
             + chart(
-                paired_horizontal_bars(rows, label="session bill per endpoint"),
-                "Light: the bill if every repeat had hit the cache, at the listed cache price. "
-                "Dark: the bill at the hit rate this run measured. The gap is what was paid "
-                "at the input price instead.",
+                horizontal_bars(rows, label="eff $/M per endpoint"),
+                "The <code>eff $/M</code> column drawn: a cache miss pays the input price, a "
+                "hit pays the cache price, weighted by the hit rate this run measured.",
             )
             + "</figure>"
         )
@@ -328,15 +323,6 @@ def _repeat_reads_tail(summaries: Sequence[ProbeSummary], document: Document) ->
 
 def _count_word(count: int) -> str:
     return _COUNT_WORDS.get(count, str(count))
-
-
-def _shade_legend() -> str:
-    return (
-        '<ul class="legend">'
-        '<li><span class="swatch shade-light"></span>if every repeat had hit</li>'
-        '<li><span class="swatch shade-dark"></span>at the measured hit rate</li>'
-        "</ul>"
-    )
 
 
 def _replay_sections(document: Document) -> list[str]:

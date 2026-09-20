@@ -2,17 +2,16 @@
 
 Kept apart from the SVG that draws it and from the page that assembles it, because this is
 the part with decisions in it — how the bars are grouped, which rungs have a rate at all,
-and what numbers a hover carries. The output is data (`BarGroup`/`PairedBarRow`), not markup,
-so the whole thing is testable without rendering a page.
+and what numbers a hover carries. The output is data (`BarGroup`/`BarRow`), not markup, so
+the whole thing is testable without rendering a page.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from provibench.bench.html_svg import MAX_SERIES, Bar, BarGroup, PairedBar, PairedBarRow
+from provibench.bench.html_svg import MAX_SERIES, Bar, BarGroup, BarRow
 from provibench.bench.labels import size_label
-from provibench.bench.probe_html_tables import trace_money
 from provibench.bench.probe_summary import ProbeSummary, RungSummary
 
 _PRICE_SOURCE_WORDS: dict[str, str] = {
@@ -159,57 +158,32 @@ def not_charted(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> lis
     return lines
 
 
-def session_cost_rows(
-    charted: Sequence[tuple[ProbeSummary, str]], trace_prompt_tokens: int | None
-) -> list[PairedBarRow]:
-    """One row per endpoint: the bill at the listed cache price, paired with the measured one.
+def price_rows(charted: Sequence[tuple[ProbeSummary, str]]) -> list[BarRow]:
+    """One bar per endpoint: its `eff $/M`, the table's verdict column drawn.
 
-    A row where either half is unknown draws no bars at all (`PairedBar.value=None`) rather
-    than one bar next to an empty slot, which would read as a zero it never measured.
+    The chart shows the one number a reader decides by and nothing else: the promise of the
+    price list and the session bill both stay in the table, where they are columns next to
+    it. An endpoint without a measured price draws `-` (`BarRow.value=None`), never a zero.
     """
-    return [
-        PairedBarRow(
-            series=index,
-            label=label,
-            light=_listed_bar(label, summary, trace_prompt_tokens),
-            dark=_measured_bar(label, summary),
-        )
-        for index, (summary, label) in enumerate(charted)
-    ]
+    return [_price_row(index, summary, label) for index, (summary, label) in enumerate(charted)]
 
 
-def _listed_session_bill(summary: ProbeSummary, trace_prompt_tokens: int | None) -> float | None:
-    """What a session like the trace would bill if every repeat request hit the cache."""
-    if trace_prompt_tokens is None or summary.cache_read_price is None:
-        return None
-    return trace_prompt_tokens / 1e6 * summary.cache_read_price
-
-
-def _listed_bar(label: str, summary: ProbeSummary, trace_prompt_tokens: int | None) -> PairedBar:
-    value = _listed_session_bill(summary, trace_prompt_tokens)
-    text = trace_money(value)
-    title = f"{label} if every repeat had hit: {text}"
-    if summary.cache_read_price is not None:
-        title += f" at the listed ${summary.cache_read_price:.3f}/M cache price"
-    return PairedBar(value=value, value_text=text, title=title)
-
-
-def _measured_bar(label: str, summary: ProbeSummary) -> PairedBar:
-    """The dark bar's hover: the bill, then how it was priced, in the page's words.
+def _price_row(index: int, summary: ProbeSummary, label: str) -> BarRow:
+    """The bar's hover says how the price came about, in the page's words.
 
     `h` is the tool's name for hit rate times cached share; the page never introduces it, so
     the hover says what the number is instead of naming it.
     """
-    value = summary.session_prompt_usd
-    text = trace_money(value)
-    title = f"{label} at the measured hit rate: {text}"
+    eff = summary.eff_per_m_prompt
+    if eff is None:
+        return BarRow(index, label, None, "-", f"{label}: no measured price")
     details: list[str] = []
-    if summary.eff_per_m_prompt is not None:
-        details.append(f"eff ${summary.eff_per_m_prompt:.3f}/M")
     if summary.h is not None:
         details.append(f"the cache covered {summary.h * 100:.1f}% of prompt tokens")
     details.append(f"priced from the {price_source_words(summary.price_source)}")
-    return PairedBar(value=value, value_text=text, title=f"{title} ({'; '.join(details)})")
+    how = "; ".join(details)
+    title = f"{label}: ${eff:.3f} per 1M prompt tokens at the measured hit rate ({how})"
+    return BarRow(index, label, eff, f"${eff:.3f}/M", title)
 
 
 def price_source_words(source: str) -> str:

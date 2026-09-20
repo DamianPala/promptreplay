@@ -303,9 +303,8 @@ def test_probe_report_html_carries_the_tables_and_the_charts(
     assert "endpoints: or:model@&lt;provider&gt;" not in text
     assert "rows go through OpenRouter, pinned to the named provider; all serve model." in text
     assert "<td>@novita</td>" in text and "<td>@gmicloud</td>" in text
-    # Neither endpoint has a listed price here, so the session-cost chart (item 10) has
-    # nothing to draw and only the cache-share chart renders.
-    assert text.count("<svg") == 1
+    # the `eff $/M` chart and the cache-share chart
+    assert text.count("<svg") == 2
     assert "@media (prefers-color-scheme: dark)" in text
 
 
