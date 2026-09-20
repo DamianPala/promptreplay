@@ -62,16 +62,20 @@ def probe_report_text(document: Document, *, key: str = "summaries") -> str:
     which is the failure path, where the reader most wants to know which candidates were
     removed before the requests that failed.
     """
-    from provibench.bench.probe_tables import render_probe
+    from provibench.bench.probe_tables import probe_labels, render_probe
 
     entries = [d for d in map(as_document, as_list(document.get(key)) or []) if d]
     summaries = [_probe_summary(entry) for entry in entries]
-    lines = [
-        *render_probe(summaries).splitlines(),
+    labels = probe_labels(summaries)
+    trace_tokens = document.get("trace_prompt_tokens")
+    closing = [
         *sweep_lines(document.get("sweep")),
         *spend_lines(document),
-        *session_footer_lines(summaries, document.get("trace_prompt_tokens")),
+        *session_footer_lines(summaries, labels, trace_tokens),
     ]
+    lines = render_probe(summaries).splitlines()
+    if closing:
+        lines = [*lines, "", *closing]
     return "\n".join(lines)
 
 
@@ -99,17 +103,18 @@ def render_report_document(invocation: Invocation, document: Document) -> None:
 def report_markdown(document: Document) -> str:
     """Render the report's Markdown form from the same document as every other format."""
     if document.get("protocol") == "probe":
-        from provibench.bench.probe_tables import probe_markdown
+        from provibench.bench.probe_tables import probe_labels, probe_markdown
 
         entries = [
             entry for entry in map(as_document, as_list(document.get("summaries")) or []) if entry
         ]
         summaries = [_probe_summary(entry) for entry in entries]
-        lines = [
-            probe_markdown(summaries),
-            *spend_lines(document),
-            *session_footer_lines(summaries, document.get("trace_prompt_tokens")),
-        ]
+        labels = probe_labels(summaries)
+        trace_tokens = document.get("trace_prompt_tokens")
+        closing = [*spend_lines(document), *session_footer_lines(summaries, labels, trace_tokens)]
+        lines = probe_markdown(summaries).splitlines()
+        if closing:
+            lines = [*lines, "", *closing]
         return "\n".join(lines) + "\n"
     from provibench.bench.summary import render_markdown
 

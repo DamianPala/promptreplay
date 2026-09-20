@@ -9,6 +9,7 @@ import provibench
 
 PACKAGE = Path(provibench.__file__).parent
 FORBIDDEN_FOR_CORE = ("provibench.commands", "provibench.bench", "provibench.app")
+FORBIDDEN_FOR_BENCH = ("provibench.commands", "provibench.app")
 
 
 def _imports(path: Path) -> set[str]:
@@ -25,6 +26,15 @@ def _imports(path: Path) -> set[str]:
 def test_core_imports_nothing_from_commands_or_bench() -> None:
     for path in (PACKAGE / "core").glob("*.py"):
         offending = {name for name in _imports(path) if name.startswith(FORBIDDEN_FOR_CORE)}
+        assert not offending, f"{path.name} imports {offending}"
+
+
+def test_bench_imports_nothing_from_commands_or_app() -> None:
+    """`bench/` is the domain layer `commands/` (the CLI wiring) sits on top of; a `bench`
+    module reaching back into `commands` or `app` would make the two layers depend on each
+    other in a circle, one import at a time."""
+    for path in (PACKAGE / "bench").glob("*.py"):
+        offending = {name for name in _imports(path) if name.startswith(FORBIDDEN_FOR_BENCH)}
         assert not offending, f"{path.name} imports {offending}"
 
 

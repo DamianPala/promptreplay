@@ -20,11 +20,13 @@ from provibench.bench.selection import (
     SelectionDrop,
     SweepInfo,
     missing_percentiles,
+    not_probed_lines,
     pinned_spec,
     rank_candidates,
     ranked,
     render_candidates,
     select_candidates,
+    selection_line,
     sort_key,
     stability_reason,
 )
@@ -302,6 +304,58 @@ def test_a_sweep_block_written_before_the_rename_still_loads() -> None:
     assert info.to_document()["dropped"] == [
         {"tag": "a", "endpoint": f"or:{_MODEL}@a", "reason": "not ZDR", "checked": False}
     ]
+
+
+def test_selection_line_states_a_status_drop_and_an_uptime_drop_in_words() -> None:
+    """Item 12.2: a listing-time drop's short code (`status -2`, `uptime 1d ... %`) becomes a
+    sentence a reader can act on, not the raw criterion string."""
+    sweep = SweepInfo(
+        model=_MODEL,
+        target="or",
+        sort="uptime",
+        top=3,
+        dropped=[
+            SelectionDrop.for_spec(pinned_spec(_GATEWAY, _MODEL, "novita"), "status -2"),
+            SelectionDrop.for_spec(pinned_spec(_GATEWAY, _MODEL, "gmicloud"), "uptime 1d 96.90 %"),
+        ],
+    )
+    line = selection_line(sweep)
+    assert line.startswith("OpenRouter providers: the run took the 3 best by uptime.")
+    assert "novita was skipped because OpenRouter reports it degraded (status -2)." in line
+    assert "gmicloud was skipped because its one-day uptime was below the floor (96.90 %)." in line
+
+
+def test_selection_line_merges_endpoints_that_share_one_drop_reason() -> None:
+    sweep = SweepInfo(
+        model=_MODEL,
+        target="or",
+        dropped=[
+            SelectionDrop.for_spec(pinned_spec(_GATEWAY, _MODEL, "a"), "status -2"),
+            SelectionDrop.for_spec(pinned_spec(_GATEWAY, _MODEL, "b"), "status -2"),
+        ],
+    )
+    line = selection_line(sweep)
+    # item 16: the drop sentence names the endpoint the way the table above it does (`@tag`),
+    # not the bare provider tag.
+    assert "@a and @b were skipped because OpenRouter reports it degraded (status -2)." in line
+
+
+def test_not_probed_lines_keeps_a_precheck_drop_reason_as_is() -> None:
+    """A pre-check failure already carries its own gateway reason; item 12.2 says to keep it
+    rather than rewrite it into the listing's short-code wording."""
+    sweep = SweepInfo(
+        model=_MODEL,
+        target="or",
+        dropped=[
+            SelectionDrop.for_spec(
+                pinned_spec(_GATEWAY, _MODEL, "novita"),
+                "unavailable: HTTP 503",
+                checked=True,
+            )
+        ],
+    )
+    # item 16: same `@tag` naming as the table, even though the reason itself is untouched.
+    assert not_probed_lines(sweep) == ["@novita was skipped because unavailable: HTTP 503."]
 
 
 def test_precheck_cost_is_one_smallest_rung_per_candidate() -> None:

@@ -2,16 +2,25 @@
 
 Kept apart from the SVG that draws it and from the page that assembles it, because this is
 the part with decisions in it — how the bars are grouped, which rungs have a rate at all,
-and what numbers a hover carries. The output is data (`BarGroup`/`BarRow`), not markup, so
-the whole thing is testable without rendering a page.
+and what numbers a hover carries. The output is data (`BarGroup`/`PairedBarRow`), not markup,
+so the whole thing is testable without rendering a page.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from provibench.bench.html_svg import MAX_SERIES, Bar, BarGroup, BarRow
+from provibench.bench.html_svg import MAX_SERIES, Bar, BarGroup, PairedBar, PairedBarRow
+from provibench.bench.labels import size_label
+from provibench.bench.probe_html_tables import trace_money
 from provibench.bench.probe_summary import ProbeSummary, RungSummary
+
+_PRICE_SOURCE_WORDS: dict[str, str] = {
+    "targets": "native price list",
+    "openrouter-endpoint": "OpenRouter listing",
+}
+"""The known `price_source` values in the reader's words (item 14); anything else prints as
+the tool already names it -- a fitted or a listing reprice, which are not "the" price list."""
 
 
 def series(
@@ -27,13 +36,23 @@ def series(
     return list(zip(summaries, labels, strict=True))[:MAX_SERIES]
 
 
-def _size_label(tokens: int) -> str:
-    """A rung's prompt size as the x tick shows it: `20k`, or the token count below 1k."""
-    return f"{tokens / 1000:.0f}k" if tokens >= 1000 else str(tokens)
+def reference_size(summaries: Sequence[ProbeSummary], rung: int) -> int:
+    """One rung's prompt size, from the reference endpoint when it measured it.
 
-
-def _rate(value: float | None) -> str:
-    return "-" if value is None else f"{value:.3f}"
+    Every endpoint tokenizes the same recorded turn a little differently, so the size shown
+    next to a rung is always the same endpoint's, the one every drift marker is judged
+    against, rather than whichever endpoint happens to be first in the document.
+    """
+    ranked = sorted(summaries, key=lambda summary: not summary.reference)
+    return next(
+        (
+            candidate.prompt_cold
+            for summary in ranked
+            for candidate in summary.rungs
+            if candidate.rung == rung and candidate.prompt_cold > 0
+        ),
+        0,
+    )
 
 
 def rung_groups(charted: Sequence[tuple[ProbeSummary, str]]) -> list[BarGroup]:
@@ -42,7 +61,7 @@ def rung_groups(charted: Sequence[tuple[ProbeSummary, str]]) -> list[BarGroup]:
     Grouping by prompt size instead would split the endpoints of one rung into several
     groups as soon as they tokenize the prompt differently, and an x axis reading
     `20k 20k 20k` is no axis; the rung is what the bars are compared at. The tick names the
-    reference endpoint's size for that rung, with `_size_label`, so a reader still sees how
+    reference endpoint's size for that rung, with `size_label`, so a reader still sees how
     big it was.
     """
     numbers = sorted(
@@ -61,18 +80,9 @@ def rung_groups(charted: Sequence[tuple[ProbeSummary, str]]) -> list[BarGroup]:
 
 
 def _rung_label(number: int, charted: Sequence[tuple[ProbeSummary, str]]) -> str:
-    """`rung 2 · 41k`, the size taken from the endpoint the others are judged against."""
-    ranked = sorted(charted, key=lambda pair: not pair[0].reference)
-    size = next(
-        (
-            rung.prompt_cold
-            for summary, _ in ranked
-            for rung in summary.rungs
-            if rung.rung == number and rung.prompt_cold > 0
-        ),
-        0,
-    )
-    return f"rung {number} · {_size_label(size)}" if size else f"rung {number}"
+    """`turn 2 · 41k`, the size taken from the endpoint the others are judged against."""
+    size = reference_size([summary for summary, _ in charted], number)
+    return f"turn {number} · {size_label(size)}" if size else f"turn {number}"
 
 
 def _bar(index: int, summary: ProbeSummary, rung: RungSummary) -> Bar:
@@ -145,38 +155,53 @@ def not_charted(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> lis
     return lines
 
 
-def cost_rows(charted: Sequence[tuple[ProbeSummary, str]]) -> list[BarRow]:
-    """One row per endpoint: its effective prompt price, or `None` when no price is known."""
+def session_cost_rows(
+    charted: Sequence[tuple[ProbeSummary, str]], trace_prompt_tokens: int | None
+) -> list[PairedBarRow]:
+    """One row per endpoint: the bill at the listed cache price, paired with the measured one.
+
+    A row where either half is unknown draws no bars at all (`PairedBar.value=None`) rather
+    than one bar next to an empty slot, which would read as a zero it never measured.
+    """
     return [
-        BarRow(
+        PairedBarRow(
             series=index,
             label=label,
-            value=summary.eff_per_m_prompt,
-            value_text=_money_label(summary.eff_per_m_prompt),
-            title=_cost_title(summary),
+            light=_listed_bar(label, summary, trace_prompt_tokens),
+            dark=_measured_bar(label, summary),
         )
         for index, (summary, label) in enumerate(charted)
     ]
 
 
-def _money_label(value: float | None) -> str:
-    """A chart bar's own value label: `$0.070/M`, not a bare number with no unit."""
-    return "-" if value is None else f"${value:.3f}/M"
+def _listed_session_bill(summary: ProbeSummary, trace_prompt_tokens: int | None) -> float | None:
+    """What a session like the trace would bill if every repeat request hit the cache."""
+    if trace_prompt_tokens is None or summary.cache_read_price is None:
+        return None
+    return trace_prompt_tokens / 1e6 * summary.cache_read_price
 
 
-def _cost_title(summary: ProbeSummary) -> str:
-    """The exact numbers behind one effective-price bar.
-
-    Three decimals throughout, the same as the table: at two decimals a cache-read price
-    under a cent rounds to `$0.00`, which reads as free rather than as cheap, and it made
-    the table's `0.375` and this tooltip's `$0.38` disagree over the same listed price.
-    """
-    parts = [summary.label, f"eff ${_rate(summary.eff_per_m_prompt)}/M prompt"]
-    if summary.input_price is not None:
-        parts.append(f"listed ${summary.input_price:.3f}/M in")
+def _listed_bar(label: str, summary: ProbeSummary, trace_prompt_tokens: int | None) -> PairedBar:
+    value = _listed_session_bill(summary, trace_prompt_tokens)
+    text = trace_money(value)
+    title = f"{label} at the listed cache price, every repeat a hit: {text}"
     if summary.cache_read_price is not None:
-        parts.append(f"${summary.cache_read_price:.3f}/M cache read")
+        title += f"; listed ${summary.cache_read_price:.3f}/M cache read"
+    return PairedBar(value=value, value_text=text, title=title)
+
+
+def _measured_bar(label: str, summary: ProbeSummary) -> PairedBar:
+    value = summary.session_prompt_usd
+    text = trace_money(value)
+    title = f"{label} at the measured hit rate: {text}"
+    if summary.eff_per_m_prompt is not None:
+        title += f"; eff ${summary.eff_per_m_prompt:.3f}/M prompt"
     if summary.h is not None:
-        parts.append(f"hit-weighted h {summary.h * 100:.1f}%")
-    parts.append(f"prices: {summary.price_source}")
-    return " · ".join(parts)
+        title += f", hit-weighted h {summary.h * 100:.1f}%"
+    title += f" (price source: {price_source_words(summary.price_source)})"
+    return PairedBar(value=value, value_text=text, title=title)
+
+
+def price_source_words(source: str) -> str:
+    """A `price_source` value in the reader's words, or as the tool already names it."""
+    return _PRICE_SOURCE_WORDS.get(source, source)

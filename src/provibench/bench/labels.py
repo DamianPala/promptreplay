@@ -24,7 +24,32 @@ from provibench.core.text_table import text_table
 
 _ELLIPSIS = "…"
 
-__all__ = ["column_labels", "elide", "named", "rendered", "text_table", "uncovered_width"]
+__all__ = [
+    "column_labels",
+    "elide",
+    "join_and",
+    "named",
+    "rendered",
+    "size_label",
+    "text_table",
+    "uncovered_width",
+]
+
+
+def size_label(tokens: int) -> str:
+    """A prompt size as the reader sees it: `20k`, or the bare token count below 1k."""
+    return f"{tokens / 1000:.0f}k" if tokens >= 1000 else str(tokens)
+
+
+def join_and(names: Sequence[str]) -> str:
+    """`A`, `A and B`, or `A, B and C`: a plain list, no Oxford comma past two items."""
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def column_labels(labels: Sequence[str], *, label_width: int) -> tuple[str | None, list[str]]:

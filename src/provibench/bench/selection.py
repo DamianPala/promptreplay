@@ -5,7 +5,7 @@ and `report` orders them by the effective price it measured. What this module de
 which endpoints are worth paying to measure at all — one serving a degraded status or a bad
 day of uptime cannot produce a number comparable with the rest, and one the account's
 settings exclude cannot be probed at all — and it owns the record of that decision
-(`SweepInfo`), because `report` has to show the selection offline, with no network.
+(`SweepInfo`), since `report` shows the selection offline, with no network.
 
 The listing is the human view of the same decision, so the criteria the run chose by and the
 endpoints they removed are named in one place: `render_candidates` for the command that is
@@ -14,13 +14,13 @@ about to spend money, `selection_line` for the report of a run that already did.
 
 from __future__ import annotations
 
-from collections.abc import Sequence, Set
+from collections.abc import Iterable, Sequence, Set
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import AliasChoices, BaseModel, Field
 
-from provibench.bench.labels import text_table
+from provibench.bench.labels import join_and, text_table
 from provibench.bench.openrouter import Endpoint
 from provibench.bench.targets import RunSpec, Target
 
@@ -265,28 +265,72 @@ def render_candidates(selection: Selection, *, model: str, sort: str, zdr: bool)
 
 
 def selection_line(sweep: SweepInfo) -> str:
-    """The line `report` prints under the tables: the criteria and what they dropped.
+    """A sentence: how many endpoints the run took and by what, then why the listing itself
+    dropped any candidate (the stability floor or the ZDR filter, in the reader's words).
 
-    A sentence, not the `sort=price, top=3, zdr=off` the candidate listing prints: the
-    listing is read by the person who typed those flags, this line by whoever opens the
-    report later.
+    A pre-check's own drops are `not_probed_lines`'s job, kept separate because a pre-check
+    spends money to find them and a listing-time drop costs nothing.
     """
-    which = "every candidate" if sweep.top is None else f"the {sweep.top} best"
-    line = f"selection: {which} by {sweep.sort}"
+    if sweep.top is None:
+        which = f"every candidate by {sweep.sort}"
+    elif sweep.sort == "price":
+        which = f"the {sweep.top} cheapest by listed price"
+    else:
+        which = f"the {sweep.top} best by {sweep.sort}"
+    line = f"OpenRouter providers: the run took {which}"
     if sweep.zdr:
         line += ", zero-data-retention endpoints only"
-    if sweep.dropped:
-        line += "; dropped: " + ", ".join(_drop_cell(drop) for drop in sweep.dropped)
+    line += "."
+    sentences = _drop_sentences(drop for drop in sweep.dropped if not drop.checked)
+    if sentences:
+        line += " " + " ".join(sentences)
     return line
 
 
 def not_probed_lines(sweep: SweepInfo) -> list[str]:
-    """One `endpoint: not probed, reason` line per candidate the availability pre-check removed.
+    """One sentence per reason the availability pre-check skipped a candidate.
 
-    These are notes in the same shape as the probe's own note lines, because that is what
-    they are: an endpoint the run has nothing to say about, and the reason it has nothing.
+    Grouped the same way `selection_line` groups its own drops, but a pre-check failure
+    keeps its own gateway reason rather than one of the listing's short codes.
     """
-    return [f"{drop.endpoint}: not probed, {drop.reason}" for drop in sweep.dropped if drop.checked]
+    return _drop_sentences(drop for drop in sweep.dropped if drop.checked)
+
+
+def _drop_sentences(dropped: Iterable[SelectionDrop]) -> list[str]:
+    """`{label} was skipped because {reason}.`, endpoints sharing a reason joined into one
+    sentence, named the way the table above it does (`_short_drop_label`)."""
+    groups: dict[str, list[str]] = {}
+    for drop in dropped:
+        groups.setdefault(_reason_words(drop), []).append(_short_drop_label(drop))
+    sentences: list[str] = []
+    for reason, labels in groups.items():
+        verb = "was skipped" if len(labels) == 1 else "were skipped"
+        sentences.append(f"{join_and(labels)} {verb} because {reason}.")
+    return sentences
+
+
+def _short_drop_label(drop: SelectionDrop) -> str:
+    """`@tag` when the label has a provider suffix, else the label whole, as the table reads."""
+    return f"@{drop.tag}" if "@" in drop.endpoint else drop.endpoint
+
+
+def _reason_words(drop: SelectionDrop) -> str:
+    """A drop's own code (`status -2`, `uptime 1d 77.90 %`) in the reader's words.
+
+    A pre-check failure already carries its provider's own gateway reason -- that is the
+    "words" a reader can act on, and rewriting it would replace one true statement with a
+    guess at what it meant.
+    """
+    if drop.checked:
+        return drop.reason
+    if drop.reason.startswith("status "):
+        return f"OpenRouter reports it degraded ({drop.reason})"
+    if drop.reason.startswith("uptime 1d "):
+        pct = drop.reason.removeprefix("uptime 1d ").strip()
+        return f"its one-day uptime was below the floor ({pct})"
+    if drop.reason == "not ZDR":
+        return "it is not a zero-data-retention endpoint"
+    return drop.reason
 
 
 def _drop_cell(drop: SelectionDrop) -> str:

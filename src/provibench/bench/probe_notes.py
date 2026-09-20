@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from provibench.bench.labels import join_and, size_label
 from provibench.bench.probe_errors import skip_note
 from provibench.bench.probe_models import ProbeResult, is_failed
 from provibench.bench.probe_stream import BURST_NOTE
@@ -118,18 +119,36 @@ def _note_parts(note: str) -> list[str]:
 
 
 def _burst_note(records: Sequence[ProbeResult]) -> str | None:
-    """Why the throughput chart has a blank `tok/s` cell: one flush, not a stream."""
+    """Why the `tok/s` cell reads `-`: one flush, not a stream, on the turns named here.
+
+    The turn is named by its prompt size rather than its rung number, the way the HTML
+    caveat names it: a reader who has the table in front of them recognises `92k` from the
+    per-turn rows, and a rung number is an index into a list they never saw. The size comes
+    from the turn's own cold write, so a turn whose write never landed falls back to saying
+    nothing about size rather than to a guess.
+    """
     rungs = sorted(
         {record.rung for record in records if BURST_NOTE in _note_parts(record.note or "")}
     )
     if not rungs:
         return None
+    labels = [_rung_size_label(records, rung) for rung in rungs]
+    sizes = join_and(labels) if all(labels) else ""
     if len(rungs) == 1:
-        return (
-            "sent its whole answer in one burst; tok/s could not be measured, so the cell is blank."
-        )
-    names = ", ".join(str(rung) for rung in rungs)
-    return (
-        f"sent its whole answer in one burst on rungs {names}; tok/s could not be measured "
-        "there, so the cell may be blank."
+        answer = f"the {sizes}-token turn's answer" if sizes else "its whole answer"
+        return f"sent {answer} in one burst, so tok/s for that turn is -."
+    where = f"the {sizes} turns" if sizes else f"rungs {', '.join(str(rung) for rung in rungs)}"
+    return f"sent its whole answer in one burst on {where}, so tok/s for those turns is -."
+
+
+def _rung_size_label(records: Sequence[ProbeResult], rung: int) -> str:
+    """One turn's cold prompt size as the reader reads it, or `""` when it was not written."""
+    cold = next(
+        (
+            record
+            for record in records
+            if record.rung == rung and record.role == "cold" and record.prompt_total > 0
+        ),
+        None,
     )
+    return size_label(cold.prompt_total) if cold is not None else ""

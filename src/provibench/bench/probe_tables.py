@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from provibench.bench.labels import column_labels, named, text_table, uncovered_width
 from provibench.bench.probe_summary import ProbeSummary, RungSummary, TtlRead
+from provibench.bench.summary import cache_mode_note, cache_mode_sentence
 
 _HIT_FULL = 0.98
 """A cached fraction at or above this renders as a full hit: Claude Code moves the marker."""
@@ -36,8 +37,9 @@ _RUN_COLUMNS = (
     "hit %",
     "1st hit %",
     "cached %",
-    "eff $/M",
     "in $/M",
+    "cache $/M",
+    "eff $/M",
     "cold ms",
     "warm ms",
     "TTFT ms",
@@ -85,20 +87,38 @@ class ProbeBlocks:
 
 def render_probe(summaries: Sequence[ProbeSummary]) -> str:
     """The probe's human output: one row per endpoint, then one row per rung; for a tty."""
-    lines = [*_lines(summaries, markdown=False), *probe_note_lines(summaries)]
-    return "\n".join(lines) if lines else "\n\n"
+    return _render(summaries, markdown=False)
 
 
 def probe_markdown(summaries: Sequence[ProbeSummary]) -> str:
     """The same two tables as markdown, for a report that gets pasted somewhere."""
-    lines = [*_lines(summaries, markdown=True), "", *probe_note_lines(summaries)]
+    return _render(summaries, markdown=True)
+
+
+def probe_labels(summaries: Sequence[ProbeSummary]) -> list[str]:
+    """The short label each endpoint gets in the tables above, for a caller that renders its
+    own lines (the closing `prompt bill`) and wants to name the same endpoint the same way."""
+    return _labels_from(probe_blocks(summaries))
+
+
+def _render(summaries: Sequence[ProbeSummary], *, markdown: bool) -> str:
+    blocks = probe_blocks(summaries)
+    lines = _lines(blocks, markdown=markdown)
+    notes = probe_note_lines(summaries, _labels_from(blocks))
+    if notes:
+        lines = [*lines, "", *notes]
     return "\n".join(lines) if lines else "\n\n"
 
 
-def _lines(summaries: Sequence[ProbeSummary], *, markdown: bool) -> list[str]:
+def _labels_from(blocks: ProbeBlocks) -> list[str]:
+    """The label column of the endpoint table, in row order: the short form it already shows."""
+    return [row[0] for row in blocks.endpoint.rows]
+
+
+def _lines(blocks: ProbeBlocks, *, markdown: bool) -> list[str]:
     """Every line of the caption and the two tables, one blank line between blocks."""
     lines: list[str] = []
-    for block in _blocks(summaries, markdown=markdown):
+    for block in _blocks(blocks, markdown=markdown):
         lines.extend(block.splitlines())
         lines.append("")
     return lines[:-1]
@@ -126,17 +146,49 @@ def probe_blocks(summaries: Sequence[ProbeSummary]) -> ProbeBlocks:
     )
 
 
-def _blocks(summaries: Sequence[ProbeSummary], *, markdown: bool) -> list[str]:
+def _blocks(blocks: ProbeBlocks, *, markdown: bool) -> list[str]:
     """The optional caption, the endpoint table and the rung table, rendered as text."""
-    blocks = probe_blocks(summaries)
     table = _md_table if markdown else _table
     rendered = [table(block.columns, block.rows) for block in (blocks.endpoint, blocks.rungs)]
     return [blocks.caption, *rendered] if blocks.caption is not None else rendered
 
 
-def probe_note_lines(summaries: Sequence[ProbeSummary]) -> list[str]:
-    """One `label: note` line per note, in endpoint order; shared by every renderer."""
-    return [f"{summary.label}: {note}" for summary in summaries for note in summary.notes]
+_CACHE_MODE_NOTES = frozenset({cache_mode_note(True), cache_mode_note(False)})
+
+
+def probe_note_lines(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> list[str]:
+    """The run-wide cache-mode sentence once, unprefixed, then one `{label}: {note}` line per
+    remaining note, in endpoint order -- shared by every renderer.
+
+    `labels` is the endpoint table's own short column (`probe_blocks(...).endpoint.rows`, or
+    `probe_labels`): a note names the same endpoint the table above it does, `@relace/fp4`
+    rather than the full label the caption already expanded.
+    """
+    shared = _shared_cache_mode(summaries)
+    lines = [cache_mode_sentence(shared == cache_mode_note(True))] if shared is not None else []
+    lines.extend(
+        f"{label}: {note}"
+        for summary, label in zip(summaries, labels, strict=True)
+        for note in summary.notes
+        if note != shared
+    )
+    return lines
+
+
+def _shared_cache_mode(summaries: Sequence[ProbeSummary]) -> str | None:
+    """The cache-mode note every summary carries alike, or `None` when there is no such note.
+
+    `cache_mode_note` is a fact about the run, not about one endpoint, so `probe`/`report`
+    write it into every summary's notes the same way; a run of one endpoint still shares it
+    with itself, and a summary with no notes at all (a dry construction in a test) has none.
+    """
+    if not summaries:
+        return None
+    candidates = {note for note in summaries[0].notes if note in _CACHE_MODE_NOTES}
+    if len(candidates) != 1:
+        return None
+    (note,) = candidates
+    return note if all(note in summary.notes for summary in summaries[1:]) else None
 
 
 def _labels_of(
@@ -232,8 +284,9 @@ def _run_cells(summary: ProbeSummary, label: str) -> list[str]:
         _pct(summary.hit_rate),
         _pct(summary.first_hit_rate),
         _pct(summary.cached_fraction),
-        _money(summary.eff_per_m_prompt, 3),
         _money(summary.input_price, 3),
+        _money(summary.cache_read_price, 3),
+        _money(summary.eff_per_m_prompt, 3),
         _ms(summary.cold_ms),
         _ms(summary.warm_ms),
         _ms(summary.ttft_ms),

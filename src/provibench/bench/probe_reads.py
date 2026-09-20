@@ -54,7 +54,7 @@ def output_tokens_note(output_tokens: int, reads: int) -> str | None:
         return None
     return (
         f"ignored the one-token limit on the cache probes and generated {output_tokens:,} "
-        "tokens, so this run cost more than planned; the prices above are unaffected."
+        "tokens. That raised this run's cost, not the prices above."
     )
 
 

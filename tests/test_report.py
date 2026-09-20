@@ -298,9 +298,14 @@ def test_probe_report_html_carries_the_tables_and_the_charts(
     )
     assert outcome.code == 0, outcome.stderr
     text = html_path.read_text(encoding="utf-8")
-    assert "endpoints: or:model@&lt;provider&gt;" in text
+    # the page says what the folded `@tag` labels stand for in the table's caption, not as a
+    # stray `endpoints: <spec>` line under the title (F10); the text report keeps that line.
+    assert "endpoints: or:model@&lt;provider&gt;" not in text
+    assert "rows go through OpenRouter, pinned to the named provider; all serve model." in text
     assert "<td>@novita</td>" in text and "<td>@gmicloud</td>" in text
-    assert text.count("<svg") == 2
+    # Neither endpoint has a listed price here, so the session-cost chart (item 10) has
+    # nothing to draw and only the cache-share chart renders.
+    assert text.count("<svg") == 1
     assert "@media (prefers-color-scheme: dark)" in text
 
 
@@ -429,7 +434,22 @@ def test_probe_report_shortens_the_shared_prefix_into_a_caption(
     assert "@novita" in out and "@gmicloud" in out
     assert "TTFT ms" in out and "tok/s" in out
     assert "400" in out and "40.0" in out
-    assert all(len(line) <= 120 for line in out.splitlines())
+    # The `cache $/M` column (item 2) widens the table past the old 120-column budget. Only
+    # the table rows are checked: item 17's run-wide cache-mode sentence is prose, not a row,
+    # and reads past 130 columns on its own.
+    table_lines = [line for line in out.splitlines() if " | " in line]
+    assert table_lines
+    assert all(len(line) <= 130 for line in table_lines)
+    # Item 17: both endpoints are cold-nonce runs, so the run-wide sentence prints once,
+    # unprefixed, not once per endpoint.
+    cold_sentence = (
+        '"cold (nonce)": each request carried a unique marker, so every cache hit in this '
+        "table was written by this run and none came from earlier traffic."
+    )
+    assert out.count(cold_sentence) == 1
+    assert f"@novita: {cold_sentence}" not in out
+    # Item 15: a blank line separates the rung table from the notes.
+    assert f"\n\n{cold_sentence}" in out
 
 
 def test_probe_report_marks_provider_drift_against_the_reference(

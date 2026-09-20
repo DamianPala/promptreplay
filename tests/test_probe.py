@@ -543,7 +543,12 @@ def test_probe_human_output_has_the_two_tables(
     assert "cached cold" in outcome.stdout and "hits" in outcome.stdout
     assert "90.0" in outcome.stdout  # the cached fraction, as a percentage
     assert "0.9 0.9" in outcome.stdout  # the hit sequence, one cell per warm attempt
-    assert all(len(line) <= 120 for line in outcome.stdout.splitlines())
+    # The `cache $/M` column (item 2) widens the table past the old 120-column budget. Only
+    # the table rows are checked: item 17's run-wide cache-mode sentence is prose, not a row,
+    # and reads past 130 columns on its own.
+    table_lines = [line for line in outcome.stdout.splitlines() if " | " in line]
+    assert table_lines
+    assert all(len(line) <= 130 for line in table_lines)
 
 
 def test_probe_estimate_is_shown_and_the_budget_refuses_above_it(

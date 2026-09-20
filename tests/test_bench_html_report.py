@@ -14,7 +14,8 @@ import pytest
 
 from provibench.bench.estimate import SpecPrices
 from provibench.bench.html_report import render_html
-from provibench.bench.html_svg import MAX_SERIES, BarRow, horizontal_bars
+from provibench.bench.html_svg import MAX_SERIES, PairedBar, PairedBarRow, paired_horizontal_bars
+from provibench.bench.probe_html_tables import ENDPOINT_CAPTION_HTML
 from provibench.bench.probe_models import ProbeResult
 from provibench.bench.probe_summary import summarize_probe
 from provibench.bench.replay import ReplayResult
@@ -145,6 +146,9 @@ def probe_document() -> Document:
         # terminal and the page alike, so the page is tested with it present.
         "spend_usd": 0.1776,
         "worst_case_usd": 0.4851,
+        # Matches the `trace_prompt_tokens=50_000` every summary above was built with, so the
+        # session-cost chart's listed-price bar has the same session size the measured bar does.
+        "trace_prompt_tokens": 50_000,
         "output_file": None,
         "changed": False,
     }
@@ -235,55 +239,108 @@ def test_probe_document_renders_one_self_contained_page() -> None:
     assert "<link" not in html and "<img" not in html
 
 
-def test_page_carries_the_run_and_its_cache_mode() -> None:
+def test_page_carries_the_run_and_its_scale() -> None:
     html = render_html(probe_document())
     header = html[html.index("<header") : html.index("</header>")]
-    assert "<h1>t</h1>" in header
-    # the three specs name two models between them, in spec order and without repeats
-    assert '<p class="sub">model, model-z · cold (nonce)' in header
-    assert "2026-01-01 00:00:00 · run abc123def456</p>" in header
-    # the fixture's run_dir is absolute; the page shows the run, never the operator's paths
-    assert '<p class="where">runs/t/20260101-000000</p>' in header
+    # the model comes from the reference endpoint (the first non-OpenRouter spec); the mode
+    # and the run path both moved out of the header (item 13)
+    assert "<h1>Prompt cache check: model, 3 endpoints</h1>" in header
+    assert '<p class="sub">trace t · 2026-01-01 00:00 · run abc123def456</p>' in header
+    assert "cold (nonce)" not in header
+    # the fixture's run_dir is absolute; the page shows the run, never the operator's paths,
+    # now in the footer rather than the header
+    assert '<footer class="foot"><p class="where">runs/t/20260101-000000</p></footer>' in html
     assert "/runs/" not in html
 
 
 def test_both_tables_keep_the_terminal_columns_and_short_labels() -> None:
     html = render_html(probe_document())
-    assert '<p class="caption">endpoints: or:model@&lt;provider&gt;</p>' in html
+    # the shared prefix is not a stray spec string under the title any more: the table's own
+    # caption says what the folded `@tag` labels stand for (F10).
+    assert '<p class="caption">endpoints: or:model@&lt;provider&gt;</p>' not in html
+    assert (
+        "The two @ rows go through OpenRouter, pinned to the named provider; all serve model."
+    ) in html
     endpoint_table, rung_table = html.split('<div class="scroll">')[1:3]
     assert '<th scope="col"' in endpoint_table and ">endpoint</th>" in endpoint_table
-    for column in ("hit %", "1st hit %", "cached %", "eff $/M", "TTFT ms", "tok/s"):
+    for column in (
+        "hit %",
+        "1st hit %",
+        "cached %",
+        "in $/M",
+        "cache $/M",
+        "eff $/M",
+        "this trace $",
+        "TTFT ms",
+        "tok/s",
+    ):
         assert f">{column}</th>" in endpoint_table
-    # `drift` is constant `-` across this fixture's three specs, so the HTML page drops it
-    # (item 6); the shared text table still carries it, which is what `test_report.py` checks.
+    # `drift` and `errors` are constant across this fixture's three specs, so the HTML page
+    # drops them both (item 6); the shared text table still carries them, which is what
+    # `test_report.py` checks.
     assert ">drift</th>" not in endpoint_table
+    assert ">errors</th>" not in endpoint_table
     assert "<td>@novita</td>" in endpoint_table and "<td>@gmicloud</td>" in endpoint_table
-    for column in ("rung", "prompt", "hits", "ttl"):
+    for column in ("turn", "prompt", "hits", "ttl"):
         assert f">{column}</th>" in rung_table
-    # `cached cold` is constant `0` across this fixture's rungs, so the HTML page drops it too.
+    # `cached cold` and `errors` are constant `0` across this fixture's rungs, so the HTML
+    # page drops them too.
     assert ">cached cold</th>" not in rung_table
+    assert ">errors</th>" not in rung_table
     assert "<td>20,410</td>" not in endpoint_table  # the numbers stay as the terminal formats them
     assert "<td>20410</td>" in rung_table
 
 
-def test_answer_line_names_cheapest_and_priciest_endpoint() -> None:
+def test_price_columns_stay_in_in_cache_eff_order_with_this_trace_right_after_eff() -> None:
+    html = render_html(probe_document())
+    endpoint_table = html.split('<div class="scroll">')[1]
+    header = endpoint_table[: endpoint_table.index("</thead>")]
+    assert re.search(
+        r">in \$/M</th>.*>cache \$/M</th>.*>eff \$/M</th>.*>this trace \$</th>", header
+    )
+    row = endpoint_table[endpoint_table.index("<td>@novita</td>") :]
+    # in $/M, cache $/M, eff $/M, this trace $ -- in that order, right after each other
+    assert re.search(r"<td>0\.300</td><td>0\.030</td><td>0\.041</td><td>\$0\.0021</td>", row)
+
+
+def test_endpoint_table_has_a_group_header_row_over_cache_price_and_speed() -> None:
+    """Item 3: a colspan row above the column header names the cache/price/speed groups;
+    `endpoint`, `errors` and `drift` are not grouped."""
+    html = render_html(probe_document())
+    endpoint_table = html.split('<div class="scroll">')[1]
+    groups = endpoint_table[: endpoint_table.index("</tr>")]
+    assert '<tr class="groups"><th></th>' in groups
+    assert '<th colspan="3" class="group-start">cache</th>' in groups
+    assert '<th colspan="4" class="group-start">price</th>' in groups
+    assert '<th colspan="4" class="group-start">speed</th>' in groups
+
+
+def test_method_sentence_states_turn_count_sizes_and_repeat_range() -> None:
+    """Item 4: the method sentence names how many turns, how big and how many repeats, built
+    from this run's own options and rung sizes rather than a fixed template."""
     html = render_html(probe_document())
     assert (
-        '<p class="answer">evil&lt;spec&gt;:model-z costs $0.030 per 1M prompt tokens on '
-        "this trace; @gmicloud costs $0.300, about 10x more, for a session like this trace "
-        "that is $0.0015 vs $0.0150.</p>" in html
+        '<p class="method">The run replayed 2 turns of a recorded coding session (20k and '
+        "41k prompt tokens) against each endpoint: one uncached request to write the cache, "
+        "then 1 repeat request to read it.</p>" in html
     )
 
 
-def test_answer_line_says_so_when_every_endpoint_errored() -> None:
+def test_endpoint_table_caption_is_static_and_there_is_no_answer_paragraph() -> None:
+    """Item 1: the old one-sentence verdict is gone; the caption is a fact about the table
+    that survives however the run's own numbers turn out, not a claim about one row."""
+    html = render_html(probe_document())
+    assert f'<p class="caption">{ENDPOINT_CAPTION_HTML}' in html
+    assert '<p class="answer"' not in html
+
+
+def test_endpoint_table_caption_does_not_change_when_every_endpoint_errored() -> None:
     document = probe_document()
     entries = [entry for entry in map(as_document, as_list(document["summaries"]) or []) if entry]
     document["summaries"] = [{**entry, "eff_per_m_prompt": None, "errors": 1} for entry in entries]
     html = render_html(document)
-    assert (
-        '<p class="answer">Every endpoint errored on this trace, so there is no price to '
-        "compare.</p>" in html
-    )
+    assert f'<p class="caption">{ENDPOINT_CAPTION_HTML}' in html
+    assert '<p class="answer"' not in html
 
 
 def test_this_trace_column_reports_what_a_session_like_the_trace_would_bill() -> None:
@@ -293,16 +350,24 @@ def test_this_trace_column_reports_what_a_session_like_the_trace_would_bill() ->
     assert "<td>$0.0021</td>" in endpoint_table  # @novita: eff $/M x the trace's own tokens
     assert "<td>$0.0150</td>" in endpoint_table  # @gmicloud
     assert "<td>$0.0015</td>" in endpoint_table  # evil<spec>:model-z
-    spend = html.split('<p class="caption">spent ')
-    assert len(spend) == 2 and "<li>spent" not in html  # a fact line, not a lone bullet
+    # item 12.5: the run's own spend is a caveat sentence now, not a `spent $X` table caption.
+    assert (
+        "This run cost $0.1776 in API spend; the estimate before running, assuming no cache "
+        "hit, was $0.4851." in html
+    )
+    assert '<p class="caption">spent ' not in html
 
 
-def test_dropped_columns_are_named_once_even_when_dropped_from_both_tables() -> None:
+def test_dropped_columns_are_silently_omitted_not_announced() -> None:
+    """Item 12.7: the old `omitted: no values` line is gone; a constant column just isn't
+    there, in either table, and nothing on the page says so."""
     html = render_html(probe_document())
-    # `errors` is constant `0` in this fixture's endpoint table and its rung table alike;
-    # the reader is told once, not once per table.
-    assert '<p class="caption">errors, drift and cached cold omitted: no values</p>' in html
-    assert html.count("omitted: no values") == 1
+    endpoint_table, rung_table = html.split('<div class="scroll">')[1:3]
+    assert ">errors</th>" not in endpoint_table
+    assert ">drift</th>" not in endpoint_table
+    assert ">cached cold</th>" not in rung_table
+    assert ">errors</th>" not in rung_table
+    assert "omitted" not in html
 
 
 def test_html_report_reads_legacy_ttl_offset_field() -> None:
@@ -323,15 +388,117 @@ def test_html_report_reads_legacy_ttl_offset_field() -> None:
     assert "60s:1" in html
 
 
-def test_each_probe_table_carries_its_own_heading() -> None:
+def test_drift_cell_is_empty_when_clean_and_a_provider_marker_reads_served_by() -> None:
+    """Item 5: `-` means "not measured"; a clean row's drift cell is simply empty, and the
+    `provider` marker is spelled out as `served by <name>` rather than left as a category."""
+    document = probe_document()
+    entries = [entry for entry in map(as_document, as_list(document["summaries"]) or []) if entry]
+    document["summaries"] = [
+        {**entries[0], "drift": "provider", "served": "SiliconFlow"},
+        *entries[1:],
+    ]
+    html = render_html(document)
+    endpoint_table = html.split('<div class="scroll">')[1]
+    assert ">drift</th>" in endpoint_table  # no longer constant once one row drifts
+    assert "<td>served by SiliconFlow</td>" in endpoint_table
+    assert "<td></td>" in endpoint_table  # the two clean rows' cells are empty, not `-`
+
+
+def test_drift_cell_names_another_provider_when_served_is_missing() -> None:
+    """A `provider` marker with no served name still names something a reader can act on,
+    rather than an empty cell that reads as clean. `served` defaults to `-`, which
+    `_drift_cell` treats the same as missing, so leaving the field out reaches that branch."""
+    document = probe_document()
+    entries = [entry for entry in map(as_document, as_list(document["summaries"]) or []) if entry]
+    first = {key: value for key, value in entries[0].items() if key != "served"}
+    document["summaries"] = [{**first, "drift": "provider"}, *entries[1:]]
+    html = render_html(document)
+    endpoint_table = html.split('<div class="scroll">')[1]
+    assert "<td>served by another provider</td>" in endpoint_table
+
+
+def test_hits_cell_counts_what_hit_percent_counts() -> None:
+    """Item 7: the `hits` cell's `n/total hit` counts any cached share as a hit, the same
+    count `hit %` and the cache-share chart already use, with the reads spelled out on hover."""
+
+    def _summary(label: str, records: list[dict[str, object]]) -> Document:
+        summary = summarize_probe(label, [ProbeResult.model_validate(r) for r in records])
+        return probe_summary_to_document(summary)
+
+    six_hit_one_partial = [
+        probe_record(spec_label="a", prompt_total=1_000),
+        *[
+            probe_record(
+                spec_label="a", role="warm", attempt=i, cached=1_000, prompt_total=1_000, seq=i + 1
+            )
+            for i in range(1, 6)
+        ],
+        probe_record(spec_label="a", role="warm", attempt=6, cached=500, prompt_total=1_000, seq=7),
+    ]
+    four_hit_two_failed = [
+        probe_record(spec_label="b", prompt_total=1_000),
+        *[
+            probe_record(
+                spec_label="b", role="warm", attempt=i, cached=1_000, prompt_total=1_000, seq=i + 1
+            )
+            for i in range(1, 4)
+        ],
+        probe_record(
+            spec_label="b", role="warm", attempt=4, cached=1_000, prompt_total=1_000, seq=5
+        ),
+        probe_record(
+            spec_label="b", role="warm", attempt=5, status=502, error="bad gateway", seq=6
+        ),
+        probe_record(
+            spec_label="b", role="warm", attempt=6, status=502, error="bad gateway", seq=7
+        ),
+    ]
+    document: Document = {
+        "run_dir": "/runs/t/20260101-000000",
+        "trace": "t",
+        "conversation": "c1",
+        "created": "20260101-000000",
+        "run_hex": None,
+        "protocol": "probe",
+        "options": {
+            "rungs": [1],
+            "repeats": [6],
+            "gap_s": 1.0,
+            "warm": False,
+            "throughput": False,
+            "ttl_s": None,
+        },
+        "summaries": [_summary("a", six_hit_one_partial), _summary("b", four_hit_two_failed)],
+        "output_file": None,
+        "changed": False,
+    }
+    html = render_html(document)
+    assert (
+        '<td title="hit · hit · hit · hit · hit · hit, 50% cached">6/6 hit, 1 partial</td>' in html
+    )
+    assert '<td title="hit · hit · hit · hit · failed · failed">4/6 hit, 2 failed</td>' in html
+
+
+def test_the_page_follows_the_new_reading_order() -> None:
+    """Item 11: header, method sentence, endpoint table, the two charts, then the per-turn
+    table closed inside a `<details>`, then the caveats and the footer."""
     html = render_html(probe_document())
     assert html.count('<section class="table">') == 2
+    header = html.index("<header")
+    method = html.index('<p class="method">')
     provider = html.index("<h3>Per provider</h3>")
-    rung = html.index("<h3>Per rung</h3>")
-    # The rows are sorted cheapest-first; without this caption the order reads as arbitrary.
-    caption = html.index('<p class="caption">Endpoints, cheapest effective prompt price first.</p>')
-    assert provider < caption < rung
-    assert html.index('class="scroll"', provider) < rung  # the first table sits under its own head
+    caption = html.index(f'<p class="caption">{ENDPOINT_CAPTION_HTML}')
+    cache_chart = html.index("<h3>Share of prompt tokens served from cache, per turn</h3>")
+    cost_chart = html.index("<h3>What a session like this one bills</h3>")
+    details = html.index('<details class="turns"><summary>Per turn: every request</summary>')
+    caveats = html.index('<section class="caveats">')
+    footer = html.index('<footer class="foot">')
+    assert (
+        header < method < provider < caption < cache_chart < cost_chart < details < caveats < footer
+    )
+    assert "<h3>Per rung</h3>" not in html
+    assert "<h2>Cache and cost</h2>" not in html
+    assert html.index('class="scroll"', provider) < details  # the endpoint table under its own head
 
 
 def test_charts_scale_to_the_page_instead_of_clipping() -> None:
@@ -371,7 +538,8 @@ def test_hit_rate_chart_has_one_bar_per_spec_per_rung() -> None:
     assert len(charts) == 2
     # novita measured two rungs, gmicloud and the third spec one each
     assert _bars(charts[0]) == 4
-    assert _bars(charts[1]) == 3
+    # the session-cost chart draws a light and a dark bar for every priced endpoint
+    assert _bars(charts[1]) == 6
 
 
 def test_rungs_share_one_x_label_and_the_different_sizes_do_not_split_them() -> None:
@@ -379,27 +547,32 @@ def test_rungs_share_one_x_label_and_the_different_sizes_do_not_split_them() -> 
     html = render_html(probe_document())
     bars = _SVG.findall(html)[0]
     labels = re.findall(r'<text class="tick mid"[^>]*>([^<]+)</text>', bars)
-    assert labels == ["rung 1 · 20k", "rung 2 · 41k"]
+    # item 8: "rung" becomes "turn" in the HTML page's own chart and column labels.
+    assert labels == ["turn 1 · 20k", "turn 2 · 41k"]
     assert "9k" not in bars
 
 
 def test_the_grouped_chart_names_both_axes() -> None:
     bars = _SVG.findall(render_html(probe_document()))[0]
     assert '<text class="axis-title" x="46.0" y="22.0">share %</text>' in bars
-    assert '<text class="axis-title" x="1060.0" y="334.0">prompt size (rung)</text>' in bars
+    assert '<text class="axis-title" x="1060.0" y="334.0">prompt size (turn)</text>' in bars
     assert bars.count('class="axis-title"') == 2
 
 
 def test_a_clipped_row_label_keeps_its_full_text_on_hover() -> None:
+    """`_row_label`, shared by every horizontal-bar chart; `horizontal_bars` itself is dead
+    code (no caller since item 10's paired chart replaced the price bars) and was deleted, so
+    this exercises the shared label-clipping through `paired_horizontal_bars` instead."""
     long_label = "openrouter:deepseek/deepseek-v4.1-flash@novita"
-    row = BarRow(series=0, label=long_label, value=0.041, value_text="0.041", title="cost")
-    svg = horizontal_bars([row], label="effective prompt price per spec")
+    bar = PairedBar(value=0.041, value_text="0.041", title="cost")
+    row = PairedBarRow(series=0, label=long_label, light=bar, dark=bar)
+    svg = paired_horizontal_bars([row], label="session bill per endpoint")
     assert f"<title>{long_label}</title>" in svg
     assert "…" in svg
 
-    short = horizontal_bars([replace(row, label="@novita")], label="effective prompt price")
-    # the chart's own title and the bar's, none for a label that fits
-    assert short.count("<title>") == 2
+    short = paired_horizontal_bars([replace(row, label="@novita")], label="session bill")
+    # the chart's own title plus one per bar half (light and dark), none for a label that fits
+    assert short.count("<title>") == 3
 
 
 def test_hit_rate_chart_keeps_a_slot_per_spec_and_labels_every_bar() -> None:
@@ -415,33 +588,54 @@ def test_hit_rate_chart_keeps_a_slot_per_spec_and_labels_every_bar() -> None:
     assert '<text class="tick mid"' in bars
 
 
-def test_cost_chart_is_horizontal_bars_in_the_same_series_order() -> None:
+def test_session_cost_chart_pairs_a_listed_bar_and_a_measured_bar_per_endpoint() -> None:
+    """Item 10: the price-bar chart is gone; each endpoint gets two bars, same series colour,
+    one at the listed cache price for a session like the trace and one at what it measured."""
     html = render_html(probe_document())
     cost = _SVG.findall(html)[1]
-    assert _bars(cost) == 3
-    assert "eff $0.041/M prompt" in cost
-    assert "listed $0.300/M in" in cost
-    assert "hit-weighted h 95.8%" in cost
+    assert _bars(cost) == 6  # a light and a dark bar per endpoint
+    assert 'class="bar light s1"' in cost and 'class="bar s1"' in cost
+    assert "listed $0.030/M cache read" in cost
+    assert "eff $0.041/M prompt, hit-weighted h 95.8%" in cost
+    assert "price source: OpenRouter listing" in cost
     assert '<text class="row-label" x="0.0"' in cost
+    # the listed bar and the measured bar both show a session-shaped dollar amount, not $/M
+    assert ">$0.0015</text>" in cost and ">$0.0021</text>" in cost and ">$0.0150</text>" in cost
+    assert "/M<" not in cost  # no $/M label leaks into a value node, only into the titles
 
 
-def test_prices_show_three_decimals_in_the_table_and_the_chart_label() -> None:
+def test_session_cost_chart_has_its_own_legend_and_caption() -> None:
+    html = render_html(probe_document())
+    assert (
+        '<ul class="legend"><li><span class="swatch shade-light"></span>at the listed cache '
+        'price, every repeat a hit</li><li><span class="swatch shade-dark"></span>at the '
+        "measured hit rate</li></ul>" in html
+    )
+    assert (
+        "Light: what the price list promises when the cache always hits. Dark: what this run "
+        "measured. The difference is what the misses cost." in html
+    )
+
+
+def test_prices_show_three_decimals_in_the_endpoint_table() -> None:
     html = render_html(probe_document())
     endpoint_table = html.split('<div class="scroll">')[1]
     assert "<td>0.041</td>" in endpoint_table  # eff $/M, not 0.0 or 0.04
     assert "<td>0.300</td>" in endpoint_table  # in $/M
-    cost = _SVG.findall(html)[1]
-    assert ">$0.041/M<" in cost
-    assert ">$0.300/M<" in cost
+    assert "<td>0.030</td>" in endpoint_table  # cache $/M
 
 
-def test_a_spec_without_a_price_keeps_its_row_rather_than_vanishing() -> None:
-    """An unknown price reads as `-` next to the other specs, never as a missing bar."""
+def test_a_spec_without_a_price_gets_a_dash_row_in_the_session_cost_chart() -> None:
+    """Item 10: a row with either half unknown draws no bars at all, never a lone bar next
+    to an empty slot that would read as a zero it never measured."""
     document = probe_document()
     entries = [entry for entry in map(as_document, as_list(document["summaries"]) or []) if entry]
-    document["summaries"] = [{**entries[0], "eff_per_m_prompt": None}, *entries[1:]]
+    document["summaries"] = [
+        {**entries[0], "cache_read_price": None, "session_prompt_usd": None},
+        *entries[1:],
+    ]
     cost = _SVG.findall(render_html(document))[1]
-    assert _bars(cost) == 2  # the priced specs
+    assert _bars(cost) == 4  # the two fully priced specs keep both their bars
     assert cost.count('class="row-label"') == 3  # every spec keeps its label
     assert '<text class="value"' in cost and ">-</text>" in cost
 
@@ -454,7 +648,7 @@ def test_specs_past_the_eight_slots_stay_in_the_tables_and_are_named() -> None:
     html = render_html(document)
     charts = _SVG.findall(html)
     assert _bars(charts[0]) == MAX_SERIES * 2  # the fixture entry's two rungs, eight times
-    assert _bars(charts[1]) == MAX_SERIES
+    assert _bars(charts[1]) == MAX_SERIES * 2  # a light and a dark bar for each charted spec
     assert "8 of 9 endpoints are charted; the rest are in the tables above: @r8" in html
     assert "<td>@r0</td>" in html and "<td>@r8</td>" in html
 
@@ -494,10 +688,32 @@ def test_full_replay_curve_carries_the_cached_fraction_of_every_turn() -> None:
 # --- caveats and the error-reason note -----------------------------------------
 
 
-def test_caveats_heading_and_bold_endpoint_label() -> None:
+def test_a_warm_runs_page_states_the_cache_mode_too() -> None:
+    """The open item from round 1's review: a cold run's page says every hit was written by
+    this run; a warm run is exactly the case where a hit may not have been, and the page must
+    say so too, not just the `warm ms` column label."""
+    document = probe_document()
+    options = as_document(document["options"]) or {}
+    document["options"] = {**options, "warm": True}
+    html = render_html(document)
+    # `escape()` renders the quotes as `&quot;`, the same as every other caveat sentence.
+    sentence = (
+        "&quot;warm&quot;: the cache was not reset between requests, so a hit in this table "
+        "may have been written by earlier traffic, not by this run."
+    )
+    assert sentence in html
+    assert html.count(sentence) == 1
+
+
+def test_caveats_heading_and_plain_endpoint_label() -> None:
     html = render_html(failing_probe_document())
     assert "<h2>Caveats</h2>" in html
-    assert '<li id="cav-1"><strong>@novita</strong> 1 warm read failed (HTTP 502)</li>' in html
+    # the fixed ordering (item 12) puts the nonce and blanks caveats ahead of this one, so
+    # the anchor is no longer necessarily `cav-1`; the content is what a reader looks for.
+    assert re.search(r'<li id="cav-\d+">@novita 1 warm read failed \(HTTP 502\)</li>', html)
+    # every caveat names its endpoint the same way: inside the sentence, never bolded
+    caveats = html[html.index('<section class="caveats">') :]
+    assert "<strong>" not in caveats
 
 
 def test_a_2xx_carrying_an_error_payload_is_not_named_after_its_status() -> None:
@@ -520,6 +736,100 @@ def test_a_failed_warm_read_gets_an_error_reason_note() -> None:
     `errors` count is never left unexplained next to the tables."""
     html = render_html(failing_probe_document())
     assert "1 warm read failed (HTTP 502)" in html
+
+
+def test_burst_caveat_merges_endpoints_that_share_the_same_burst_turn() -> None:
+    """Item 12.3: two endpoints whose streamed request burst on the same turn get one shared
+    sentence naming both, instead of one line repeated per endpoint."""
+
+    def _summary(label: str, records: list[dict[str, object]]) -> Document:
+        summary = summarize_probe(label, [ProbeResult.model_validate(r) for r in records])
+        return probe_summary_to_document(summary)
+
+    novita = [
+        probe_record(spec_label="or:model@novita", prompt_total=20_000),
+        probe_record(
+            spec_label="or:model@novita",
+            role="warm",
+            attempt=1,
+            cached=20_000,
+            prompt_total=20_000,
+            seq=2,
+        ),
+        probe_record(
+            spec_label="or:model@novita", role="stream", ttft_ms=500.0, fingerprint="tok", seq=3
+        ),
+    ]
+    gmicloud = [
+        probe_record(spec_label="or:model@gmicloud", provider="GMICloud", prompt_total=20_000),
+        probe_record(
+            spec_label="or:model@gmicloud",
+            role="warm",
+            attempt=1,
+            cached=20_000,
+            prompt_total=20_000,
+            seq=2,
+        ),
+        probe_record(
+            spec_label="or:model@gmicloud", role="stream", ttft_ms=600.0, fingerprint="tok", seq=3
+        ),
+    ]
+    document: Document = {
+        "run_dir": "/runs/t/20260101-000000",
+        "trace": "t",
+        "conversation": "c1",
+        "created": "20260101-000000",
+        "run_hex": None,
+        "protocol": "probe",
+        "options": {
+            "rungs": [1],
+            "repeats": [1],
+            "gap_s": 1.0,
+            "warm": False,
+            "throughput": True,
+            "ttl_s": None,
+        },
+        "summaries": [_summary("or:model@novita", novita), _summary("or:model@gmicloud", gmicloud)],
+        "output_file": None,
+        "changed": False,
+    }
+    html = render_html(document)
+    # `escape()` renders the apostrophe as `&#x27;`, the same as every other caveat sentence.
+    assert (
+        "@novita and @gmicloud delivered the 20k-token turn&#x27;s answer in one burst, so "
+        "tok/s for that turn is -; their tok/s in the summary is the median of the other "
+        "turns." in html
+    )
+    assert html.count("delivered the 20k-token turn&#x27;s answer in one burst") == 1
+
+
+def test_run_cost_sentence_names_the_precheck_share_when_there_was_one() -> None:
+    """Item 12.5: the same fields `spend_lines` reads, as one caveat sentence; the pre-check
+    share is only mentioned when the run actually spent something checking availability."""
+    without = render_html(probe_document())
+    assert (
+        "This run cost $0.1776 in API spend; the estimate before running, assuming no cache "
+        "hit, was $0.4851." in without
+    )
+    assert "availability check" not in without
+
+    with_precheck = probe_document()
+    with_precheck["precheck"] = {"requests": 3, "spend_usd": 0.0012, "worst_case_usd": 0.003}
+    html = render_html(with_precheck)
+    assert (
+        "This run cost $0.1776 in API spend ($0.0012 of it on the availability check); the "
+        "estimate before running, assuming no cache hit, was $0.4851." in html
+    )
+
+
+def test_run_cost_sentence_ends_plainly_without_a_worst_case() -> None:
+    """A run whose worst case is unknown gets a full stop instead of the estimate clause,
+    rather than a sentence with a hole where the number would go."""
+    document = probe_document()
+    del document["worst_case_usd"]
+    html = render_html(document)
+    assert "This run cost $0.1776 in API spend." in html
+    assert "estimate before running" not in html
 
 
 @pytest.mark.parametrize("document", [probe_document(), replay_document()])

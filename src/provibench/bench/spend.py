@@ -16,12 +16,15 @@ from collections.abc import Mapping, Sequence
 
 from provibench.bench.estimate import SpecPrices
 from provibench.bench.probe_models import ProbeResult, is_served
+from provibench.core.documents import Document, as_document
 
 __all__ = [
+    "dash_money",
     "precheck_spend",
     "precheck_worst_case",
     "record_cost",
     "record_worst_case",
+    "run_cost_sentence",
     "run_worst_case_usd",
     "spec_spend",
     "total_spend",
@@ -142,3 +145,34 @@ def total_spend(amounts: Sequence[float | None]) -> float | None:
     """
     known = [amount for amount in amounts if amount is not None]
     return sum(known) if known else None
+
+
+def dash_money(value: object) -> str:
+    """An amount as `$0.1234` for a rendered document field, or `-` when it is unknown."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return "-"
+    return f"${value:.4f}"
+
+
+def run_cost_sentence(document: Document) -> str | None:
+    """Item 12.5's caveat: one sentence from the same fields `commands.probe_spend.spend_lines`
+    reads, for the HTML page's caveats section (the text report keeps `spend_lines`'s own
+    closing lines). Lives here, not next to `spend_lines`, because `probe_caveats.py` (in
+    `bench/`) needs it and `bench/` must not import from `commands/`.
+    """
+    spend = document.get("spend_usd")
+    if not isinstance(spend, int | float):
+        return None
+    precheck = as_document(document.get("precheck"))
+    precheck_spend = precheck.get("spend_usd") if precheck else None
+    sentence = f"This run cost {dash_money(spend)} in API spend"
+    if isinstance(precheck_spend, int | float) and precheck_spend > 0:
+        sentence += f" ({dash_money(precheck_spend)} of it on the availability check)"
+    worst = document.get("worst_case_usd")
+    if isinstance(worst, int | float):
+        sentence += (
+            f"; the estimate before running, assuming no cache hit, was {dash_money(worst)}."
+        )
+    else:
+        sentence += "."
+    return sentence

@@ -167,6 +167,20 @@ def cache_mode_note(warm: bool) -> str:
     return "warm" if warm else "cold (nonce)"
 
 
+def cache_mode_sentence(warm: bool) -> str:
+    """`cache_mode_note` in words: the run-wide fact both the HTML caveats and the text
+    report's first note line state once, instead of the short per-endpoint form."""
+    if warm:
+        return (
+            '"warm": the cache was not reset between requests, so a hit in this table may '
+            "have been written by earlier traffic, not by this run."
+        )
+    return (
+        '"cold (nonce)": each request carried a unique marker, so every cache hit in this '
+        "table was written by this run and none came from earlier traffic."
+    )
+
+
 SUMMARY_COLUMNS = (
     "label",
     "turns ok/err",

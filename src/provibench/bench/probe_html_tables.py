@@ -1,123 +1,300 @@
 """How the probe's two tables are reshaped for the HTML page: money, relabelling, dropped
-columns, and the `hits` cell -- none of it touching the shared `TableBlock` that
-`probe_tables.probe_blocks` hands to the text and Markdown renderers too.
+columns, the `hits` cell and the drift cell -- none of it touching the shared `TableBlock`
+that `probe_tables.probe_blocks` hands to the text and Markdown renderers too.
 
 Kept apart from `html_report` because this is the part with decisions in it: which columns
-count as constant enough to drop, what counts as a "full" cache hit, and what the four
-hardest column names mean to someone who has not opened the README. The output is still
-`TableBlock` data, not markup, so it renders through the same table function the rest of
+count as constant enough to drop, what counts as a "full" cache hit, and what the hardest
+column names mean to someone who has not opened the README. The output is still `TableBlock`
+data or plain strings, not markup, so it renders through the same table function the rest of
 the page uses.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from html import escape
 
-from provibench.bench.probe_answer import join_and, trace_money
+from provibench.bench.labels import size_label
 from provibench.bench.probe_summary import ProbeSummary, RungSummary
 from provibench.bench.probe_tables import TableBlock
 
 __all__ = [
-    "BLANKS_LINE",
-    "ENDPOINT_HELP",
-    "GLOSSARY",
-    "RUNG_HELP",
-    "dropped_line",
+    "BLANKS_TEXT",
+    "ENDPOINT_CAPTION_HTML",
+    "GROUPS",
+    "endpoint_caption_html",
+    "endpoint_help",
     "endpoint_view",
+    "group_header_row",
+    "rung_help",
     "rung_view",
+    "trace_money",
 ]
 
 _HIT_FULL = 0.98
 """Mirrors `probe_tables._HIT_FULL`: the cached fraction at or above which a read counts as
-a full cache hit for the `hits` cell's `N/M cached` count."""
+a full cache hit, rather than a partial one, in the `hits` cell's words (item 7)."""
 
-_CONSTANT_PLACEHOLDERS = {"-", "0"}
+_CONSTANT_PLACEHOLDERS = {"-", "0", ""}
 """A column showing only one of these across every row teaches a reader nothing (item 6)."""
 
-GLOSSARY = (
-    "Glossary: <strong>rung</strong> — a recorded turn, probed at three prompt sizes; "
-    "<strong>cached %</strong> (share of the prompt served from the cache) — 100% means "
-    "the whole prompt was already cached; <strong>eff $/M</strong> — the real price per "
-    "1M prompt tokens at the measured hit rate; <strong>1st hit %</strong> — the share of "
-    "rungs whose first warm read after the write hit the cache: the cold-start case, and "
-    "a gap below hit % means the cache needs a few requests before it helps."
+ENDPOINT_CAPTION_HTML = (
+    "Cheapest first. A cache miss pays the input price, a hit pays the cache price; "
+    "<code>eff $/M</code> is what this endpoint charged at its measured hit rate."
 )
+"""The endpoint table's caption (item 1): a fact about the table, not a verdict on one row,
+so it survives however the run's own numbers turn out."""
 
-BLANKS_LINE = "<code>-</code> means not measured; the caveats say why."
 
-ENDPOINT_HELP: dict[str, str] = {
-    "endpoint": "The target, model and pinned provider this row measured.",
-    "hit %": "Warm reads that found any part of the prefix, divided by warm reads served.",
-    "1st hit %": (
-        "The same fraction, counting only each rung's first warm read after the write: the "
-        "cold-start case (a fresh session, a restart, a gateway switching providers)."
-    ),
-    "cached %": (
-        "On a hit, the share of the prompt served from the cache; 100% means the whole prompt."
-    ),
-    "eff $/M": (
-        "Hit-weighted prompt price per 1M tokens: (1 - h) x input + h x cache read, with h "
-        "over every warm read, the steady state of a long session."
-    ),
-    "in $/M": "The listed input price used for eff $/M; repriced when the endpoint is unpinned.",
-    "cold ms (rung 1)": "The first rung's cold prefill latency, in milliseconds.",
-    "warm ms (rung 1)": "The first rung's warm prefill latency, in milliseconds.",
-    "TTFT ms": "median across rungs",
-    "tok/s": "median across rungs",
-    "errors": "Requests without a usable answer; a failed cold write is not a cache miss.",
-    "drift": "Provider, model or token-count drift versus the reference endpoint; - means none.",
-    "this trace $": "What this endpoint would bill for a session shaped like this trace.",
+def endpoint_caption_html(labels: Sequence[str], model: str, *, folded: bool) -> str:
+    """The table's caption, plus what the folded `@tag` labels stand for when they are folded.
+
+    The text report keeps its `endpoints: <shared prefix>` line above the table; the page
+    says the same thing here, in the caption, as a sentence -- a spec string nobody typed,
+    printed under the title, is not a fact a reader can do anything with.
+    """
+    pinned = [label for label in labels if label.startswith("@")]
+    if not folded or not pinned:
+        return ENDPOINT_CAPTION_HTML
+    subject = "row goes" if len(pinned) == 1 else "rows go"
+    serve = "it serves" if len(pinned) == 1 else "all serve"
+    return (
+        f"{ENDPOINT_CAPTION_HTML} The {_count_word(len(pinned))} @ {subject} through "
+        f"OpenRouter, pinned to the named provider; {serve} {escape(model)}."
+    )
+
+
+BLANKS_TEXT = "<code>-</code> in a cell means not measured; the caveats say why."
+"""What `-` means on this page, said once, now among the caveats instead of a stray line
+between the two tables (item 4)."""
+
+_ENDPOINT_TOOLTIP = (
+    "Who served the requests: the API, the model and, for OpenRouter rows, the pinned provider."
+)
+_ERRORS_TOOLTIP = "Requests without a usable answer; a failed cold write is not a cache miss."
+
+_NUMBER_WORDS: dict[int, str] = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+
+GROUPS: dict[str, tuple[str, ...]] = {
+    "cache": ("hit %", "1st hit %", "cached %"),
+    "price": ("in $/M", "cache $/M", "eff $/M", "this trace $"),
 }
+"""Which named group a column belongs to; `cold ms`/`warm ms` carry a size suffix that
+varies per run, so `_group_of` matches them by prefix instead of by exact name."""
 
-RUNG_HELP: dict[str, str] = {
-    "endpoint": ENDPOINT_HELP["endpoint"],
-    "rung": "A recorded turn, probed at the smallest, middle and largest size.",
-    "prompt": "The cold request's prompt size, in tokens.",
-    "cached cold": "What the cold write read back; a non-zero value indicates contamination.",
-    "hits": "How many of this rung's warm reads came back fully cached.",
-    "cold ms": "This rung's cold prefill latency, in milliseconds.",
-    "warm ms": "This rung's warm prefill latency, in milliseconds.",
-    "TTFT ms": "Time to the first streamed token, for this rung.",
-    "tok/s": "Output tokens per second, for this rung.",
-    "errors": ENDPOINT_HELP["errors"],
-    "ttl": "One cell per --ttl offset: whether the cache was still there after that wait.",
-}
+
+def trace_money(value: float | None) -> str:
+    """A trace-shaped dollar amount as the reader thinks in it: `$0.0060`, not `$/M`.
+
+    Four decimals, always: this is the same `session_prompt_usd` the text report already
+    prints through `commands.probe_spend`, so the two renderers would otherwise disagree
+    over one number. A fixed count is also what a column is read down -- trimming zeros put
+    `$0.006` and `$0.0056` in neighbouring rows, which has to be compared digit by digit --
+    and at three decimals a cheap session rounds to `$0.000`, which reads as free.
+    """
+    return "-" if value is None else f"${value:.4f}"
+
+
+def _count_word(count: int) -> str:
+    return _NUMBER_WORDS.get(count, str(count))
+
+
+def _trace_size_words(tokens: int) -> str:
+    """A trace's total prompt tokens as the tooltip states it: `1.8M`, not `1804855`."""
+    if tokens >= 1_000_000:
+        return f"{tokens / 1e6:.1f}M"
+    return f"{round(tokens / 1000)}k"
+
+
+def _reference_cold_size(summaries: Sequence[ProbeSummary]) -> int:
+    """The reference endpoint's first rung prompt size, or `0` when none measured one."""
+    ranked = sorted(summaries, key=lambda summary: not summary.reference)
+    for summary in ranked:
+        if summary.rungs and summary.rungs[0].prompt_cold > 0:
+            return summary.rungs[0].prompt_cold
+    return 0
+
+
+def _cold_warm_labels(size: int) -> tuple[str, str]:
+    """The endpoint table's `cold ms`/`warm ms` headers, sized when a reference size is known."""
+    if not size:
+        return "cold ms", "warm ms"
+    label = size_label(size)
+    return f"cold ms · {label}", f"warm ms · {label}"
+
+
+def endpoint_help(summaries: Sequence[ProbeSummary], trace_prompt_tokens: object) -> dict[str, str]:
+    """Every endpoint-table tooltip, built for this run's own turn count and trace size."""
+    turns = len({rung.rung for summary in summaries for rung in summary.rungs})
+    turns_word = _count_word(turns) if turns else "each"
+    size = _reference_cold_size(summaries)
+    cold_label, warm_label = _cold_warm_labels(size)
+    cold_text = (
+        f"Time to answer the first, uncached request at the {size_label(size)}-token turn."
+        if size
+        else "Time to answer the first, uncached request at this endpoint's smallest turn."
+    )
+    trace_text = (
+        f"Prompt bill for a session like the recorded one "
+        f"({_trace_size_words(trace_prompt_tokens)} prompt tokens) at this endpoint's eff $/M."
+        if isinstance(trace_prompt_tokens, int) and trace_prompt_tokens > 0
+        else "Prompt bill for a session like the recorded one at this endpoint's eff $/M."
+    )
+    return {
+        "endpoint": _ENDPOINT_TOOLTIP,
+        "hit %": "Of all repeat requests, the share the cache answered at least in part.",
+        "1st hit %": (
+            "The same, counting only the first repeat after each cache write: what a fresh "
+            "session or a restart sees. A gap below hit % means the cache needs a few "
+            "requests before it helps."
+        ),
+        "cached %": (
+            "When the cache hit, the share of the prompt it covered; 100 means the whole prompt."
+        ),
+        "in $/M": "Listed price per 1M input tokens: what a cache miss costs.",
+        "cache $/M": "Listed price per 1M cached prompt tokens: what a cache hit costs.",
+        "eff $/M": (
+            "Price per 1M prompt tokens at the measured hit rate: misses pay the input "
+            "price, hits the cache price, weighted over every repeat request."
+        ),
+        cold_label: cold_text,
+        warm_label: (
+            "Time to answer the same request once its prompt was cached. The gap to cold "
+            "ms is what the cache saves in latency."
+        ),
+        "TTFT ms": (
+            f"Time to first token on a separate streamed request, median over the "
+            f"{turns_word} turns."
+        ),
+        "tok/s": (
+            f"Output tokens per second on that streamed request, median over the "
+            f"{turns_word} turns."
+        ),
+        "errors": _ERRORS_TOOLTIP,
+        "drift": (
+            "Whether the endpoint answered as expected: same provider as pinned, same "
+            "model, same token count as the reference row. Empty means yes."
+        ),
+        "this trace $": trace_text,
+    }
+
+
+def rung_help() -> dict[str, str]:
+    """Every per-turn-table tooltip: static, since each row is read against its own turn."""
+    return {
+        "endpoint": _ENDPOINT_TOOLTIP,
+        "turn": "One turn of the recorded session, with its prompt size.",
+        "prompt": "Prompt size of the uncached request, in tokens.",
+        "cached cold": "What the cold write read back; a non-zero value indicates contamination.",
+        "hits": (
+            "Of this turn's repeat requests, how many the cache answered; a partial hit is "
+            "one where only part of the prompt was cached."
+        ),
+        "cold ms": "Time to answer this turn's first, uncached request.",
+        "warm ms": "Time to answer this turn's repeat request, once its prompt was cached.",
+        "TTFT ms": "Time to first token on this turn's streamed request.",
+        "tok/s": "Output tokens per second on this turn's streamed request.",
+        "errors": _ERRORS_TOOLTIP,
+        "ttl": "One cell per --ttl offset: whether the cache was still there after that wait.",
+    }
+
+
+def _group_of(column: str) -> str | None:
+    """Which group header a column sits under; `speed` matches `cold ms`/`warm ms` by
+    prefix because their header carries a run-specific size suffix."""
+    for name, members in GROUPS.items():
+        if column in members:
+            return name
+    if (
+        column.startswith("cold ms")
+        or column.startswith("warm ms")
+        or column
+        in (
+            "TTFT ms",
+            "tok/s",
+        )
+    ):
+        return "speed"
+    return None
+
+
+def group_header_row(columns: Sequence[str]) -> str:
+    """The row of group headers above the endpoint table's own header (item 3)."""
+    cells: list[str] = []
+    index = 0
+    while index < len(columns):
+        group = _group_of(columns[index])
+        span = 1
+        while index + span < len(columns) and _group_of(columns[index + span]) == group:
+            span += 1
+        if group is None:
+            cells.append("<th></th>" if span == 1 else f'<th colspan="{span}"></th>')
+        else:
+            cells.append(f'<th colspan="{span}" class="group-start">{escape(group)}</th>')
+        index += span
+    return f'<tr class="groups">{"".join(cells)}</tr>'
 
 
 def endpoint_view(
     block: TableBlock, summaries: Sequence[ProbeSummary]
 ) -> tuple[TableBlock, list[str]]:
-    """The per-provider table as the HTML page shows it: relabelled, with its money column,
-    constant columns dropped -- none of it touching the shared table the text report reads."""
-    columns = (*_relabel_first_rung(block.columns), "this trace $")
+    """The per-provider table as the HTML page shows it: relabelled, with its money column
+    next to the other prices, its drift cell in words -- none of it touching the shared
+    table the text report reads."""
+    size = _reference_cold_size(summaries)
+    cold_label, warm_label = _cold_warm_labels(size)
+    relabel = {"cold ms": cold_label, "warm ms": warm_label}
+    columns = tuple(relabel.get(column, column) for column in block.columns)
+    insert_at = columns.index("eff $/M") + 1
+    columns = (*columns[:insert_at], "this trace $", *columns[insert_at:])
     rows = tuple(
-        (*row, trace_money(summary.session_prompt_usd))
+        _endpoint_row(row, summary, insert_at)
         for row, summary in zip(block.rows, summaries, strict=True)
     )
     return _drop_constant_columns(TableBlock(columns=columns, rows=rows))
 
 
-def _relabel_first_rung(columns: Sequence[str]) -> tuple[str, ...]:
-    """`cold ms`/`warm ms` are the first rung only (item 7); the rung table says as much by
-    being per-rung, but the per-provider row needs the reminder in its own header."""
-    mapping = {"cold ms": "cold ms (rung 1)", "warm ms": "warm ms (rung 1)"}
-    return tuple(mapping.get(column, column) for column in columns)
+def _endpoint_row(row: Sequence[str], summary: ProbeSummary, insert_at: int) -> tuple[str, ...]:
+    """`row` with `this trace $` inserted right after `eff $/M` and drift spelled out.
+
+    Drift is always the table's last column (`probe_tables._RUN_COLUMNS`), so the cell being
+    replaced is always `row[-1]` regardless of how many columns sit between the two.
+    """
+    before = row[:insert_at]
+    after = (*row[insert_at:-1], _drift_cell(summary))
+    return (*before, trace_money(summary.session_prompt_usd), *after)
+
+
+def _drift_cell(summary: ProbeSummary) -> str:
+    """`-` is reserved for "not measured" (item 5), so a clean row's cell is simply empty,
+    and a `provider` marker becomes the name a reader can act on rather than a category."""
+    if not summary.drift:
+        return ""
+    served = summary.served if summary.served and summary.served != "-" else "another provider"
+    words = [
+        f"served by {served}" if marker == "provider" else marker
+        for marker in summary.drift.split(",")
+    ]
+    return ", ".join(words)
 
 
 def rung_view(
     block: TableBlock, summaries: Sequence[ProbeSummary]
 ) -> tuple[TableBlock, list[str], dict[tuple[int, int], str]]:
-    """The rung table with constant columns dropped and its `hits` cell made readable."""
+    """The rung table with constant columns dropped, its `rung` column read as a turn size,
+    and its `hits` cell made readable (item 7, item 8)."""
     dropped_block, dropped = _drop_constant_columns(block)
-    reformatted, titles = _reformat_hits(dropped_block, summaries)
+    turned = _relabel_turn(dropped_block, summaries)
+    reformatted, titles = _reformat_hits(turned, summaries)
     return reformatted, dropped, titles
 
 
 def _drop_constant_columns(block: TableBlock) -> tuple[TableBlock, list[str]]:
     """Drop a column (never the label column) whose every cell is the same placeholder.
 
-    `drift` reading `-` in every row of a probe with no drift, or `cached cold` reading `0`
-    in every row of a run with no contamination, spend width teaching the reader nothing.
+    `drift` reading empty in every row of a probe with no drift, or `cached cold` reading
+    `0` in every row of a run with no contamination, teaches the reader nothing; the run
+    that dropped it is not announced (item 6) -- the column is simply not there.
     """
     if not block.rows or len(block.columns) <= 1:
         return block, []
@@ -136,37 +313,70 @@ def _drop_constant_columns(block: TableBlock) -> tuple[TableBlock, list[str]]:
     return TableBlock(columns=columns, rows=rows), dropped
 
 
-def dropped_line(dropped: Sequence[str]) -> str:
-    return f"{join_and(dropped)} omitted: no values"
+def _relabel_turn(block: TableBlock, summaries: Sequence[ProbeSummary]) -> TableBlock:
+    """`rung` becomes `turn`, and its cell carries the turn's own prompt size (item 8)."""
+    if "rung" not in block.columns:
+        return block
+    column = block.columns.index("rung")
+    flat_rungs = [rung for summary in summaries for rung in summary.rungs]
+    columns = (*block.columns[:column], "turn", *block.columns[column + 1 :])
+    rows = tuple(
+        (*row[:column], _turn_cell(rung), *row[column + 1 :])
+        for row, rung in zip(block.rows, flat_rungs, strict=True)
+    )
+    return TableBlock(columns=columns, rows=rows)
+
+
+def _turn_cell(rung: RungSummary) -> str:
+    if rung.prompt_cold <= 0:
+        return str(rung.rung)
+    return f"{rung.rung} ({size_label(rung.prompt_cold)})"
 
 
 def _reformat_hits(
     block: TableBlock, summaries: Sequence[ProbeSummary]
 ) -> tuple[TableBlock, dict[tuple[int, int], str]]:
-    """`0.81 1 1 1 1 1` becomes `5/6 cached`, with the sequence kept in the cell's `title`.
-
-    A failed read is not a miss and is not cached either: it is counted into the total and
-    named separately (`4/6 cached, 2 failed`), so an error is never read as a clean miss.
-    """
+    """`0.93 1 1 1 1 1` becomes `6/6 hit, 1 partial`, with the reads spelled out in the
+    cell's `title` -- the same count `hit %` and the cache-share chart's hover already use
+    (item 7), so the three never disagree over one endpoint's reads again."""
     if "hits" not in block.columns:
         return block, {}
     column = block.columns.index("hits")
-    flat_rungs: list[RungSummary] = [rung for summary in summaries for rung in summary.rungs]
+    flat_rungs = [rung for summary in summaries for rung in summary.rungs]
     rows = list(block.rows)
     titles: dict[tuple[int, int], str] = {}
     for index, (row, rung) in enumerate(zip(rows, flat_rungs, strict=True)):
-        original = row[column]
-        rows[index] = (*row[:column], _hits_cell(rung.hits, original), *row[column + 1 :])
-        if original not in ("-", ""):
-            titles[index, column] = original
+        text, title = _hits_cell(rung.hits)
+        rows[index] = (*row[:column], text, *row[column + 1 :])
+        if title:
+            titles[index, column] = title
     return TableBlock(columns=block.columns, rows=tuple(rows)), titles
 
 
-def _hits_cell(hits: Sequence[float | None], original: str) -> str:
+def _hits_cell(hits: Sequence[float | None]) -> tuple[str, str | None]:
     total = len(hits)
     if not total:
-        return original
-    cached = sum(1 for hit in hits if hit is not None and hit >= _HIT_FULL)
+        return "-", None
+    hit_count = sum(1 for hit in hits if hit is not None and hit > 0)
+    partial = sum(1 for hit in hits if hit is not None and 0 < hit < _HIT_FULL)
     failed = sum(1 for hit in hits if hit is None)
-    text = f"{cached}/{total} cached"
-    return f"{text}, {failed} failed" if failed else text
+    text = f"{hit_count}/{total} hit"
+    maybe_extra = (
+        f"{partial} partial" if partial else None,
+        f"{failed} failed" if failed else None,
+    )
+    extra = [part for part in maybe_extra if part]
+    if extra:
+        text += ", " + ", ".join(extra)
+    title = " · ".join(_read_word(hit) for hit in hits)
+    return text, title
+
+
+def _read_word(hit: float | None) -> str:
+    if hit is None:
+        return "failed"
+    if hit <= 0:
+        return "miss"
+    if hit >= _HIT_FULL:
+        return "hit"
+    return f"hit, {hit * 100:.0f}% cached"

@@ -36,7 +36,7 @@ from provibench.bench.probe_summary import (
     summarize_probe,
     summarize_rung,
 )
-from provibench.bench.probe_tables import render_probe
+from provibench.bench.probe_tables import probe_labels, probe_markdown, render_probe
 from provibench.bench.rungs import (
     broadcast_repeats,
     parse_int_list,
@@ -44,8 +44,10 @@ from provibench.bench.rungs import (
     validate_rungs,
 )
 from provibench.bench.sse import ParsedMessage, StreamStats
+from provibench.bench.summary import cache_mode_note, cache_mode_sentence
 from provibench.bench.targets import Prices, RunSpec, Target, parse_run_spec
 from provibench.bench.trace import RecordedResponse, TraceEntry, Usage
+from provibench.commands.probe_spend import session_footer_lines
 
 _RealAsyncClient = httpx.AsyncClient
 _RUN_HEX = "0123456789ab"
@@ -1014,7 +1016,9 @@ def test_render_probe_without_summaries_is_two_headers() -> None:
     assert render_probe([]).split("\n\n")[1].startswith("endpoint | rung")
 
 
-def test_render_probe_has_an_endpoint_table_and_a_rung_table_within_120_columns() -> None:
+def test_render_probe_has_an_endpoint_table_and_a_rung_table_within_130_columns() -> None:
+    # The `cache $/M` column (item 2) widens the endpoint table past the old 120-column
+    # budget by a fixed amount no label planning can claw back; 130 is the new ceiling.
     records = [
         _record("cold", 0, prompt=100),
         _record("warm", 1, cached=0),
@@ -1030,7 +1034,7 @@ def test_render_probe_has_an_endpoint_table_and_a_rung_table_within_120_columns(
     rung_header = [cell.strip() for cell in rung_table[0].split("|")]
     assert rung_header[:5] == ["endpoint", "rung", "prompt", "cached cold", "hits"]
     assert "0 x 1" in rung_table[2]  # one cell per warm attempt, `x` for the failed one
-    assert all(len(line) <= 120 for block in blocks for line in block)
+    assert all(len(line) <= 130 for block in blocks for line in block)
 
 
 def test_run_probe_streams_the_throughput_request_after_the_warm_reads(
@@ -1134,10 +1138,10 @@ def test_a_refused_stream_is_an_error_not_a_burst() -> None:
     assert not any("burst" in note for note in summary.notes)
 
 
-def test_a_burst_record_is_noted_and_the_summary_names_its_rung(
+def test_a_burst_record_is_noted_and_the_summary_names_its_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The record carries `burst`; the spec's notes say which rung it was."""
+    """The record carries `burst`; the spec's notes name the turn by its prompt size."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -1153,9 +1157,9 @@ def test_a_burst_record_is_noted_and_the_summary_names_its_rung(
     assert stream.gen_tok_s is None
 
     [summary] = [summarize_probe("fake:model-a", run.records["fake:model-a"])]
-    burst_note = (
-        "sent its whole answer in one burst; tok/s could not be measured, so the cell is blank."
-    )
+    # the note says `-`, the table's own word for "not measured", not "the cell is blank",
+    # and names the turn by the prompt size the per-turn table shows, not by its rung number
+    burst_note = "sent the 100-token turn's answer in one burst, so tok/s for that turn is -."
     assert burst_note in summary.notes
     rendered = render_probe([summary])
     assert f"fake:model-a: {burst_note}" in rendered
@@ -1163,6 +1167,23 @@ def test_a_burst_record_is_noted_and_the_summary_names_its_rung(
     header = [cell.strip() for cell in rung_table.splitlines()[0].split("|")]
     row = [cell.strip() for cell in rung_table.splitlines()[2].split("|")]
     assert row[header.index("tok/s")] == "-"  # the rate is undefined, not zero
+
+
+def test_a_burst_on_several_turns_names_every_turn_by_its_size() -> None:
+    """Two bursting turns read as the sizes the per-turn table shows, not as rung numbers."""
+    records = [
+        _record("cold", 0, rung=1, prompt=100),
+        _record("warm", 1, rung=1, cached=90, prompt=100),
+        _record("stream", 0, rung=1).model_copy(update={"note": BURST_NOTE}),
+        _record("cold", 0, rung=2, prompt=2_000),
+        _record("warm", 1, rung=2, cached=1_800, prompt=2_000),
+        _record("stream", 0, rung=2).model_copy(update={"note": BURST_NOTE}),
+    ]
+    summary = summarize_probe("fake:model-a", records)
+    assert (
+        "sent its whole answer in one burst on the 100 and 2k turns, so tok/s for those "
+        "turns is -." in summary.notes
+    )
 
 
 def test_the_summarys_rate_is_the_median_of_its_timed_rungs() -> None:
@@ -1292,6 +1313,75 @@ def test_render_probe_uses_the_same_labels_in_both_tables() -> None:
     rung_labels = [line.split("|")[0].strip() for line in rung_table[2:]]
     assert spec_labels == ["@novita", "@gmicloud"]
     assert rung_labels == spec_labels
+
+
+def test_render_probe_notes_use_the_tables_short_label() -> None:
+    """Item 16: a per-endpoint note is prefixed with the short column label (`@novita`), not
+    the full label the caption above it already expands."""
+    summaries = [_summary("or:model@novita"), _summary("or:model@gmicloud")]
+    summaries[0].notes = ["a per-endpoint note"]
+    rendered = render_probe(summaries)
+    assert "@novita: a per-endpoint note" in rendered
+    assert "or:model@novita: a per-endpoint note" not in rendered
+
+
+def test_probe_markdown_notes_use_the_tables_short_label_too() -> None:
+    """Item 15/16 apply to the Markdown rendering, which shares `probe_note_lines`."""
+    summaries = [_summary("or:model@novita"), _summary("or:model@gmicloud")]
+    summaries[1].notes = ["a per-endpoint note"]
+    rendered = probe_markdown(summaries)
+    assert "@gmicloud: a per-endpoint note" in rendered
+
+
+def test_render_probe_prints_the_run_wide_cache_mode_note_once() -> None:
+    """Item 17: `cold (nonce)` is a fact about the run, not about one endpoint; it prints
+    once, unprefixed, as the first note line, in the HTML caveat's own words -- not once per
+    endpoint, and not folded into a per-endpoint `label: note` line."""
+    summaries = [_summary("or:model@novita"), _summary("or:model@gmicloud")]
+    for summary in summaries:
+        summary.notes = [cache_mode_note(False), "a per-endpoint note"]
+    note_lines = render_probe(summaries).split("\n\n")[-1].splitlines()
+    assert note_lines == [
+        cache_mode_sentence(False),
+        "@novita: a per-endpoint note",
+        "@gmicloud: a per-endpoint note",
+    ]
+
+
+def test_render_probe_keeps_a_lone_warm_note_unprefixed_too() -> None:
+    """A warm run's short note is just as run-wide as the cold one; it gets the same
+    treatment even though it has no elaborated sentence of its own."""
+    summaries = [_summary("or:model@novita"), _summary("or:model@gmicloud")]
+    for summary in summaries:
+        summary.notes = [cache_mode_note(True)]
+    note_lines = render_probe(summaries).split("\n\n")[-1].splitlines()
+    assert note_lines == [cache_mode_sentence(True)]
+
+
+def test_session_footer_lines_wraps_into_a_header_and_aligned_rows() -> None:
+    """Item 18: the closing `prompt bill` line was one 274-column line at four endpoints; it
+    is now a header plus one row per endpoint, named and aligned with the endpoint table's
+    own short label."""
+    native = _summary("deepseek:deepseek-flash")
+    native.session_prompt_usd = 0.0056
+    relace = _summary("openrouter:deepseek/deepseek-v4.1-flash@relace/fp4")
+    relace.session_prompt_usd = 0.0510
+    novita = _summary("openrouter:deepseek/deepseek-v4.1-flash@novita")
+    summaries = [native, relace, novita]
+    labels = probe_labels(summaries)
+    assert labels[0] == "deepseek:deepseek-flash"
+    assert labels[1] == "@relace/fp4"
+    lines = session_footer_lines(summaries, labels, 1_800_000)
+    assert lines == [
+        "prompt bill for a session like this trace (1.8 M prompt tokens):",
+        "  deepseek:deepseek-flash  $0.0056",
+        "  @relace/fp4              $0.0510",
+    ]
+
+
+def test_session_footer_lines_is_empty_without_a_trace_prompt_token_total() -> None:
+    summaries = [_summary("fake:model-a")]
+    assert session_footer_lines(summaries, probe_labels(summaries), None) == []
 
 
 def test_render_probe_fits_120_columns_with_every_cell_populated() -> None:
@@ -1711,8 +1801,8 @@ def test_output_tokens_are_summed_and_noted_past_the_max_tokens_1_budget() -> No
     summary = summarize_probe("fake:model-a", [cold, warm])
     assert summary.output_tokens == 350
     assert (
-        "ignored the one-token limit on the cache probes and generated 350 tokens, so this "
-        "run cost more than planned; the prices above are unaffected." in summary.notes
+        "ignored the one-token limit on the cache probes and generated 350 tokens. That "
+        "raised this run's cost, not the prices above." in summary.notes
     )
 
 
@@ -1791,5 +1881,5 @@ def test_a_late_ttl_read_does_not_shrink_the_label_column() -> None:
         "@novita",
         "@gmicloud",
     ]  # the shared head is in the caption, so it stays whole
-    assert all(len(line) <= 120 for line in endpoint_block.splitlines())
+    assert all(len(line) <= 130 for line in endpoint_block.splitlines())
     assert "60s:1 (+6)" in rung_block

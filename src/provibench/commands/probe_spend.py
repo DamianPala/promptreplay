@@ -50,19 +50,14 @@ LISTING_PRICES_SCHEMA = array(
 _ONE_MILLION = 1_000_000
 
 
-def _dash_money(value: object) -> str:
-    """An amount as `$0.1234` for a rendered document field, or `-` when it is unknown."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return "-"
-    return f"${value:.4f}"
-
-
 def spend_lines(document: Document) -> list[str]:
     """`pre-check: N requests, $X` then `spent $X (worst case $Y)`, when the run knows them.
 
     Both a `probe` result and a `report` of one carry the same `spend_usd`/`precheck` fields,
     so this is the one place either renders them.
     """
+    from provibench.bench.spend import dash_money as _dash_money
+
     lines: list[str] = []
     precheck = as_document(document.get("precheck"))
     if precheck is not None:
@@ -76,25 +71,33 @@ def spend_lines(document: Document) -> list[str]:
 
 
 def session_footer_lines(
-    summaries: Sequence[ProbeSummary], trace_prompt_tokens: object
+    summaries: Sequence[ProbeSummary], labels: Sequence[str], trace_prompt_tokens: object
 ) -> list[str]:
     """The session-projection footer: what a session shaped like the trace would bill.
 
-    One line, prompt tokens only -- `session_prompt_usd` is `eff_per_m_prompt` times the
-    trace's own prompt-token total, so an endpoint with neither known contributes nothing
-    rather than an unpriced entry the reader has to discount.
+    A header line, then one aligned line per endpoint -- `session_prompt_usd` is
+    `eff_per_m_prompt` times the trace's own prompt-token total, so an endpoint with neither
+    known contributes nothing rather than an unpriced entry the reader has to discount. One
+    line per endpoint instead of a single joined sentence: at four endpoints that sentence
+    ran past 270 columns, which a reader cannot line up at all.
+
+    `labels` is the endpoint table's own short column (`probe_tables.probe_labels`), so a row
+    here reads `@relace/fp4` rather than the full label the caption already expanded.
     """
+    from provibench.bench.spend import dash_money as _dash_money
+
     if not isinstance(trace_prompt_tokens, int) or trace_prompt_tokens <= 0:
         return []
-    parts = [
-        f"{summary.label} {_dash_money(summary.session_prompt_usd)}"
-        for summary in summaries
+    rows = [
+        (label, _dash_money(summary.session_prompt_usd))
+        for summary, label in zip(summaries, labels, strict=True)
         if summary.session_prompt_usd is not None
     ]
-    if not parts:
+    if not rows:
         return []
-    header = f"prompt bill for a session like this trace ({_token_count(trace_prompt_tokens)})"
-    return [f"{header}: {', '.join(parts)}"]
+    width = max(len(label) for label, _ in rows)
+    header = f"prompt bill for a session like this trace ({_token_count(trace_prompt_tokens)}):"
+    return [header, *(f"  {label:<{width}}  {money}" for label, money in rows)]
 
 
 def _token_count(tokens: int) -> str:

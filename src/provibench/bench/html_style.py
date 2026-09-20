@@ -71,7 +71,8 @@ h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
 section.table { margin-top: 20px; }
 section.caveats { margin-top: 20px; }
 .caption { margin: 0 0 8px; color: var(--ink-2); }
-figure { margin: 0 0 24px; }
+/* A figure follows the endpoint table directly, with no section of its own to space it. */
+figure { margin: 24px 0; }
 figcaption { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
 .scroll {
   overflow-x: auto;
@@ -94,10 +95,37 @@ figcaption { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
   border-radius: 6px;
   background: var(--surface);
 }
-table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-th, td { padding: 6px 10px; text-align: left; white-space: nowrap; }
+/* 13 columns at the body's own size and padding overflowed a 1280px window by 100px, so the
+   endpoint table's widest cell was cut off on the screen most readers open it in. A notch
+   down on both buys back more than that and still reads as the same table. */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+th, td { padding: 6px 7px; text-align: left; white-space: nowrap; }
 thead th { border-bottom: 1px solid var(--rule); color: var(--ink-2); font-weight: 600; }
 tbody tr + tr td { border-top: 1px solid var(--rule); }
+/* The group header row above the endpoint table (cache / price / speed): a thin rule
+   between groups, not around every cell, so the grouping reads as three bands. */
+thead tr.groups th {
+  border-bottom: none;
+  padding-bottom: 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+thead tr.groups th.group-start { border-left: 1px solid var(--rule); }
+details.turns { margin-top: 8px; }
+details.turns summary {
+  cursor: pointer;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+details.turns section.table { margin-top: 12px; }
 ul.legend {
   display: flex;
   flex-wrap: wrap;
@@ -110,6 +138,8 @@ ul.legend {
 }
 ul.legend li { display: flex; align-items: center; gap: 6px; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.swatch.shade-light { background: var(--ink-2); opacity: 0.35; }
+.swatch.shade-dark { background: var(--ink-2); }
 ul.notes { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 13px; }
 ul.notes li + li { margin-top: 4px; }
 sup a { color: var(--ink-2); text-decoration: none; }
@@ -129,6 +159,7 @@ svg.chart {
 .s6 { fill: var(--series-6); background-color: var(--series-6); }
 .s7 { fill: var(--series-7); background-color: var(--series-7); }
 .s8 { fill: var(--series-8); background-color: var(--series-8); }
+.bar.light { opacity: 0.35; }
 .grid { stroke: var(--grid); stroke-width: 1; }
 .axis { stroke: var(--axis); stroke-width: 1; }
 .line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; }

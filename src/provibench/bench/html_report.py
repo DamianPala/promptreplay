@@ -8,44 +8,60 @@ which is where the terminal gets them from too. This module only decides layout 
 why a figure in the file and a column in the terminal can never disagree.
 
 The probe page answers two questions a reader who has not opened the README is trying to
-answer in a minute: which endpoint to use (`probe_answer.answer_line`, under the title) and
-what the difference costs (the `this trace $` column and the closing spend line, both under
-"Per provider"). Everything else on the page — the tooltips, the glossary, the caveats
-(`probe_caveats`) — exists to make the two tables and the two charts stand on their own for
-that reader.
+answer in a minute: which endpoint to use (the endpoint table, sorted cheapest first) and
+what the difference costs (the `this trace $` column and the "What a session like this one
+bills" chart). Everything else on the page — the tooltips, the method sentence, the caveats
+(`probe_caveats`) — exists to make the tables and the charts stand on their own for that
+reader.
 
 Everything is inlined: the CSS in a `<style>` block, the charts as SVG produced by
 `html_svg`, the typeface the system's own stack. There is no script, no image, no font and
 no URL, so the file opens offline and renders the same from a USB stick.
+
+The table and chart markup itself lives in `html_layout`, shared with the full-replay page
+below; this module only decides what goes on a page and in what order.
 """
 
 from __future__ import annotations
 
-import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from html import escape
 
+from provibench.bench.html_layout import (
+    chart,
+    created,
+    created_no_seconds,
+    footer,
+    legend,
+    notes,
+    relative_run,
+    table_section,
+)
 from provibench.bench.html_style import CSS
-from provibench.bench.html_svg import Point, grouped_bars, horizontal_bars, line_chart
-from provibench.bench.probe_answer import answer_line
-from provibench.bench.probe_caveats import caveats_section, method_line, tok_footnote_cells
-from provibench.bench.probe_charts import cost_rows, not_charted, rung_groups, series
+from provibench.bench.html_svg import Point, grouped_bars, line_chart, paired_horizontal_bars
+from provibench.bench.labels import join_and, size_label
+from provibench.bench.probe_caveats import caveats_section, run_method_sentence, tok_footnote_cells
+from provibench.bench.probe_charts import (
+    not_charted,
+    reference_size,
+    rung_groups,
+    series,
+    session_cost_rows,
+)
 from provibench.bench.probe_html_tables import (
-    BLANKS_LINE,
-    ENDPOINT_HELP,
-    GLOSSARY,
-    RUNG_HELP,
-    dropped_line,
+    endpoint_caption_html,
+    endpoint_help,
     endpoint_view,
+    group_header_row,
+    rung_help,
     rung_view,
 )
 from provibench.bench.probe_summary import ProbeSummary, summary_from_document
 from provibench.bench.probe_tables import TableBlock, probe_blocks
 from provibench.bench.summary import SUMMARY_COLUMNS, cache_mode_note, summary_row
-from provibench.commands.probe_spend import spend_lines
 from provibench.core.documents import Document, as_document, as_list
 
-_STAMP = re.compile(r"^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$")
+_COUNT_WORDS: dict[int, str] = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
 
 
 def render_html(document: Document) -> str:
@@ -79,32 +95,64 @@ def render_html(document: Document) -> str:
 
 
 def _head(document: Document) -> str:
-    """The title block: what was measured, when, under which cache mode, and (for a probe)
-    the one-line method note that used to repeat once per endpoint below."""
-    facts = [fact for fact in (_models(document), _mode(document), _created(document)) if fact]
-    hex_value = document.get("run_hex")
-    if isinstance(hex_value, str) and hex_value:
-        facts.append(f"run {hex_value}")
+    """The title block: what was measured, when, and (for a probe) at what scale."""
+    if document.get("protocol") == "probe":
+        return _probe_head(document)
+    return _replay_head(document)
+
+
+def _replay_head(document: Document) -> str:
+    facts = [fact for fact in (_models(document), _mode(document), created(document)) if fact]
     lines = [f"<h1>{escape(str(document.get('trace')))}</h1>"]
     if facts:
         lines.append(f'<p class="sub">{escape(" · ".join(facts))}</p>')
-    lines.append(f'<p class="where">{escape(_relative_run(document.get("run_dir")))}</p>')
-    if document.get("protocol") == "probe":
-        method = method_line(document)
-        if method:
-            lines.append(f'<p class="method">{escape(method)}</p>')
+    lines.append(f'<p class="where">{escape(relative_run(document.get("run_dir")))}</p>')
     return '<header class="head">' + "".join(lines) + "</header>"
 
 
-def _relative_run(run_dir: object) -> str:
-    """The run as `runs/<trace>/<timestamp>`: where it is, without the operator's paths.
+def _probe_head(document: Document) -> str:
+    """`Prompt cache check: {model}, {n} endpoints`, then the trace, the date and the run id.
 
-    A report is meant to be shared, and an absolute path names the machine it was made on.
-    The last two segments are the run's identity — the trace and its timestamp — and the
-    `runs/` prefix says what they are relative to.
+    The cache mode (`cold (nonce)`/`warm`) and the run directory both moved out of the
+    header: the mode is now the first caveat, tied to the sentence that explains it, and the
+    path is now the footer, since neither helps a reader decide anything up here.
     """
-    segments = [part for part in str(run_dir).replace("\\", "/").split("/") if part]
-    return "/".join(["runs", *segments[-2:]])
+    count = len(_entries(document, _key(document)))
+    noun = "endpoint" if count == 1 else "endpoints"
+    h1 = f"Prompt cache check: {_probe_model(document)}, {count} {noun}"
+    facts = [f"trace {document.get('trace')}"]
+    created_at = created_no_seconds(document)
+    if created_at:
+        facts.append(created_at)
+    hex_value = document.get("run_hex")
+    if isinstance(hex_value, str) and hex_value:
+        facts.append(f"run {hex_value}")
+    lines = [f"<h1>{escape(h1)}</h1>", f'<p class="sub">{escape(" · ".join(facts))}</p>']
+    return '<header class="head">' + "".join(lines) + "</header>"
+
+
+def _probe_model(document: Document) -> str:
+    """The model the run measured: the sweep's own, or the reference endpoint's."""
+    return _sweep_model(document) or _reference_model(_entries(document, _key(document)))
+
+
+def _sweep_model(document: Document) -> str | None:
+    sweep = as_document(document.get("sweep"))
+    if sweep is None:
+        return None
+    model = sweep.get("model")
+    return str(model) if model else None
+
+
+def _reference_model(entries: Sequence[Document]) -> str:
+    """The reference endpoint's model, or the first endpoint's when none is marked."""
+    reference = next((entry for entry in entries if entry.get("reference") is True), None)
+    entry = reference if reference is not None else (entries[0] if entries else None)
+    if entry is None:
+        return "?"
+    label = str(entry.get("label"))
+    head = label.split("@", 1)[0]
+    return head.partition(":")[2] or head
 
 
 def _models(document: Document) -> str:
@@ -140,65 +188,58 @@ def _mode(document: Document) -> str:
     return cache_mode_note(warm) if isinstance(warm, bool) else ""
 
 
-def _created(document: Document) -> str:
-    """The run's timestamp, spaced out when it is the `run.json` stamp."""
-    created = str(document.get("created"))
-    stamp = _STAMP.match(created)
-    if stamp is None:
-        return created
-    date, time = stamp.group(1, 2, 3), stamp.group(4, 5, 6)
-    return f"{date[0]}-{date[1]}-{date[2]} {time[0]}:{time[1]}:{time[2]}"
-
-
 def _probe_sections(document: Document) -> list[str]:
-    """The answer line, the caption, the two probe tables, the two charts and the caveats."""
+    """The method sentence, the two probe tables, the two charts and the caveats."""
     summaries = [summary_from_document(entry) for entry in _entries(document, _key(document))]
     blocks = probe_blocks(summaries)
     labels = [row[0] for row in blocks.endpoint.rows]
+    trace_prompt_tokens = document.get("trace_prompt_tokens")
     sections: list[str] = []
 
-    answer = answer_line(summaries, labels)
-    if answer:
-        sections.append(f'<p class="answer">{escape(answer)}</p>')
-    if blocks.caption:
-        sections.append(f'<p class="caption">{escape(blocks.caption)}</p>')
+    method = run_method_sentence(summaries, document)
+    if method:
+        sections.append(f'<p class="method">{escape(method)}</p>')
 
     caveats_html, tok_footnotes = caveats_section(summaries, labels, document)
-    endpoint_block, endpoint_dropped = endpoint_view(blocks.endpoint, summaries)
+    endpoint_block, _endpoint_dropped = endpoint_view(blocks.endpoint, summaries)
     cell_extra = tok_footnote_cells(endpoint_block, tok_footnotes)
     sections.append(
-        _table_section(
+        table_section(
             "Per provider",
             endpoint_block,
-            caption="Endpoints, cheapest effective prompt price first.",
-            help=ENDPOINT_HELP,
+            caption_html=endpoint_caption_html(
+                labels, _probe_model(document), folded=bool(blocks.caption)
+            ),
+            help=endpoint_help(summaries, trace_prompt_tokens),
             cell_extra=cell_extra,
+            group_row=group_header_row(endpoint_block.columns),
         )
     )
-    # A plain line apiece, not a list: the terminal prints these as closing lines under the
-    # table, and one bullet floating under a table reads as an orphaned list item.
-    sections.extend(f'<p class="caption">{escape(line)}</p>' for line in spend_lines(document))
 
-    rung_block, rung_dropped, rung_titles = rung_view(blocks.rungs, summaries)
-    # `errors` (or any other column) can be constant in both tables at once; name it once.
-    dropped = list(dict.fromkeys([*endpoint_dropped, *rung_dropped]))
-    if dropped:
-        sections.append(f'<p class="caption">{escape(dropped_line(dropped))}</p>')
-    sections.append(f'<p class="caption">{GLOSSARY}</p>')
-    sections.append(f'<p class="caption">{BLANKS_LINE}</p>')
-
-    sections.append(_table_section("Per rung", rung_block, help=RUNG_HELP, cell_titles=rung_titles))
-
-    charts = _probe_charts(summaries, labels)
+    charts = _probe_charts(summaries, labels, trace_prompt_tokens, document)
     if charts:
-        sections.append(f'<section class="charts"><h2>Cache and cost</h2>{charts}</section>')
+        sections.append(charts)
+
+    rung_block, _rung_dropped, rung_titles = rung_view(blocks.rungs, summaries)
+    sections.append(
+        '<details class="turns"><summary>Per turn: every request</summary>'
+        + table_section(None, rung_block, help=rung_help(), cell_titles=rung_titles)
+        + "</details>"
+    )
+
     if caveats_html:
         sections.append(caveats_html)
+    sections.append(footer(document))
     return sections
 
 
-def _probe_charts(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> str:
-    """The two probe charts, or nothing when no rung has a rate to draw.
+def _probe_charts(
+    summaries: Sequence[ProbeSummary],
+    labels: Sequence[str],
+    trace_prompt_tokens: object,
+    document: Document,
+) -> str:
+    """The cache-share chart and the session-cost chart, or nothing when neither has data.
 
     Only the palette's validated slots are charted: past eight series a grouped bar chart
     stops being readable however it is coloured, so the rest stay in the tables above and
@@ -207,41 +248,92 @@ def _probe_charts(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> s
     """
     charted = series(summaries, labels)
     groups = rung_groups(charted)
-    rows = cost_rows(charted)
+    tokens = trace_prompt_tokens if isinstance(trace_prompt_tokens, int) else None
+    rows = session_cost_rows(charted, tokens)
     parts: list[str] = []
     unmeasured = not_charted(summaries, labels)
     if groups:
         parts.append(
-            "<figure><h3>Share of the prompt served from cache per rung</h3>"
-            + _legend([label for _, label in charted])
-            + _chart(
+            "<figure><h3>Share of prompt tokens served from cache, per turn</h3>"
+            + legend([label for _, label in charted])
+            + chart(
                 grouped_bars(
                     groups,
-                    label="share of the prompt served from cache per rung",
+                    label="share of prompt tokens served from cache per turn",
                     y_axis="share %",
-                    x_axis="prompt size (rung)",
+                    x_axis="prompt size (turn)",
                 ),
-                "Share of the prompt served from the cache at each rung's warm reads: `h`, "
-                "hit rate times cached fraction, the same quantity `eff $/M` prices from. "
-                "The x axis is the probe's rungs, each labelled with the reference "
-                "endpoint's cold prompt size in thousands of tokens. Hover a bar for the "
-                "endpoint, the rung and the read counts.",
+                _cache_chart_caption(summaries, document),
                 unmeasured,
             )
             + "</figure>"
         )
-    if any(row.value is not None for row in rows):
+    if any(row.light.value is not None or row.dark.value is not None for row in rows):
         parts.append(
-            "<figure><h3>Effective prompt price</h3>"
-            + _chart(
-                horizontal_bars(rows, label="effective prompt price per endpoint"),
-                "Effective prompt price per endpoint: USD per 1M prompt tokens at the measured hit "
-                "rate, so a cheap listed price that never hits the cache costs more than it "
-                "looks. Hover a bar for the listed prices and the hit fraction.",
+            "<figure><h3>What a session like this one bills</h3>"
+            + _shade_legend()
+            + chart(
+                paired_horizontal_bars(rows, label="session bill per endpoint"),
+                "Light: what the price list promises when the cache always hits. Dark: what "
+                "this run measured. The difference is what the misses cost.",
             )
             + "</figure>"
         )
     return "".join(parts)
+
+
+def _cache_chart_caption(summaries: Sequence[ProbeSummary], document: Document) -> str:
+    caption = (
+        "For each turn, the share of prompt tokens that repeat requests got from the "
+        "cache: hit rate times cached share, the quantity <code>eff $/M</code> is priced "
+        "from. 100 means every repeat hit and the whole prompt was cached."
+    )
+    tail = _repeat_reads_tail(summaries, document)
+    if tail:
+        caption += f" {tail}"
+    return caption + " Hover a bar for the read counts."
+
+
+def _repeat_reads_tail(summaries: Sequence[ProbeSummary], document: Document) -> str | None:
+    """`At {sizes} each bar is {n} reads, so {100/n} means one miss.`, for the turns that
+    were not repeated as many times as the run's most-repeated one."""
+    options = as_document(document.get("options")) or {}
+    rungs = [value for value in as_list(options.get("rungs")) or [] if isinstance(value, int)]
+    repeats = [value for value in as_list(options.get("repeats")) or [] if isinstance(value, int)]
+    pairs = list(zip(rungs, repeats, strict=False))
+    if not pairs:
+        return None
+    busiest = max(count for _, count in pairs)
+    lighter = [(rung, count) for rung, count in pairs if count < busiest]
+    counts = {count for _, count in lighter}
+    if len(counts) != 1:
+        return None
+    [count] = counts
+    if count <= 0:
+        return None
+    sizes = [
+        size_label(size) for rung, _ in lighter if (size := reference_size(summaries, rung)) > 0
+    ]
+    if not sizes:
+        return None
+    return (
+        f"At {join_and(sizes)} each bar is {_count_word(count)} reads, so "
+        f"{round(100 / count)} means one miss."
+    )
+
+
+def _count_word(count: int) -> str:
+    return _COUNT_WORDS.get(count, str(count))
+
+
+def _shade_legend() -> str:
+    return (
+        '<ul class="legend">'
+        '<li><span class="swatch shade-light"></span>at the listed cache price, every '
+        "repeat a hit</li>"
+        '<li><span class="swatch shade-dark"></span>at the measured hit rate</li>'
+        "</ul>"
+    )
 
 
 def _replay_sections(document: Document) -> list[str]:
@@ -250,17 +342,17 @@ def _replay_sections(document: Document) -> list[str]:
     summary = TableBlock(
         columns=SUMMARY_COLUMNS, rows=tuple(tuple(summary_row(entry)) for entry in entries)
     )
-    sections = [_table(summary)]
+    sections = [table_section("Summary", summary)]
     curves = "".join(_curve(entry) for entry in entries)
     if curves:
         sections.append(f'<section class="charts"><h2>Cache curve</h2>{curves}</section>')
-    notes = [
+    note_lines = [
         f"{entry.get('label')}: {note}"
         for entry in entries
         for note in map(str, as_list(entry.get("notes")) or [])
     ]
-    if notes:
-        sections.append(_notes(notes))
+    if note_lines:
+        sections.append(notes(note_lines))
     return sections
 
 
@@ -286,89 +378,13 @@ def _curve(entry: Document) -> str:
     caption = f"Cached fraction of each turn's prompt across the replay's {len(values)} turns."
     return (
         f"<figure><h3>{escape(label)}</h3>"
-        f"{_chart(line_chart(points, label=label), caption)}</figure>"
+        f"{chart(line_chart(points, label=label), caption)}</figure>"
     )
 
 
 def _turn_title(index: int, value: float) -> str:
     """The exact numbers behind one point of a cache curve."""
     return f"turn {index}: {value * 100:.1f}% of the prompt cached"
-
-
-def _table_section(
-    title: str,
-    block: TableBlock,
-    *,
-    caption: str | None = None,
-    help: Mapping[str, str] | None = None,
-    cell_titles: Mapping[tuple[int, int], str] | None = None,
-    cell_extra: Mapping[tuple[int, int], str] | None = None,
-) -> str:
-    """One headed table, with an optional caption between the heading and the table itself."""
-    cap = f'<p class="caption">{escape(caption)}</p>' if caption else ""
-    body = _table(block, help=help, cell_titles=cell_titles, cell_extra=cell_extra)
-    return f'<section class="table"><h3>{escape(title)}</h3>{cap}{body}</section>'
-
-
-def _table(
-    block: TableBlock,
-    *,
-    help: Mapping[str, str] | None = None,
-    cell_titles: Mapping[tuple[int, int], str] | None = None,
-    cell_extra: Mapping[tuple[int, int], str] | None = None,
-) -> str:
-    """A scroll container holding one table: the page never scrolls sideways, the table does."""
-    help = help or {}
-    cell_titles = cell_titles or {}
-    cell_extra = cell_extra or {}
-    head = "".join(
-        f'<th scope="col"{_title_attr(help.get(column))}>{escape(column)}</th>'
-        for column in block.columns
-    )
-    rows = "".join(
-        _row(index, row, cell_titles, cell_extra) for index, row in enumerate(block.rows)
-    )
-    return (
-        '<div class="scroll"><table><thead><tr>'
-        f"{head}</tr></thead><tbody>{rows}</tbody></table></div>"
-    )
-
-
-def _row(
-    row_index: int,
-    row: Sequence[str],
-    cell_titles: Mapping[tuple[int, int], str],
-    cell_extra: Mapping[tuple[int, int], str],
-) -> str:
-    cells: list[str] = []
-    for column_index, cell in enumerate(row):
-        title = _title_attr(cell_titles.get((row_index, column_index)))
-        extra = cell_extra.get((row_index, column_index), "")
-        cells.append(f"<td{title}>{escape(cell)}{extra}</td>")
-    return "<tr>" + "".join(cells) + "</tr>"
-
-
-def _title_attr(text: str | None) -> str:
-    return f' title="{escape(text, quote=True)}"' if text else ""
-
-
-def _legend(labels: Sequence[str]) -> str:
-    items = "".join(
-        f'<li><span class="swatch s{index + 1}"></span>{escape(label)}</li>'
-        for index, label in enumerate(labels)
-    )
-    return f'<ul class="legend">{items}</ul>'
-
-
-def _chart(svg: str, caption: str, unmeasured: Sequence[str] = ()) -> str:
-    """The scroll container, why some rungs have no bar, then the caption."""
-    aside = f'<p class="caption">Not charted</p>{_notes(unmeasured)}' if unmeasured else ""
-    return f'<div class="chart-scroll">{svg}</div>{aside}<figcaption>{escape(caption)}</figcaption>'
-
-
-def _notes(lines: Sequence[str]) -> str:
-    items = "".join(f"<li>{escape(line)}</li>" for line in lines)
-    return f'<ul class="notes">{items}</ul>'
 
 
 def _entries(document: Document, key: str = "summaries") -> list[Document]:
