@@ -7,20 +7,19 @@ day of uptime cannot produce a number comparable with the rest, and one the acco
 settings exclude cannot be probed at all — and it owns the record of that decision
 (`SweepInfo`), since `report` shows the selection offline, with no network.
 
-The listing is the human view of the same decision, so the criteria the run chose by and the
-endpoints they removed are named in one place: `render_candidates` for the command that is
-about to spend money, `selection_line` for the report of a run that already did.
+The human view of that decision — the listing before a run and the sentence a report reads
+back — lives in `bench.selection_text`, split out for this module's line budget; the criteria
+and the record they leave stay here.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence, Set
+from collections.abc import Sequence, Set
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import AliasChoices, BaseModel, Field
 
-from provibench.bench.labels import join_and, text_table
 from provibench.bench.openrouter import Endpoint
 from provibench.bench.targets import RunSpec, Target
 
@@ -36,13 +35,10 @@ __all__ = [
     "SelectionDrop",
     "SweepInfo",
     "missing_percentiles",
-    "not_probed_lines",
     "pinned_spec",
     "rank_candidates",
     "ranked",
-    "render_candidates",
     "select_candidates",
-    "selection_line",
     "sort_key",
     "stability_reason",
 ]
@@ -56,14 +52,10 @@ PERCENTILE_SORTS: Set[str] = frozenset({"throughput", "latency"})
 """The sorts that rank by a 30-minute percentile: OpenRouter returns those only with a key."""
 
 UPTIME_FLOOR = 97.0
-"""Percent of the last day below which an endpoint is having a bad day, not a candidate."""
+"""Default percent of the last day below which an endpoint is having a bad day, not a
+candidate: `sweep --min-uptime` overrides it per run, and this is that flag's own default."""
 
 _SUPPORTED_SORTS: Set[str] = frozenset(SORT_KEYS)
-
-_FLOOR_MARGIN = 0.1
-"""How close to the floor an uptime has to be before the table prints it to two decimals."""
-
-_CANDIDATE_COLUMNS = ("tag", "status", "uptime 1d", "$/M in", "lat p50 ms", "tput p50")
 
 
 class RankedEndpoint(BaseModel):
@@ -115,6 +107,9 @@ class SweepInfo(BaseModel):
     sort: str = "price"
     top: int | None = None
     zdr: bool = False
+    uptime_floor: float = UPTIME_FLOOR
+    """The `--min-uptime` this run used; defaults to `UPTIME_FLOOR` so a run recorded before
+    the flag existed still reads back the floor it was actually held to."""
     check: bool = False
     """The run checks availability: `--top` turns it on, `--check` adds it on its own."""
     dropped: list[SelectionDrop] = Field(default_factory=list[SelectionDrop])
@@ -157,6 +152,7 @@ def select_candidates(
     sort: str = "price",
     zdr: bool = False,
     zdr_tags: Set[str] = frozenset(),
+    uptime_floor: float = UPTIME_FLOOR,
 ) -> Selection:
     """Apply the ZDR intersection and the stability floor, then rank what survives.
 
@@ -175,7 +171,9 @@ def select_candidates(
         if zdr and endpoint.tag not in allowed:
             dropped.append(drop(endpoint, "not ZDR"))
             continue
-        reason = stability_reason(endpoint, included=_prefixed(endpoint.tag, include))
+        reason = stability_reason(
+            endpoint, included=_prefixed(endpoint.tag, include), floor=uptime_floor
+        )
         if reason is not None:
             dropped.append(drop(endpoint, reason))
             continue
@@ -183,7 +181,9 @@ def select_candidates(
     return Selection(kept=rank_candidates(kept, sort), dropped=dropped)
 
 
-def stability_reason(endpoint: Endpoint, *, included: bool) -> str | None:
+def stability_reason(
+    endpoint: Endpoint, *, included: bool, floor: float = UPTIME_FLOOR
+) -> str | None:
     """Why the stability floor drops this endpoint, or `None` when it passes.
 
     `--include` overrides the floor: naming a tag is the operator saying they want that
@@ -199,7 +199,7 @@ def stability_reason(endpoint: Endpoint, *, included: bool) -> str | None:
     if status is not None and status < 0:
         return f"status {endpoint.status}"
     uptime = endpoint.uptime_1d
-    if uptime is not None and uptime < UPTIME_FLOOR:
+    if uptime is not None and uptime < floor:
         return f"uptime 1d {uptime:.2f} %"
     return None
 
@@ -251,127 +251,6 @@ def ranked(endpoint: Endpoint) -> RankedEndpoint:
         latency_p50_ms=endpoint.latency_ms_30m,
         throughput_p50_tok_s=endpoint.throughput_30m,
     )
-
-
-def render_candidates(selection: Selection, *, model: str, sort: str, zdr: bool) -> list[str]:
-    """The listing printed before the estimate: the candidates, then what the criteria cut."""
-    kept = len(selection.kept)
-    header = f"candidates: {model}, {kept} endpoint(s), sort={sort}, zdr={_on_off(zdr)}"
-    rows = [_candidate_row(endpoint) for endpoint in selection.kept]
-    lines = [header, *text_table(_CANDIDATE_COLUMNS, rows)]
-    if selection.dropped:
-        lines.append("dropped: " + ", ".join(_drop_cell(drop) for drop in selection.dropped))
-    return lines
-
-
-def selection_line(sweep: SweepInfo) -> str:
-    """A sentence: how many endpoints the run took and by what, then why the listing itself
-    dropped any candidate (the stability floor or the ZDR filter, in the reader's words).
-
-    A pre-check's own drops are `not_probed_lines`'s job, kept separate because a pre-check
-    spends money to find them and a listing-time drop costs nothing.
-    """
-    if sweep.top is None:
-        which = f"every candidate by {sweep.sort}"
-    elif sweep.sort == "price":
-        which = f"the {sweep.top} cheapest by listed price"
-    else:
-        which = f"the {sweep.top} best by {sweep.sort}"
-    line = f"Of the OpenRouter providers, the run took {which}"
-    if sweep.zdr:
-        line += ", zero-data-retention endpoints only"
-    line += "."
-    sentences = _drop_sentences(drop for drop in sweep.dropped if not drop.checked)
-    if sentences:
-        line += " " + " ".join(sentences)
-    return line
-
-
-def not_probed_lines(sweep: SweepInfo) -> list[str]:
-    """One sentence per reason the availability pre-check skipped a candidate.
-
-    Grouped the same way `selection_line` groups its own drops, but a pre-check failure
-    keeps its own gateway reason rather than one of the listing's short codes.
-    """
-    return _drop_sentences(drop for drop in sweep.dropped if drop.checked)
-
-
-def _drop_sentences(dropped: Iterable[SelectionDrop]) -> list[str]:
-    """`{label} was skipped because {reason}.`, endpoints sharing a reason joined into one
-    sentence, named the way the table above it does (`_short_drop_label`)."""
-    groups: dict[str, list[str]] = {}
-    for drop in dropped:
-        groups.setdefault(_reason_words(drop), []).append(_short_drop_label(drop))
-    sentences: list[str] = []
-    for reason, labels in groups.items():
-        verb = "was skipped" if len(labels) == 1 else "were skipped"
-        sentences.append(f"{join_and(labels)} {verb} because {reason}.")
-    return sentences
-
-
-def _short_drop_label(drop: SelectionDrop) -> str:
-    """`@tag` when the label has a provider suffix, else the label whole, as the table reads."""
-    return f"@{drop.tag}" if "@" in drop.endpoint else drop.endpoint
-
-
-def _reason_words(drop: SelectionDrop) -> str:
-    """A drop's own code (`status -2`, `uptime 1d 77.90 %`) in the reader's words.
-
-    A pre-check failure already carries its provider's own gateway reason -- that is the
-    "words" a reader can act on, and rewriting it would replace one true statement with a
-    guess. A status code is left out: the `candidates:` listing and the run file keep it.
-    """
-    if drop.checked:
-        return drop.reason
-    if drop.reason.startswith("status "):
-        return "OpenRouter reported it as degraded"
-    if drop.reason.startswith("uptime 1d "):
-        pct = drop.reason.removeprefix("uptime 1d ").strip()
-        return f"its one-day uptime was below the floor ({pct})"
-    if drop.reason == "not ZDR":
-        return "it is not a zero-data-retention endpoint"
-    return drop.reason
-
-
-def _drop_cell(drop: SelectionDrop) -> str:
-    """One dropped endpoint in the listing's own notation: `tag (reason)`."""
-    return f"{drop.tag} ({drop.reason})"
-
-
-def _candidate_row(endpoint: Endpoint) -> list[str]:
-    return [
-        endpoint.tag,
-        "-" if endpoint.status is None else str(endpoint.status),
-        _uptime_cell(endpoint.uptime_1d),
-        f"{endpoint.prices.input:.3f}",
-        _number(endpoint.latency_ms_30m, digits=0),
-        _number(endpoint.throughput_30m, digits=1),
-    ]
-
-
-def _uptime_cell(value: float | None) -> str:
-    """The uptime column: one decimal, or two when the value sits next to the floor.
-
-    `97.0` in this column could be anything from 96.95 up, and an endpoint kept by
-    `--include` would then be printed as a value the floor should have dropped. The second
-    digit is only paid where it disambiguates; a healthy endpoint reads as it always did.
-    """
-    if value is None:
-        return "-"
-    return f"{value:.{_uptime_digits(value)}f}"
-
-
-def _uptime_digits(value: float) -> int:
-    """How many decimals an uptime needs: two within `_FLOOR_MARGIN` of the floor, else one."""
-    return 2 if abs(value - UPTIME_FLOOR) < _FLOOR_MARGIN else 1
-
-
-def _number(value: float | None, *, digits: int) -> str:
-    return "-" if value is None else f"{value:.{digits}f}"
-
-
-def _on_off(flag: bool) -> str:
-    return "on" if flag else "off"
 
 
 def _prefixed(tag: str, include: Sequence[str]) -> bool:

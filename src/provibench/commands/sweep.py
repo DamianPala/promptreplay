@@ -66,8 +66,8 @@ _OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=_REQUIRED)
     "native targets that carry it.\n\n"
     "MODEL is the OpenRouter slug (deepseek/deepseek-v4.1-flash). The command lists the "
     "model's endpoints, keeps only the Zero Data Retention list when --zdr, drops the ones "
-    "the stability floor excludes (a status below zero, or less than 97 % uptime over the "
-    "last day; --include TAG keeps only matching tags and keeps them past the floor, "
+    "the stability floor excludes (a status below zero, or one-day uptime below "
+    "--min-uptime; --include TAG keeps only matching tags and keeps them past the floor, "
     "--exclude TAG drops them), ranks what is left by "
     "--sort (price ascending by default) and keeps the --top N best. Availability is "
     "checked once the run is confirmed: every candidate gets one smallest-rung request, "
@@ -97,6 +97,14 @@ _OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=_REQUIRED)
     default=[],
     multiple=True,
     help="Drop endpoints whose tag starts with this; repeatable, unknown tags error",
+)
+@click.option(
+    "--min-uptime",
+    type=click.FloatRange(0, 100),
+    default=97,
+    show_default=True,
+    help="Drop OpenRouter endpoints whose one-day uptime is below this percent, the tool's "
+    "own floor; 0 keeps them all, and --include keeps a named tag regardless",
 )
 @click.option(
     "--sort",
@@ -146,6 +154,7 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
     target: str | None,
     include: tuple[str, ...],
     exclude: tuple[str, ...],
+    min_uptime: float,
     sort_key: str,
     top: int | None,
     zdr: bool,
@@ -182,13 +191,18 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
         exclude=exclude,
         sort=sort_key,
         zdr=zdr,
+        uptime_floor=min_uptime,
     )
     # The listing goes out before the estimate: it is the criteria's own account of what it
     # chose, and the check results land under it once the run is confirmed.
     from provibench.bench.precheck import CheckPlan
-    from provibench.bench.selection import pinned_spec, render_candidates
+    from provibench.bench.selection import pinned_spec
+    from provibench.bench.selection_text import render_candidates
 
-    for line in render_candidates(selection, model=model, sort=sort_key, zdr=zdr):
+    lines = render_candidates(
+        selection, model=model, sort=sort_key, zdr=zdr, uptime_floor=min_uptime
+    )
+    for line in lines:
         invocation.message(line)
     invocation.message("")
 
@@ -207,6 +221,7 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
         sort=sort_key,
         top=top,
         zdr=zdr,
+        uptime_floor=min_uptime,
         check=check or top is not None,
     )
     return execute_probe(

@@ -165,7 +165,8 @@ def message_lines(invocation: Invocation, text: str) -> None:
 
 def sweep_lines(block: object) -> list[str]:
     """A recorded selection as the lines that follow the tables; none without a sweep."""
-    from provibench.bench.selection import SweepInfo, not_probed_lines, selection_line
+    from provibench.bench.selection import SweepInfo
+    from provibench.bench.selection_text import not_probed_lines, selection_line
 
     document = as_document(block)
     if document is None:

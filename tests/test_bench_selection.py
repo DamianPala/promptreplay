@@ -20,15 +20,17 @@ from provibench.bench.selection import (
     SelectionDrop,
     SweepInfo,
     missing_percentiles,
-    not_probed_lines,
     pinned_spec,
     rank_candidates,
     ranked,
-    render_candidates,
     select_candidates,
-    selection_line,
     sort_key,
     stability_reason,
+)
+from provibench.bench.selection_text import (
+    not_probed_lines,
+    render_candidates,
+    selection_line,
 )
 from provibench.bench.targets import Prices, RunSpec, Target
 from provibench.bench.trace import RecordedResponse, TraceEntry, Usage
@@ -304,6 +306,8 @@ def test_a_sweep_block_written_before_the_rename_still_loads() -> None:
     assert info.to_document()["dropped"] == [
         {"tag": "a", "endpoint": f"or:{_MODEL}@a", "reason": "not ZDR", "checked": False}
     ]
+    # a record written before --min-uptime existed had no floor of its own; it read 97 %
+    assert info.uptime_floor == UPTIME_FLOOR == 97.0
 
 
 def test_selection_line_states_a_status_drop_and_an_uptime_drop_in_words() -> None:
@@ -323,7 +327,10 @@ def test_selection_line_states_a_status_drop_and_an_uptime_drop_in_words() -> No
     assert line.startswith("Of the OpenRouter providers, the run took the 3 best by uptime.")
     assert "novita was skipped because OpenRouter reported it as degraded." in line
     assert "status -2" not in line  # a code the reader cannot use; the listing keeps it
-    assert "gmicloud was skipped because its one-day uptime was below the floor (96.90 %)." in line
+    assert (
+        "gmicloud was skipped because its one-day uptime (96.90 %) was below the 97 % floor."
+        in line
+    )
 
 
 def test_selection_line_merges_endpoints_that_share_one_drop_reason() -> None:

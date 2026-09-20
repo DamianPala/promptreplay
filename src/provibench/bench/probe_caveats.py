@@ -17,7 +17,8 @@ from provibench.bench.labels import join_and, size_label
 from provibench.bench.probe_charts import reference_size
 from provibench.bench.probe_summary import ProbeSummary
 from provibench.bench.probe_tables import TableBlock
-from provibench.bench.selection import SweepInfo, not_probed_lines, selection_line
+from provibench.bench.selection import SweepInfo
+from provibench.bench.selection_text import not_probed_lines, selection_line
 from provibench.bench.spend import run_cost_sentence
 from provibench.bench.summary import cache_mode_note, cache_mode_sentence
 from provibench.core.documents import Document, as_document, as_list

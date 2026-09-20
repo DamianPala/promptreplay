@@ -42,7 +42,7 @@ provibench sweep TRACE MODEL --top N --budget USD --yes --json
 ```
 
 `TRACE` is `sample-trace` or a trace name; `MODEL` is the OpenRouter slug, such as `deepseek/deepseek-v4.1-flash`.
-The sweep lists the model's OpenRouter endpoints, drops degraded ones and ones below 97 % one-day uptime, ranks the rest by `--sort` (`price` by default, or `uptime`, `throughput`, `latency`; the last two need the OpenRouter key), keeps the N best that pass a one-request availability check, adds the native targets that carry the model, and probes them all.
+The sweep lists the model's OpenRouter endpoints, drops degraded ones and ones whose one-day uptime is below `--min-uptime` (97 % by default, the tool's own floor), ranks the rest by `--sort` (`price` by default, or `uptime`, `throughput`, `latency`; the last two need the OpenRouter key), keeps the N best that pass a one-request availability check, adds the native targets that carry the model, and probes them all.
 Native endpoints are never cut by `--top`.
 `--include PREFIX` keeps only tags starting with PREFIX and keeps them past the stability floor; `--exclude PREFIX` drops them; `--zdr` keeps only Zero Data Retention endpoints.
 `--parallel N` overlaps endpoints; rerun with `--parallel 1` before trusting small latency differences.

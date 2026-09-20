@@ -1205,6 +1205,79 @@ def test_sweep_stability_floor_drops_endpoints_and_include_brings_one_back(
     assert "dropped:" not in included.stderr
 
 
+def test_sweep_min_uptime_moves_the_floor(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--min-uptime` replaces the default 97 % floor everywhere the floor is used."""
+    _write_targets(bench_paths.targets_path, aliases=False)
+    endpoints = [
+        _endpoint("novita", **_health(99.9)),
+        _endpoint("relace/fp4", **_health(99.9, status=-2)),
+        _endpoint("siliconflow", **_health(77.9)),
+        _endpoint("parasail/fp8", **_health(96.96)),
+        _endpoint("gmicloud", **_health(99.0)),
+    ]
+    _install(monkeypatch, _transport(endpoints=endpoints))
+
+    # the flag's default is the floor the run records, so a report can name it
+    default = _sweep(cli, bench_paths, *_one_rung())
+    assert default.code == 0, default.stderr
+    assert _block(default)["uptime_floor"] == 97.0
+
+    # a lower floor keeps parasail/fp8 (96.96) that the default 97 % drops, and the listing
+    # names the floor the drops were held to
+    lower = _sweep(cli, bench_paths, *_one_rung("--min-uptime", "95"))
+    assert lower.code == 0, lower.stderr
+    assert "sort=price, zdr=off, min-uptime=95" in lower.stderr
+    assert _specs(lower) == {
+        f"or:{_MODEL}@novita",
+        f"or:{_MODEL}@parasail/fp8",
+        f"or:{_MODEL}@gmicloud",
+    }
+    assert [drop["tag"] for drop in _block(lower)["dropped"]] == ["relace/fp4", "siliconflow"]
+    assert _block(lower)["uptime_floor"] == 95.0
+
+    # a higher floor drops gmicloud (99.0) that the default keeps
+    higher = _sweep(cli, bench_paths, *_one_rung("--min-uptime", "99.5"))
+    assert higher.code == 0, higher.stderr
+    assert _specs(higher) == {f"or:{_MODEL}@novita"}
+    assert "gmicloud (uptime 1d 99.00 %)" in higher.stderr
+    assert _block(higher)["uptime_floor"] == 99.5
+
+    # the selection sentence names the floor this run actually used
+    run_dir = str(higher.document["run_dir"])
+    printed = cli.run("report", run_dir, tty_stdout=True, env={**bench_paths.env, **_ENV})
+    assert printed.code == 0, printed.stderr
+    assert "the 99.5 % floor" in printed.stdout
+
+    # --include still overrides the floor once the floor has been raised
+    kept = _sweep(cli, bench_paths, *_one_rung("--min-uptime", "99.5", "--include", "gmicloud"))
+    assert kept.code == 0, kept.stderr
+    assert _specs(kept) == {f"or:{_MODEL}@gmicloud"}
+
+    # a floor of 0 drops nothing for uptime; the status floor still applies
+    zeroed = _sweep(cli, bench_paths, *_one_rung("--min-uptime", "0"))
+    assert zeroed.code == 0, zeroed.stderr
+    assert [(drop["tag"], drop["reason"]) for drop in _block(zeroed)["dropped"]] == [
+        ("relace/fp4", "status -2"),
+    ]
+    assert _block(zeroed)["uptime_floor"] == 0.0
+
+
+def test_sweep_min_uptime_out_of_range_is_a_usage_error(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path)
+    sent: list[dict[str, Any]] = []
+    _install(monkeypatch, _transport(sent=sent))
+
+    for value in ("101", "-1"):
+        outcome = _sweep(cli, bench_paths, *_one_rung("--min-uptime", value))
+        assert outcome.code == 2, value
+        assert outcome.error["kind"] == "invalid_input", value
+    assert sent == []
+
+
 def test_sweep_zdr_keeps_only_the_endpoints_on_the_list(
     cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:

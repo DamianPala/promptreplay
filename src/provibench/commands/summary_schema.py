@@ -164,6 +164,7 @@ SWEEP_BLOCK_PROPERTIES: dict[str, JsonSchema] = {
     "sort": string(),
     "top": nullable_integer(),
     "zdr": boolean(),
+    "uptime_floor": number(),
     "check": boolean(),
     "dropped": array(_SWEEP_DROP),
     "ranking": array(_SWEEP_RANKED),

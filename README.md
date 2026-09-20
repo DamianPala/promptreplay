@@ -155,7 +155,7 @@ Native endpoints are never cut by `--top` and are not filtered by the pre-check.
 Selection is applied in this order:
 
 1. `--zdr` keeps only OpenRouter's Zero Data Retention endpoints.
-2. Drop degraded endpoints and endpoints below 97 % one-day uptime; `--include PREFIX` keeps only endpoints whose tag starts with PREFIX and keeps them past this floor, `--exclude PREFIX` drops them.
+2. Drop degraded endpoints and endpoints whose one-day uptime is below `--min-uptime` (97 % by default, the tool's own floor, not an OpenRouter rule); `--include PREFIX` keeps only endpoints whose tag starts with PREFIX and keeps them past this floor, `--exclude PREFIX` drops them.
    A prefix no endpoint has is an error, not a thinner run, and a missing status or uptime counts as unmeasured rather than degraded.
 3. `--sort price|uptime|throughput|latency` ranks the survivors, with price as the default; price ties prefer throughput and then uptime, and the percentile keys require API data.
 4. `--top N` keeps the N best that pass the availability check.

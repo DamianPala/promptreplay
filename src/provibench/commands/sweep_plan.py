@@ -44,6 +44,7 @@ class Criteria:
     sort: str
     top: int | None
     zdr: bool
+    uptime_floor: float
     check: bool
     """The availability check is planned: `--top` turns it on, `--check` adds it alone."""
 
@@ -63,6 +64,7 @@ def sweep_info(selection: Selection, criteria: Criteria) -> SweepInfo:
         sort=criteria.sort,
         top=criteria.top,
         zdr=criteria.zdr,
+        uptime_floor=criteria.uptime_floor,
         check=criteria.check,
         dropped=list(selection.dropped),
         ranking=[ranked(endpoint) for endpoint in selection.kept],
@@ -78,6 +80,7 @@ def select(
     exclude: Sequence[str],
     sort: str,
     zdr: bool,
+    uptime_floor: float,
 ) -> Selection:
     """Apply the tag filters, the percentile requirement, ZDR and the stability floor."""
     from provibench.bench.selection import select_candidates
@@ -92,6 +95,7 @@ def select(
         sort=sort,
         zdr=zdr,
         zdr_tags=fetch_zdr_tags(model) if zdr else frozenset(),
+        uptime_floor=uptime_floor,
     )
 
 

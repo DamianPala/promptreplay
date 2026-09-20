@@ -32,6 +32,8 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
 - `sweep` endpoint selection: a stability floor on endpoint status and one-day uptime,
   `--include`/`--exclude` by tag prefix, `--zdr`, `--sort price|uptime|throughput|latency`
   and `--top N`
+- `sweep --min-uptime PERCENT` sets the one-day uptime floor an endpoint must clear (97 by
+  default); the run records it as `sweep.uptime_floor` and the selection sentence names it
 - `sweep` availability pre-check: one `max_tokens 1` request per ranked candidate, so an
   endpoint the account's settings exclude is named with the gateway's reason instead of
   failing three cold requests
