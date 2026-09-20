@@ -90,6 +90,26 @@ def test_generic_and_plain_renderers_escape_values_keys_next_and_cursor() -> Non
     assert "plain\\x1b]52;c;clipboard\\x07" in rendered
 
 
+def test_generic_table_has_no_leading_or_trailing_blank_line() -> None:
+    """The paged-item table is one section: the table, then the cursor line as its footer,
+    with no blank line at the top, inside, or at the end."""
+    invocation, stdout, _stderr = make_invocation()
+    render_document(
+        invocation,
+        {
+            "items": [{"a": "1", "b": "2"}, {"a": "3", "b": "4"}],
+            "has_more": True,
+            "next_cursor": "c1",
+        },
+    )
+    rendered = stdout.getvalue()
+    assert not rendered.startswith("\n")
+    assert not rendered.endswith("\n\n")
+    lines = rendered.splitlines()
+    assert "" not in lines
+    assert lines[-1] == "More items available. Continue with --cursor c1"
+
+
 def test_config_diagnostics_and_completion_location_escape_without_changing_json(cli: Cli) -> None:
     config = cli.root / f"config{OSC}.toml"
     config.write_text("")

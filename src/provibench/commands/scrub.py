@@ -79,34 +79,32 @@ _SELECTIONS = {
 
 
 def render_scrub(invocation: Invocation, document: Document) -> None:
-    """The report as a rules table plus one summary block."""
-    from rich import box
-    from rich.markup import escape
-    from rich.table import Table
+    """One section: a `scrubbed:` caption, the rules table, then the summary footer lines."""
+    from provibench.bench.labels import text_table
 
     def cell(value: object) -> str:
-        return escape(escape_terminal_text("-" if value is None else str(value)))
+        return "-" if value is None else str(value)
 
-    console = invocation.stdout_console()
-    table = Table(box=box.SIMPLE, header_style="bold", title="Scrubbed")
-    table.add_column("rule")
-    table.add_column("count", justify="right")
+    rows: list[list[str]] = []
     for raw in as_list(document.get("rules")) or []:
         row = as_document(raw)
         if row is not None:
-            table.add_row(cell(row.get("rule")), cell(row.get("count")))
-    console.print(table)
-
+            rows.append([cell(row.get("rule")), cell(row.get("count"))])
     names = ", ".join(str(name) for name in as_list(document.get("user_names")) or [])
-    console.print(f"User names: {cell(names) if names else '(none)'}")
     selection = _SELECTIONS.get(str(document.get("selection")), "-")
-    console.print(
+    lines = [
+        "scrubbed:",
+        *text_table(("rule", "count"), rows),
+        f"User names: {names or '(none)'}",
         f"Entries: {cell(document.get('entries_in'))} -> {cell(document.get('entries_out'))} "
-        f"({cell(document.get('entries_dropped'))} dropped)"
-    )
-    console.print(f"Selection: {escape(selection)}")
-    console.print(f"Bytes: {cell(document.get('bytes_in'))} -> {cell(document.get('bytes_out'))}")
-    console.print(f"{cell(document.get('trace'))} -> {cell(document.get('out'))}")
+        f"({cell(document.get('entries_dropped'))} dropped)",
+        f"Selection: {selection}",
+        f"Bytes: {cell(document.get('bytes_in'))} -> {cell(document.get('bytes_out'))}",
+        f"{cell(document.get('trace'))} -> {cell(document.get('out'))}",
+    ]
+    stdout = invocation.streams.stdout
+    stdout.write("\n".join(escape_terminal_text(line) for line in lines) + "\n")
+    stdout.flush()
 
 
 @click.command(

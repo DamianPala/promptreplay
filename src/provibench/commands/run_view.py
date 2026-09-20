@@ -1,6 +1,6 @@
-"""The `history` and `compare` documents: one row per spec and run, and the deltas of two.
+"""The `history` and `compare` documents: one row per endpoint and run, and the deltas of two.
 
-`history` and `compare` read the same rows — one spec in one run — so the document shape
+`history` and `compare` read the same rows — one endpoint in one run — so the document shape
 is declared once and built once. `commands.run_tables` renders these documents; the
 documents are the source of truth, so a script and a reader see the same numbers.
 
@@ -44,7 +44,7 @@ _RUN_ROW = _all(
         "created": string(),
         "run_dir": string(),
         "protocol": string(),
-        "spec": string(),
+        "endpoint": string(),
         "target": string(),
         "model": string(),
         "provider": string(),
@@ -65,7 +65,7 @@ _RUN_ROW = _all(
 )
 _SERIES = _all(
     {
-        "spec": string(),
+        "endpoint": string(),
         "provider": string(),
         "trace": string(),
         "protocol": string(),
@@ -84,14 +84,14 @@ _RUN_REF: dict[str, JsonSchema] = {
 _METRIC = _all({"a": nullable_number(), "b": nullable_number(), "delta": nullable_number()})
 _SPEC_DELTA = _all(
     {
-        "spec": string(),
+        "endpoint": string(),
         "hit_rate": _METRIC,
         "eff_per_m_prompt": _METRIC,
         "ttft_ms": _METRIC,
         "gen_tok_s": _METRIC,
     }
 )
-_PRICE_DELTA = _all({"spec": string(), "price_in": _METRIC, "price_cache_read": _METRIC})
+_PRICE_DELTA = _all({"endpoint": string(), "price_in": _METRIC, "price_cache_read": _METRIC})
 COMPARE_OUTPUT = _all(
     {
         "run_a": obj(_RUN_REF, required=list(_RUN_REF)),
@@ -105,7 +105,7 @@ COMPARE_OUTPUT = _all(
 
 
 def history_document(runs: Sequence[RunNumbers], series: Sequence[Series]) -> Document:
-    """The `history` success document: one row per spec and run, plus the series.
+    """The `history` success document: one row per endpoint and run, plus the series.
 
     The rows come out in the order the table reads them — one provider at a time, oldest
     first — and the series in the same order, so a sparkline line sits under the rows it
@@ -121,13 +121,13 @@ def history_document(runs: Sequence[RunNumbers], series: Sequence[Series]) -> Do
 
 
 def compare_document(comparison: Comparison) -> Document:
-    """The `compare` success document: the pair names, the deltas and the unpaired specs."""
+    """The `compare` success document: the pair names, the deltas and the unpaired endpoints."""
     return {
         "run_a": run_ref_document(comparison.a),
         "run_b": run_ref_document(comparison.b),
         "rows": [
             {
-                "spec": row.spec,
+                "endpoint": row.spec,
                 "hit_rate": metric_document(row.hit_rate),
                 "eff_per_m_prompt": metric_document(row.eff_per_m_prompt),
                 "ttft_ms": metric_document(row.ttft_ms),
@@ -137,7 +137,7 @@ def compare_document(comparison: Comparison) -> Document:
         ],
         "listed": [
             {
-                "spec": row.spec,
+                "endpoint": row.spec,
                 "price_in": metric_document(row.price_in),
                 "price_cache_read": metric_document(row.price_cache_read),
             }
@@ -175,7 +175,7 @@ def row_document(row: RunRow) -> Document:
         "created": row.created,
         "run_dir": str(row.run_dir),
         "protocol": row.protocol,
-        "spec": row.spec,
+        "endpoint": row.spec,
         "target": row.target,
         "model": row.model,
         "provider": row.provider,
@@ -196,9 +196,9 @@ def row_document(row: RunRow) -> Document:
 
 
 def series_document(series: Series) -> Document:
-    """One spec, trace and protocol's hit rate per run, oldest first."""
+    """One endpoint, trace and protocol's hit rate per run, oldest first."""
     return {
-        "spec": series.spec,
+        "endpoint": series.spec,
         "provider": series.provider,
         "trace": series.trace,
         "protocol": series.protocol,

@@ -1,4 +1,4 @@
-"""targets.toml parsing and run-spec resolution."""
+"""targets.toml parsing and endpoint resolution."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ class RunSpec(BaseModel):
 
     @property
     def kind(self) -> str:
-        """The target's wire kind, so a spec can be compared without its whole target."""
+        """The target's wire kind, so an endpoint can be compared without its whole target."""
         return self.target.kind
 
 
@@ -118,7 +118,7 @@ def parse_run_spec(spec: str, targets: dict[str, Target]) -> RunSpec:
     """Parse "<target>:<model>[@p1,p2]"."""
     target_name, sep, rest = spec.partition(":")
     if not sep:
-        raise ValueError(f"invalid run spec {spec!r}: missing ':' between target and model")
+        raise ValueError(f"invalid endpoint {spec!r}: missing ':' between target and model")
     target = targets.get(target_name)
     if target is None:
         known = ", ".join(sorted(targets)) or "(none)"
@@ -126,10 +126,10 @@ def parse_run_spec(spec: str, targets: dict[str, Target]) -> RunSpec:
 
     model, providers = _split_providers(rest)
     if not model:
-        raise ValueError(f"invalid run spec {spec!r}: empty model")
+        raise ValueError(f"invalid endpoint {spec!r}: empty model")
     if providers and target.kind != "openrouter":
         raise ValueError(
-            f"invalid run spec {spec!r}: provider pinning ('@...') requires "
+            f"invalid endpoint {spec!r}: provider pinning ('@...') requires "
             f'kind="openrouter", target {target_name!r} is kind={target.kind!r}'
         )
     return RunSpec(target=target, model=model, providers=providers)

@@ -227,6 +227,21 @@ def test_report_formats_print_the_same_totals_for_one_run(
     assert "80000" not in markdown
 
 
+def test_report_full_replay_text_has_no_leading_or_trailing_blank_line(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    """One section: an `endpoints:` caption, the totals table, then a sparkline footer each."""
+    run_dir = _write_run(bench_paths.runs_dir, "t", "20260101-000000")
+
+    outcome = cli.run("report", str(run_dir), tty_stdout=True, env=bench_paths.env)
+
+    assert outcome.code == 0, outcome.stderr
+    lines = outcome.stdout.splitlines()
+    assert lines[0] == "endpoints:"
+    assert lines[-1] != ""
+    assert "" not in lines
+
+
 def test_report_json_output_file_contains_the_success_document(
     cli: Cli, bench_paths: BenchPaths
 ) -> None:
@@ -283,7 +298,7 @@ def test_probe_report_html_carries_the_tables_and_the_charts(
     )
     assert outcome.code == 0, outcome.stderr
     text = html_path.read_text(encoding="utf-8")
-    assert "specs: or:model@&lt;provider&gt;" in text
+    assert "endpoints: or:model@&lt;provider&gt;" in text
     assert "<td>@novita</td>" in text and "<td>@gmicloud</td>" in text
     assert text.count("<svg") == 2
     assert "@media (prefers-color-scheme: dark)" in text
@@ -409,8 +424,8 @@ def test_probe_report_shortens_the_shared_prefix_into_a_caption(
     rendered = cli.run("report", str(run_dir), tty_stdout=True, env=bench_paths.env)
     assert rendered.code == 0, rendered.stderr
     out = rendered.stdout
-    assert "specs: or:model@<provider>" in out
-    # every spec keeps a distinct label instead of two 40-character clips of one string
+    assert "endpoints: or:model@<provider>" in out
+    # every endpoint keeps a distinct label instead of two 40-character clips of one string
     assert "@novita" in out and "@gmicloud" in out
     assert "TTFT ms" in out and "tok/s" in out
     assert "400" in out and "40.0" in out
@@ -485,7 +500,7 @@ def test_probe_report_renders_a_run_without_stream_records(
     assert as_list(summary["rungs"]) != []
     run_table = outcome.stdout.split("\n\n")[0].splitlines()
     header = [cell.strip() for cell in run_table[0].split("|")]
-    assert header[:3] == ["spec", "hit %", "1st hit %"]
+    assert header[:3] == ["endpoint", "hit %", "1st hit %"]
     assert "TTFT ms" in header and "tok/s" in header and "drift" in header
     row = [cell.strip() for cell in run_table[2].split("|")]
     assert row[header.index("TTFT ms")] == "-"
@@ -528,5 +543,5 @@ def test_probe_report_shows_the_ttl_column_only_when_it_ran(
     )
     assert marked.code == 0, marked.stderr
     text = (cli.root / "r.md").read_text(encoding="utf-8")
-    assert text.startswith("| spec |")
+    assert text.startswith("| endpoint |")
     assert "| 60s:1 300s:0 |" in text

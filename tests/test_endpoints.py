@@ -132,19 +132,25 @@ def test_endpoints_sends_the_default_gateway_key_when_set(
         return httpx.Response(200, json=_PAYLOAD)
 
     monkeypatch.setattr(httpx, "AsyncClient", _client_factory(capture))
-    outcome = cli.run(
-        "endpoints", "some/model", env={"OPENROUTER_GENERAL_BUILDER_API_KEY": "secret-key"}
-    )
+    outcome = cli.run("endpoints", "some/model", env={"OPENROUTER_API_KEY": "secret-key"})
     assert outcome.code == 0, outcome.stderr
     assert seen == ["Bearer secret-key"]
 
 
 def test_endpoints_human_table(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(httpx, "AsyncClient", _client_factory(_ok))
-    # rich sizes an unfiled (non-fileno) console from the real `os.environ["COLUMNS"]`,
-    # not the injected process env; without widening it, this 13-column table would
-    # truncate every cell to an ellipsis and leave nothing recognisable to assert on.
-    monkeypatch.setenv("COLUMNS", "220")
     outcome = cli.run("endpoints", "some/model", tty=True)
     assert outcome.code == 0
     assert "cheap" in outcome.stdout and "pricey" in outcome.stdout
+
+
+def test_endpoints_has_no_leading_or_trailing_blank_line(
+    cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(_ok))
+    outcome = cli.run("endpoints", "some/model", tty=True)
+    assert outcome.code == 0
+    lines = outcome.stdout.splitlines()
+    assert lines[0] != "" and lines[-1] != ""
+    assert "" not in lines
+    assert [cell.strip() for cell in lines[0].split(" | ")][:2] == ["tag", "provider"]

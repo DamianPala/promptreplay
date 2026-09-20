@@ -81,8 +81,8 @@ def session_footer_lines(
     """The session-projection footer: what a session shaped like the trace would bill.
 
     One line, prompt tokens only -- `session_prompt_usd` is `eff_per_m_prompt` times the
-    trace's own prompt-token total, so a spec with neither known contributes nothing rather
-    than an unpriced entry the reader has to discount.
+    trace's own prompt-token total, so an endpoint with neither known contributes nothing
+    rather than an unpriced entry the reader has to discount.
     """
     if not isinstance(trace_prompt_tokens, int) or trace_prompt_tokens <= 0:
         return []
@@ -112,8 +112,9 @@ def listing_prices_document(prices: Mapping[str, Prices] | None) -> list[Documen
     """`listing_prices` as `[{provider, input, cache_read, cache_write, output}, ...]`.
 
     Sorted by provider so the document is stable across a rebuild; `None` (a run written
-    before the field existed) and `{}` (a run with no OpenRouter spec to list) both render
-    as an empty list -- the distinction only matters to `choose_prices`, not to a reader.
+    before the field existed) and `{}` (a run with no OpenRouter endpoint to list) both
+    render as an empty list -- the distinction only matters to `choose_prices`, not to a
+    reader.
     """
     if not prices:
         return []

@@ -1,7 +1,7 @@
-"""`compare`: two runs of one trace, subtracted spec by spec.
+"""`compare`: two runs of one trace, subtracted endpoint by endpoint.
 
 The question `history` raises — what changed since last time — is answered by one row per
-spec with the metric on either side and the difference between them. Both runs go back
+endpoint with the metric on either side and the difference between them. Both runs go back
 through their own loader and the same summarising the report does, so a delta is two
 numbers `report` would print, subtracted once.
 
@@ -30,12 +30,12 @@ from provibench.core.spec import CommandSpec, Effects
     "compare",
     cls=Command,
     spec=CommandSpec(effects=Effects.READ_ONLY, output=COMPARE_OUTPUT, render=render_compare),
-    help="Compare two runs of one trace, spec by spec.\n\n"
+    help="Compare two runs of one trace, endpoint by endpoint.\n\n"
     "RUN_A and RUN_B each name a run directory, a trace (its newest run), or latest and "
     "previous — the two newest runs of --trace, or of the trace the newest run belongs to. "
-    "Every spec both runs measured gets a row with the metric as A → B and the change "
+    "Every endpoint both runs measured gets a row with the metric as A → B and the change "
     "between them; the listed prices are compared from the prices block each run recorded, "
-    "where both have one; a spec only one run measured is named under the table. "
+    "where both have one; an endpoint only one run measured is named under the table. "
     "Runs of different traces or protocols are refused unless --force, because their "
     "numbers are not the same measurement.",
 )

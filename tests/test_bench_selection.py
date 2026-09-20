@@ -167,8 +167,8 @@ def test_select_candidates_drops_non_zdr_first_then_the_floor() -> None:
         ("relace/fp4", "status -2"),
         ("siliconflow", "not ZDR"),
     ]
-    # a drop carries the run-spec label of the endpoint it removes, not just its tag
-    assert selection.dropped[1].spec == f"or:{_MODEL}@siliconflow"
+    # a drop carries the endpoint label of the endpoint it removes, not just its tag
+    assert selection.dropped[1].endpoint == f"or:{_MODEL}@siliconflow"
     assert selection.dropped[1].checked is False
 
 
@@ -259,7 +259,7 @@ def test_the_recorded_block_keeps_the_status_as_text() -> None:
         ranking=[ranked(_endpoint("b", status=0)), ranked(_endpoint("c", status=None))],
     )
     assert info.to_document()["dropped"] == [
-        {"tag": "a", "spec": f"or:{_MODEL}@a", "reason": "not ZDR", "checked": False}
+        {"tag": "a", "endpoint": f"or:{_MODEL}@a", "reason": "not ZDR", "checked": False}
     ]
     assert info.to_document()["sort"] == "price"
     # the number the API sent becomes its own text, and a status it never sent stays null
@@ -282,6 +282,26 @@ def test_the_recorded_block_keeps_the_status_as_text() -> None:
         },
     ]
     assert [row.status for row in info.ranking] == [0, None]
+
+
+def test_a_sweep_block_written_before_the_rename_still_loads() -> None:
+    """A run recorded when a drop's label was `spec` reads back under `endpoint`.
+
+    `SweepInfo` is persisted inside `run.json`, so `report`, `history` and `compare` parse
+    it from every older run directory; only the key changed, not what it names.
+    """
+    info = SweepInfo.model_validate(
+        {
+            "model": _MODEL,
+            "target": "or",
+            "dropped": [{"tag": "a", "spec": f"or:{_MODEL}@a", "reason": "not ZDR"}],
+        }
+    )
+    assert [drop.endpoint for drop in info.dropped] == [f"or:{_MODEL}@a"]
+    # and the block it writes back out carries only the current key
+    assert info.to_document()["dropped"] == [
+        {"tag": "a", "endpoint": f"or:{_MODEL}@a", "reason": "not ZDR", "checked": False}
+    ]
 
 
 def test_precheck_cost_is_one_smallest_rung_per_candidate() -> None:

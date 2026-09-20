@@ -188,6 +188,20 @@ def test_prices_keeps_model_name_whole_at_eighty_columns(
     assert "deepseek-flash" in outcome.stdout
 
 
+def test_prices_has_no_leading_or_trailing_blank_line(cli: Cli, bench_paths: BenchPaths) -> None:
+    """One section: the caption line immediately above the table, no blank line anywhere."""
+    _write_targets(bench_paths.targets_path, override=True)
+    install_price_cache(cli)
+
+    outcome = cli.run("prices", "deepseek-flash", tty=True, env=bench_paths.env)
+
+    assert outcome.code == 0, outcome.stderr
+    lines = outcome.stdout.splitlines()
+    assert lines[0] != "" and lines[-1] != ""
+    assert "" not in lines
+    assert lines[0].startswith("price table ($/M):")
+
+
 def test_prices_prices_a_model_from_litellm_when_the_override_is_gone(
     cli: Cli, bench_paths: BenchPaths
 ) -> None:

@@ -104,7 +104,7 @@ _OUTPUT = obj(
         effects=Effects.IDEMPOTENT,
         output=_OUTPUT,
         output_description=(
-            "summaries holds one object per spec: shaped like probe's or sweep's summaries "
+            "summaries holds one object per endpoint: shaped like probe's or sweep's summaries "
             "(see provibench schema probe) when protocol is 'probe', or like replay's (see "
             "provibench schema replay) when protocol is 'full'. output_file is set when "
             "--output-file writes the selected rendering or JSON document; that file "
@@ -115,7 +115,7 @@ _OUTPUT = obj(
     help="Summarise an existing run.\n\n"
     "RUN is a run directory, a trace name (the newest run under <runs-dir>/<name>), or "
     "'latest' (the newest run across every trace). A probe run is summarised as hit rate, "
-    "prefix fraction and effective price per spec, a full replay as its per-turn totals. "
+    "cached fraction and effective price per endpoint, a full replay as its per-turn totals. "
     "Use --format text, md, html, or json to choose the rendering. With --output-file, that "
     "rendering is written to the path, replacing what was there, and stdout stays empty; a "
     "report is derived from the run directory alone, so writing it again is the same report. "
@@ -231,7 +231,7 @@ def _probe_report(run_dir: Path) -> Document:
         "options": dict(meta.options.model_dump()),
         "summaries": [probe_summary_to_document(s) for s in summaries],
         # The selection the run chose its endpoints by, so the report can print it with no
-        # network; `None` for a probe whose specs were given by hand.
+        # network; `None` for a probe whose endpoints were given by hand.
         "sweep": None if meta.sweep is None else meta.sweep.to_document(),
         "spend_usd": total_spend([spend, meta.precheck.spend_usd if meta.precheck else None]),
         "worst_case_usd": worst,

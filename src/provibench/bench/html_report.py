@@ -85,9 +85,9 @@ def _relative_run(run_dir: object) -> str:
 
 
 def _models(document: Document) -> str:
-    """The models the run asked for, deduplicated, in spec order.
+    """The models the run asked for, deduplicated, in endpoint order.
 
-    The label of a spec is `target:model@provider`, which is where both a probe run and a
+    The label of an endpoint is `target:model@provider`, which is where both a probe run and a
     full replay keep the model they measured; the model a response named is a different
     claim, and it is the drift column's job, not the title's.
     """
@@ -102,7 +102,7 @@ def _models(document: Document) -> str:
 
 
 def _key(document: Document) -> str:
-    """Which field a report document carries its per-spec summaries under.
+    """Which field a report document carries its per-endpoint summaries under.
 
     One name for both protocols (a probe run's or a full replay's): `report --json` and
     `probe`/`sweep`/`replay --json` all use `summaries`.
@@ -131,11 +131,11 @@ def _probe_sections(document: Document) -> list[str]:
     """The caption, the two probe tables, the two charts and the notes."""
     summaries = [summary_from_document(entry) for entry in _entries(document, _key(document))]
     blocks = probe_blocks(summaries)
-    labels = [row[0] for row in blocks.spec.rows]
+    labels = [row[0] for row in blocks.endpoint.rows]
     sections: list[str] = []
     if blocks.caption:
         sections.append(f'<p class="caption">{escape(blocks.caption)}</p>')
-    sections.append(_table_section("Per provider", blocks.spec))
+    sections.append(_table_section("Per provider", blocks.endpoint))
     sections.append(_table_section("Per rung", blocks.rungs))
     charts = _probe_charts(summaries, labels)
     if charts:
@@ -147,7 +147,7 @@ def _probe_sections(document: Document) -> list[str]:
 
 
 def _selection_lines(document: Document) -> list[str]:
-    """A sweep's selection as note lines, or nothing for a probe whose specs were named.
+    """A sweep's selection as note lines, or nothing for a probe whose endpoints were named.
 
     The report is the artifact that gets shared, so the criteria the run chose by and the
     endpoints they dropped belong in the file next to the numbers they explain.
@@ -160,7 +160,7 @@ def _selection_lines(document: Document) -> list[str]:
 
 
 def _replay_sections(document: Document) -> list[str]:
-    """The per-turn summary table, one cache curve per spec, and the notes."""
+    """The per-turn summary table, one cache curve per endpoint, and the notes."""
     entries = _entries(document, "summaries")
     summary = TableBlock(
         columns=SUMMARY_COLUMNS, rows=tuple(tuple(summary_row(entry)) for entry in entries)
@@ -185,7 +185,7 @@ def _probe_charts(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> s
     Only the palette's validated slots are charted: past eight series a grouped bar chart
     stops being readable however it is coloured, so the rest stay in the tables above and
     the caption says how many there are. The same eight keep their slot in both charts, so
-    a spec wears one colour on the page.
+    an endpoint wears one colour on the page.
     """
     charted = series(summaries, labels)
     groups = rung_groups(charted)
@@ -198,9 +198,9 @@ def _probe_charts(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> s
             + _chart(
                 grouped_bars(groups, label="hit rate per rung", y_axis="hit %", x_axis="rung"),
                 "Hit rate of the warm reads at each rung. The x axis is the probe's rungs, "
-                "each labelled with the reference spec's cold prompt size in thousands of "
+                "each labelled with the reference endpoint's cold prompt size in thousands of "
                 "tokens; the height is the share of the served warm reads whose prompt was "
-                "already cached. Hover a bar for the spec, the rung and the read counts.",
+                "already cached. Hover a bar for the endpoint, the rung and the read counts.",
                 unmeasured,
             )
             + "</figure>"
@@ -209,8 +209,8 @@ def _probe_charts(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> s
         parts.append(
             "<figure><h3>Effective prompt price</h3>"
             + _chart(
-                horizontal_bars(rows, label="effective prompt price per spec"),
-                "Effective prompt price per spec: USD per 1M prompt tokens at the measured hit "
+                horizontal_bars(rows, label="effective prompt price per endpoint"),
+                "Effective prompt price per endpoint: USD per 1M prompt tokens at the measured hit "
                 "rate, so a cheap listed price that never hits the cache costs more than it "
                 "looks. Hover a bar for the listed prices and the hit fraction.",
             )
@@ -220,7 +220,7 @@ def _probe_charts(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> s
 
 
 def _curve(entry: Document) -> str:
-    """One spec's cache curve as a figure, or nothing when the run recorded no turns.
+    """One endpoint's cache curve as a figure, or nothing when the run recorded no turns.
 
     A fraction outside 0..1 is clamped, as the terminal's sparkline clamps it: the curve is
     read as "how much of the prompt was cached", and a value the axis cannot hold would put

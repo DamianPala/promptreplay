@@ -101,42 +101,45 @@ _COLUMNS = (
 
 def render_endpoints(invocation: Invocation, document: Document) -> None:
     """One table: tag, provider, quantization, context, prices, uptime, latency, throughput."""
-    from rich import box
-    from rich.markup import escape
-    from rich.table import Table
+    from provibench.bench.labels import text_table
 
-    def cell(value: object) -> str:
-        return escape(escape_terminal_text("-" if value is None else str(value)))
-
-    def money(value: object) -> str:
-        return f"{value:.3f}" if isinstance(value, int | float) else "-"
-
-    def rate(value: object) -> str:
-        return f"{value:.1f}" if isinstance(value, int | float) else "-"
-
-    table = Table(box=box.SIMPLE, header_style="bold")
-    for column in _COLUMNS:
-        table.add_column(column)
     entries = [d for d in map(as_document, as_list(document.get("endpoints")) or []) if d]
-    for entry in entries:
-        prices = as_document(entry.get("prices")) or {}
-        implicit = entry.get("supports_implicit_caching")
-        table.add_row(
-            cell(entry.get("tag")),
-            cell(entry.get("provider_name")),
-            cell(entry.get("quantization")),
-            cell(entry.get("context_length")),
-            money(prices.get("input")),
-            money(prices.get("cache_read")),
-            money(prices.get("cache_write")),
-            money(prices.get("output")),
-            rate(entry.get("uptime_30m")),
-            rate(entry.get("uptime_1d")),
-            rate(entry.get("latency_ms_30m")),
-            rate(entry.get("throughput_30m")),
-            "yes" if implicit else ("no" if implicit is False else "-"),
-        )
-    invocation.stdout_console().print(table)
+    lines = text_table(_COLUMNS, [_endpoint_cells(entry) for entry in entries])
+    stdout = invocation.streams.stdout
+    stdout.write("\n".join(escape_terminal_text(line) for line in lines) + "\n")
+    stdout.flush()
+
+
+def _cell(value: object) -> str:
+    return "-" if value is None else str(value)
+
+
+def _money(value: object) -> str:
+    return f"{value:.3f}" if isinstance(value, int | float) else "-"
+
+
+def _rate(value: object) -> str:
+    return f"{value:.1f}" if isinstance(value, int | float) else "-"
+
+
+def _endpoint_cells(entry: Document) -> list[str]:
+    prices = as_document(entry.get("prices")) or {}
+    implicit = entry.get("supports_implicit_caching")
+    return [
+        _cell(entry.get("tag")),
+        _cell(entry.get("provider_name")),
+        _cell(entry.get("quantization")),
+        _cell(entry.get("context_length")),
+        _money(prices.get("input")),
+        _money(prices.get("cache_read")),
+        _money(prices.get("cache_write")),
+        _money(prices.get("output")),
+        _rate(entry.get("uptime_30m")),
+        _rate(entry.get("uptime_1d")),
+        _rate(entry.get("latency_ms_30m")),
+        _rate(entry.get("throughput_30m")),
+        "yes" if implicit else ("no" if implicit is False else "-"),
+    ]
 
 
 @click.command(

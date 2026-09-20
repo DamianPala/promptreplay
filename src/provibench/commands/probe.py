@@ -1,8 +1,8 @@
 """`probe`: measure a provider's prompt cache from a few real turns of a trace.
 
 The command is a thin layer over `execute_probe`, which `sweep` calls too: a sweep is a
-probe whose specs were expanded from an endpoint list, and everything after that — the
-estimate, the confirmation, the protocol, the run directory, the tables — is one flow.
+probe whose endpoints were expanded from an OpenRouter listing, and everything after that —
+the estimate, the confirmation, the protocol, the run directory, the tables — is one flow.
 
 `provibench.bench.*` pulls in httpx and pydantic; its symbols are imported only inside the
 functions that use them, so building the CLI (schema, --help, completion) stays cheap.
@@ -133,14 +133,19 @@ def output_fields() -> tuple[dict[str, JsonSchema], list[str]]:
     "from the estimate. --dry-run prices the run and stops there, sending nothing.",
 )
 @click.argument("trace", help="Trace path, name under traces_dir, or 'sample'")
-@click.argument("specs", nargs=-1, required=True, help="One or more target:model[@provider] specs")
+@click.argument(
+    "endpoints",
+    nargs=-1,
+    required=True,
+    help="One or more endpoints, `target:model[@provider[,provider...]]`",
+)
 @probe_options
 @click.pass_context
 def probe(  # noqa: PLR0913 (click binds one parameter per flag; there is no group to extract)
     ctx: click.Context,
     *,
     trace: str,
-    specs: tuple[str, ...],
+    endpoints: tuple[str, ...],
     rungs: str | None,
     repeats: str,
     gap: float,
@@ -157,7 +162,7 @@ def probe(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
     invocation = require_invocation(ctx)
     request = ProbeRequest(
         trace=trace,
-        specs=parse_specs(specs, load_targets(invocation)),
+        specs=parse_specs(endpoints, load_targets(invocation)),
         conversation=conversation,
         rungs=rungs,
         repeats=repeats,
@@ -215,7 +220,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         request.budget,
         pre_check=pre_check,
         upper_bound=upper_bound,
-        hint="Raise --budget, or make the run smaller: drop a spec or a rung, lower "
+        hint="Raise --budget, or make the run smaller: drop an endpoint or a rung, lower "
         "--repeats, or skip the streamed request with --no-throughput",
     )
     if request.dry_run:

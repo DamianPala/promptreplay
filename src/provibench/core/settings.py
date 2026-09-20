@@ -30,6 +30,7 @@ class Source(StrEnum):
     ENV = "env"
     CONFIG = "config"
     DEFAULT = "default"
+    PACKAGED = "packaged"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +76,12 @@ class Setting:
     secret: bool = False
     is_path: bool = False
     validate: Validator | None = None
+    packaged: Callable[[], Path] | None = None
+    """A file this path setting falls back to naming, in `config show` only, when its
+    resolved default does not exist on disk; shown with `Source.PACKAGED` instead of
+    `Source.DEFAULT`. Resolution itself (`resolve_settings`) never uses this: a command
+    that needs the value still gets the (possibly nonexistent) default path and decides
+    for itself whether to fall back to a packaged copy."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,3 +266,7 @@ def _origin(setting: Setting, source: Source) -> str:
             return f"configuration key {setting.config_key!r}"
         case Source.DEFAULT:
             return "the built-in default"
+        case Source.PACKAGED:
+            # Resolution itself never assigns this source (see `Setting.packaged`), so a
+            # validated value is never blamed on it.
+            raise AssertionError("PACKAGED is a config-show display source, never a resolved one")

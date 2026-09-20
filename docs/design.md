@@ -62,14 +62,14 @@ The harness is pointed at it (`ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropi
 Recording against the native API is cheaper than against a reseller and produces an identical body: the harness does not know where it is sending.
 Only the `model` field differs, and replay overrides it.
 
-## Targets and run specs
+## Targets and endpoints
 
 `targets.toml` (default path `$XDG_CONFIG_HOME/provibench/targets.toml`, packaged fallback in `data/`):
 
 ```toml
 [targets.openrouter]
 url = "https://openrouter.ai/api/v1/messages"
-api_key_env = "OPENROUTER_GENERAL_BUILDER_API_KEY"
+api_key_env = "OPENROUTER_API_KEY"
 kind = "openrouter"            # enables provider pinning and /generation billing lookup
 
 [targets.deepseek]
@@ -91,12 +91,12 @@ output = 0.60
 
 `aliases` maps an OpenRouter slug to the model this target serves it under, and is how `sweep`
 knows to include a native endpoint: `provibench sweep TRACE deepseek/deepseek-v4.1-flash`
-adds a spec for the native endpoint of every `kind = "anthropic"` target that aliases the
+adds an endpoint for every `kind = "anthropic"` target that aliases the
 slug, and nothing for the targets that do not. A native target without an entry is still
-reachable by naming it in a run spec (`deepseek:deepseek-flash`); the alias is what makes
+reachable by naming it as an endpoint (`deepseek:deepseek-flash`); the alias is what makes
 `sweep` expand to it.
 
-A run spec on the command line is `<target>:<model>[@<provider>[,<provider>...]]`:
+An endpoint on the command line is `<target>:<model>[@<provider>[,<provider>...]]`:
 
 ```
 openrouter:deepseek/deepseek-v4.1-flash@novita
@@ -107,11 +107,11 @@ deepseek:deepseek-flash
 
 `@providers` is valid only for `kind = "openrouter"` and becomes `body.provider = {"only": [...], "allow_fallbacks": false}`.
 Provider identifiers are OpenRouter endpoint `tag`s (lowercase slugs); `provibench endpoints <model>` lists them.
-`label` is the spec string; `slug` is the label with anything outside `[A-Za-z0-9._-]` replaced by `-`.
+`label` is the endpoint string; `slug` is the label with anything outside `[A-Za-z0-9._-]` replaced by `-`.
 
 ## Replay
 
-For each spec (concurrently across specs, strictly sequential within one):
+For each endpoint (concurrently across endpoints, strictly sequential within one):
 
 1. `prepare_body`: deep-copy the recorded body; set `model`, `stream: false`, `max_tokens` (default 1); add `provider` when pinned; with `--strip-thinking` remove `thinking`/`redacted_thinking` blocks from assistant messages (a message left with no blocks gets `[{"type": "text", "text": " "}]`).
    Everything else, including `cache_control` markers, `metadata`, `tools` and `system`, stays byte-identical.
@@ -130,12 +130,12 @@ After the loop, for `kind = "openrouter"`:
 
 For `kind = "anthropic"`: `prompt_total` and buckets from `usage`; native price resolution is
 `targets.toml` first, then LiteLLM through `litellm_provider`, then none. The selected source is
-recorded per spec (`targets`, `litellm`, or no price), so a run does not silently inherit a later
+recorded per endpoint (`targets`, `litellm`, or no price), so a run does not silently inherit a later
 price-table change.
 
 `ReplayResult` fields: `seq, turn, status, latency_ms, message_id, model, provider, requested_providers, usage, prompt_total, cached, cache_write, output_tokens, cost, billed_total, cache_discount, error, note, generation`.
 
-Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, conversation key, options, list of `{label, slug, target, model, providers, file}`) plus one `<slug>.jsonl` per spec with a `ReplayResult` per line.
+Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, conversation key, options, list of `{label, slug, target, model, providers, file}`) plus one `<slug>.jsonl` per endpoint with a `ReplayResult` per line.
 
 ## Scrubbing
 
@@ -154,7 +154,7 @@ Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, con
 
 ## Summary
 
-`RunSummary` per spec:
+`RunSummary` per endpoint:
 
 | field | definition |
 |---|---|
@@ -170,38 +170,39 @@ Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, con
 | `latency_p50_ms`, `latency_p95_ms` | with `max_tokens: 1` this is prefill time |
 | `notes` | distinct notes across turns |
 
-`ProbeSummary` per spec (the `probe`/`sweep`/`report` tables and `--json`):
+`ProbeSummary` per endpoint (the `probe`/`sweep`/`report` tables and `--json`):
 
 | field | definition |
 |---|---|
-| `hit_rate`, `prefix_fraction`, `h` | pooled over every served warm read: `h` is what `eff_per_m_prompt` is weighted by |
-| `first_hit_rate`, `first_prefix_fraction`, `first_h` | the same three, pooled over only each rung's first warm read — the only read an agent loop performs, so this is what it actually experiences; equal to the unqualified fields with `--repeats 1` |
-| `priced_as` | how `input_price`/`cache_read_price` were chosen: `pinned`, `served: <provider(s)> (listed)` (`, weighted` suffix for more than one) when the run's own `listing_prices` has the served provider(s), `served: <provider(s)> (rates fitted from this run's billed records)` (`weighted,` prefix for more than one) for a run written before `listing_prices` existed, or `worst case: <provider>` when an unpinned spec's served provider could not be repriced. Anything but `pinned` is also a note under the table, because neither a listed nor a fitted reprice is the price the estimate itself used |
-| `listed_input`, `listed_cache_read`, `listed_source` | the price `history`/`compare` treat as this run's listed price: `input_price`/`cache_read_price` again when the reprice came from `listing_prices` (`listed_source: "listing"`), else the original worst-case price, never a fit — so two runs of the same spec never show a price change that is only fit noise |
+| `hit_rate`, `cached_fraction`, `h` | pooled over every served warm read |
+| `first_hit_rate`, `first_cached_fraction`, `first_h` | the same three, pooled over only each rung's first warm read — the only read an agent loop performs, so this is what it actually experiences; equal to the unqualified fields with `--repeats 1`. `eff_per_m_prompt` is weighted by this `first_h`, falling back to the pooled `h` (noted `eff $/M from pooled reads: no first read served`) only when no rung served a first read at all |
+| `priced_as` | how `input_price`/`cache_read_price` were chosen: `pinned`, `served: <provider(s)> (listed)` (`, weighted` suffix for more than one) when the run's own `listing_prices` has the served provider(s), `served: <provider(s)> (rates fitted from this run's billed records)` (`weighted,` prefix for more than one) for a run written before `listing_prices` existed, or `worst case: <provider>` when an unpinned endpoint's served provider could not be repriced. Anything but `pinned` is also a note under the table, because neither a listed nor a fitted reprice is the price the estimate itself used |
+| `listed_input`, `listed_cache_read`, `listed_source` | the price `history`/`compare` treat as this run's listed price: `input_price`/`cache_read_price` again when the reprice came from `listing_prices` (`listed_source: "listing"`), else the original worst-case price, never a fit — so two runs of the same endpoint never show a price change that is only fit noise |
 | `billed_usd` | what OpenRouter says it billed, summed over enriched requests, or `None` |
-| `spend_usd` | `billed_usd` when there is one, else the usage priced at `input_price`/`cache_read_price` — how a native spec, which never gets a `billed_usd`, gets a spend |
-| `session_prompt_usd` | `eff_per_m_prompt × trace_prompt_tokens / 1e6`: this spec's prompt bill for a session shaped like the recorded trace; `None` without a known trace total |
+| `spend_usd` | `billed_usd` when there is one, else the usage priced at `input_price`/`cache_read_price` — how a native endpoint, which never gets a `billed_usd`, gets a spend |
+| `session_prompt_usd` | `eff_per_m_prompt × trace_prompt_tokens / 1e6`: this endpoint's prompt bill for a session shaped like the recorded trace; `None` without a known trace total |
 | `output_tokens` | output tokens summed over every served read; a surplus over the read count means a provider ignored `max_tokens: 1` |
 | `errors`, `rate_limited` | `rate_limited` is the subset of `errors` that came back HTTP 429 — the run's own pace, not a refusal |
 
-A run's `precheck.jsonl` (present only when the run planned an availability check) holds the pre-check's own requests, role `precheck`; they never enter any spec's own records or the fields above. `ProbeRunMeta.precheck` is their count, spend and worst case, and `ProbeRunMeta.trace_prompt_tokens` is the trace's total prompt tokens (`bench.trace.total_prompt_tokens`), both `None` for a run written before this existed.
+A run's `precheck.jsonl` (present only when the run planned an availability check) holds the pre-check's own requests, role `precheck`; they never enter any endpoint's own records or the fields above. `ProbeRunMeta.precheck` is their count, spend and worst case, and `ProbeRunMeta.trace_prompt_tokens` is the trace's total prompt tokens (`bench.trace.total_prompt_tokens`), both `None` for a run written before this existed.
 
-`ProbeRunMeta.listing_prices` is the swept/probed OpenRouter model's own endpoint listing at run time, one `Prices` per served provider (keyed by `normalize_provider`); `None` for a run written before this field existed, `{}` for a run with no OpenRouter spec to list. `served_prices` looks the answering provider up here first, and only falls back to fitting its rates from the run's own billed records when this is `None` — see `bench/probe_pricing.py`.
+`ProbeRunMeta.listing_prices` is the swept/probed OpenRouter model's own endpoint listing at run time, one `Prices` per served provider (keyed by `normalize_provider`); `None` for a run written before this field existed, `{}` for a run with no OpenRouter endpoint to list. `served_prices` looks the answering provider up here first, and only falls back to fitting its rates from the run's own billed records when this is `None` — see `bench/probe_pricing.py`.
 
 ## Commands
 
 | command | effects | output |
 |---|---|---|
-| `compare RUN_A RUN_B [--trace T] [--force]` | read-only | per-spec deltas between two runs of one trace; `invalid_input` across traces or protocols |
+| `compare RUN_A RUN_B [--trace T] [--force]` | read-only | per-endpoint deltas between two runs of one trace; `invalid_input` across traces or protocols |
 | `completion [SHELL] [--install] [--force]` | idempotent | completion script, or installed path and `changed` |
-| `config show` | read-only | every setting with its effective value and source |
+| `config show` | read-only | every setting with its effective value and source, `packaged` included when a path setting's default does not exist |
+| `config init [--force]` | idempotent | copies the packaged `targets.toml` to its effective user path; `precondition_failed` over an existing file without `--force` |
 | `endpoints MODEL [--sort KEY]` | read-only | OpenRouter endpoints: tag, provider, quantization, context, prices, uptime, latency, throughput |
-| `history [MODEL] [--trace T] [--since DURATION]` | read-only | one row per run and spec, plus a hit-rate sparkline per spec |
+| `history [MODEL] [--trace T] [--since DURATION]` | read-only | one row per run and endpoint, plus a hit-rate sparkline per endpoint |
 | `inspect TRACE [--conversation KEY]` | read-only | conversation list plus per-turn table of the selected conversation |
 | `prices [MODEL...] [--update]` | idempotent | native model prices and their source |
-| `probe TRACE SPEC... [--rungs] [--repeats] [--gap] [--ttl] [--warm] [--timeout] [--budget] [--yes] [--dry-run]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, run_hex, conversation, rungs, summaries, spend_usd, worst_case_usd, precheck, trace_prompt_tokens, listing_prices, partial, changed}` on a real run; `--dry-run` returns `{estimate, total_usd, pre_check, upper_bound, runs_dir, requires_confirmation, partial: false, changed: false}` instead, with none of the spend/precheck/session/listing fields |
+| `probe TRACE ENDPOINT... [--rungs] [--repeats] [--gap] [--ttl] [--warm] [--timeout] [--budget] [--yes] [--dry-run]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, run_hex, conversation, rungs, summaries, spend_usd, worst_case_usd, precheck, trace_prompt_tokens, listing_prices, partial, changed}` on a real run; `--dry-run` returns `{estimate, total_usd, pre_check, upper_bound, runs_dir, requires_confirmation, partial: false, changed: false}` instead, with none of the spend/precheck/session/listing fields |
 | `record --name N --upstream URL [--host] [--port] [--append] [--timeout DURATION]` | non-idempotent, runs until SIGINT or the timeout | `{trace, requests, conversations, changed}` |
-| `replay TRACE --run SPEC... [--conversation] [--max-tokens] [--delay] [--strip-thinking] [--limit] [--warm] [--budget] [--yes] [--dry-run]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, conversation, turns, summaries, partial, changed}` on a real run; `--dry-run` returns `{estimate, total_usd, runs_dir, requires_confirmation, partial: false, changed: false}` instead |
+| `replay TRACE --run ENDPOINT... [--conversation] [--max-tokens] [--delay] [--strip-thinking] [--limit] [--warm] [--budget] [--yes] [--dry-run]` | non-idempotent, spends API credit, `confirm=True` | `{run_dir, conversation, turns, summaries, partial, changed}` on a real run; `--dry-run` returns `{estimate, total_usd, runs_dir, requires_confirmation, partial: false, changed: false}` instead |
 | `report RUN [--format text\|md\|html\|json] [--output-file PATH]` | idempotent | summaries table and cache curves; `--output-file` writes the selected rendering, replacing the file (a report is derived from the run alone) |
 | `scrub TRACE OUT [--output-file PATH] [--replace OLD=NEW]... [--user NAME]... [--turns N] [--allow-email ADDR]... [--force]` | idempotent | `{trace, out, output_file, entries_in/out/dropped, selection, bytes_in/out, user_names, rules, changed}` and the rules table |
 | `sweep TRACE MODEL [--top N] [--sort KEY] [--zdr] [--budget USD] [--yes] [--dry-run]` | non-idempotent, spends API credit, `confirm=True` | probe summaries plus the recorded selection criteria, `partial` included; `--dry-run` returns the same shape as `probe --dry-run` |

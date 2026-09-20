@@ -94,7 +94,7 @@ _OUTPUT = obj(
     "run_specs",
     multiple=True,
     required=True,
-    help="Run spec <target>:<model>[@provider[,provider]]; repeatable",
+    help="One or more endpoints, `target:model[@provider[,provider...]]`; repeatable",
 )
 @click.option("--conversation", default=None, help="Conversation key; defaults to the main one")
 @click.option("--max-tokens", type=click.IntRange(1), default=1, help="Output tokens to request")

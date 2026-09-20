@@ -133,8 +133,8 @@ _OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=_REQUIRED)
     type=click.IntRange(1),
     default=1,
     show_default=True,
-    help="Specs to probe at once; one spec is always sequential, and latency numbers get "
-    "noisier as this rises",
+    help="Endpoints to probe at once; one endpoint is always sequential, and latency numbers "
+    "get noisier as this rises",
 )
 @probe_options
 @click.pass_context
@@ -190,6 +190,7 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
 
     for line in render_candidates(selection, model=model, sort=sort_key, zdr=zdr):
         invocation.message(line)
+    invocation.message("")
 
     candidates = [pinned_spec(gateway, model, endpoint.tag) for endpoint in selection.kept]
     specs = [*candidates, *native_specs(model, targets)]

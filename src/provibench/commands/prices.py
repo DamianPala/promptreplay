@@ -5,7 +5,7 @@ entry, or LiteLLM's community table. The first two are stated by the user, the t
 fetched and cached, and this command is where all three can be read before a run is paid for
 — the caveat that the community table lists peak rates included.
 
-It also owns the cache for the runs that price a native spec: `native_price_table` is what
+It also owns the cache for the runs that price a native endpoint: `native_price_table` is what
 `probe` and `replay` call before their estimate, so a run fetches the table at most once and
 never while a fresh copy is on disk.
 
@@ -65,7 +65,7 @@ _CACHE_FIELDS = {
 }
 _OUTPUT = obj(_CACHE_FIELDS, required=list(_CACHE_FIELDS))
 
-PRICE_COLUMNS = ("in", "cache\nread", "cache\nwrite", "out")
+PRICE_COLUMNS = ("in", "cache read", "cache write", "out")
 """The four price headers shared by the `prices` and `endpoints` tables."""
 
 _COLUMNS = ("target", "model", "source", *PRICE_COLUMNS)
@@ -75,28 +75,20 @@ _NOT_PRICED = "n/a"
 
 
 def render_prices(invocation: Invocation, document: Document) -> None:
-    """One table: every native target model, its prices, and where they came from."""
-    from rich import box
-    from rich.markup import escape
-    from rich.table import Table
+    """One section: the price table's caption, then the table of every native model."""
+    from provibench.bench.labels import text_table
 
     def cell(value: object) -> str:
-        return escape(escape_terminal_text("-" if value is None else str(value)))
+        return "-" if value is None else str(value)
 
     def money(value: object) -> str:
         return f"{value:.3f}" if isinstance(value, int | float) else "-"
 
-    console = invocation.stdout_console()
     caption = (
         f"price table ($/M): {document.get('cache_path')}, fetched {document.get('cache_age')}"
     )
-    console.print(escape_terminal_text(caption), highlight=False)
-
-    table = Table(box=box.SIMPLE, header_style="bold")
-    for column in _COLUMNS:
-        table.add_column(column)
-    for entry in _documents(document):
-        table.add_row(
+    rows = [
+        [
             cell(entry.get("target")),
             cell(entry.get("model")),
             cell(entry.get("source")),
@@ -104,8 +96,13 @@ def render_prices(invocation: Invocation, document: Document) -> None:
             money(entry.get("cache_read")),
             money(entry.get("cache_write")),
             money(entry.get("output")),
-        )
-    console.print(table)
+        ]
+        for entry in _documents(document)
+    ]
+    lines = [caption, *text_table(_COLUMNS, rows)]
+    stdout = invocation.streams.stdout
+    stdout.write("\n".join(escape_terminal_text(line) for line in lines) + "\n")
+    stdout.flush()
 
 
 @click.command(
@@ -172,18 +169,18 @@ def cached_prices(invocation: Invocation, *, update: bool = False) -> Cached:
 
 
 def native_price_table(invocation: Invocation, specs: Sequence[RunSpec]) -> PriceTable | None:
-    """The community table when a native spec has no `targets.toml` price, else `None`.
+    """The community table when a native endpoint has no `targets.toml` price, else `None`.
 
-    A run that prices every native spec from `targets.toml` never reads the cache or the
+    A run that prices every native endpoint from `targets.toml` never reads the cache or the
     network. One that needs the community table gets it here, once, before the estimate:
     the estimate is the number the caller is asked to confirm, so it is priced before it is
     rendered and the line saying the table was fetched lands above it.
 
     A table that cannot be had is not fatal to a run. `prices` is the command whose whole
     job is the table, and it refuses; a probe or a replay priced as `n/a` is what it did
-    before this table existed, and `--budget` is what refuses to spend on an unpriced spec.
-    So the run says in one line why the prices are missing and carries on, and a fresh copy
-    on disk never reaches this branch at all.
+    before this table existed, and `--budget` is what refuses to spend on an unpriced
+    endpoint. So the run says in one line why the prices are missing and carries on, and a
+    fresh copy on disk never reaches this branch at all.
     """
     if not any(needs_litellm(spec) for spec in specs):
         return None
@@ -200,7 +197,8 @@ def native_price_table(invocation: Invocation, specs: Sequence[RunSpec]) -> Pric
 
 
 def needs_litellm(spec: RunSpec) -> bool:
-    """Whether pricing this spec needs the community table: native, and not already stated."""
+    """Whether pricing this endpoint needs the community table: native, and not already
+    stated."""
     # the early-out is only right because `resolve_target` prefers the targets.toml entry;
     # change the precedence there and this test has to follow
     return spec.target.kind != "openrouter" and spec.model not in spec.target.prices
@@ -215,7 +213,7 @@ def _models_of(target: Target, models: Sequence[str]) -> list[str]:
     """The models to price for one target: the ones asked for, else the target's own.
 
     A target's own are the models its `prices` table names and the ones its `aliases` map to
-    a slug; together they are every model a run spec can hand this target without inventing
+    a slug; together they are every model an endpoint can hand this target without inventing
     a name, which is what makes this the list worth checking after editing targets.toml.
     """
     if models:

@@ -86,8 +86,13 @@ def select_format(
     return defaults.tty if stdout_isatty else defaults.non_tty
 
 
-def write_document(stdout: TextIO, document: Document) -> None:
-    """One JSON value, UTF-8, on one LF-terminated line (O5a).
+def write_document(stdout: TextIO, document: Document, *, indent: int | None = None) -> None:
+    """One JSON value, UTF-8, ending in one LF-terminated line (O5a).
+
+    Compact by default: NDJSON stream records stay one line per record everywhere (O7a),
+    and a JSON document written to a non-terminal stdout stays byte-for-byte the same
+    single line it always was. `indent` is set only by the document path in `core.render`,
+    for a JSON document written to a terminal, where a person reads it directly.
 
     `sanitize_document` replaces any lone surrogate (from a path or other OS-supplied
     string decoded with `surrogateescape`) with U+FFFD first, so the written text is
@@ -95,7 +100,7 @@ def write_document(stdout: TextIO, document: Document) -> None:
     otherwise re-emit. Flushed at once, so a record of an NDJSON stream is readable
     before the next wait (O7a).
     """
-    stdout.write(json.dumps(sanitize_document(document), ensure_ascii=False))
+    stdout.write(json.dumps(sanitize_document(document), ensure_ascii=False, indent=indent))
     stdout.write("\n")
     stdout.flush()
 

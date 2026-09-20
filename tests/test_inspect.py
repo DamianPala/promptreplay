@@ -131,5 +131,64 @@ def test_inspect_human_table(cli: Cli, bench_paths: BenchPaths) -> None:
     append_entry(trace, _entry(1, "main", "hi"))
     outcome = cli.run("inspect", "t", tty=True, env=bench_paths.env)
     assert outcome.code == 0
-    assert "Conversations" in outcome.stdout
-    assert "Turns" in outcome.stdout
+    assert "conversations:" in outcome.stdout
+    assert "turns: main" in outcome.stdout
+
+
+def test_inspect_text_view_shows_prompt_tokens_and_drops_seqs(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    """Item 3: the text view trades first_seq/last_seq for a `first -> last` token column;
+    the JSON keeps every field."""
+    trace = bench_paths.traces_dir / "t.jsonl"
+    first = RecordedResponse(status=200, latency_ms=1.0, ttft_ms=1.0, usage=Usage(input_tokens=5))
+    last = RecordedResponse(status=200, latency_ms=1.0, ttft_ms=1.0, usage=Usage(input_tokens=50))
+    append_entry(trace, _entry(1, "main", "x" * 500, response=first))
+    append_entry(trace, _entry(2, "main", "x" * 500, response=last))
+
+    outcome = cli.run("inspect", "t", tty=True, env=bench_paths.env)
+    assert outcome.code == 0, outcome.stderr
+    assert "first_seq" not in outcome.stdout
+    assert "last_seq" not in outcome.stdout
+    assert "5 → 50" in outcome.stdout
+
+    json_outcome = cli.run("inspect", "t", "--json", env=bench_paths.env)
+    [conversation] = [
+        d for d in map(as_document, as_list(json_outcome.document["conversations"]) or []) if d
+    ]
+    assert conversation["first_seq"] == 1
+    assert conversation["last_seq"] == 2
+    assert conversation["prompt_tokens_first"] == 5
+    assert conversation["prompt_tokens_last"] == 50
+
+
+def test_inspect_text_view_drops_provider_column_when_no_turn_has_one(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    """Item 3: a native trace (no turn carries a provider) drops that column from the text
+    view; the JSON keeps the field, null, on every turn."""
+    trace = bench_paths.traces_dir / "t.jsonl"
+    append_entry(trace, _entry(1, "main", "hi"))
+
+    outcome = cli.run("inspect", "t", tty=True, env=bench_paths.env)
+    assert outcome.code == 0, outcome.stderr
+    assert "provider" not in outcome.stdout
+
+    json_outcome = cli.run("inspect", "t", "--json", env=bench_paths.env)
+    [turn] = [d for d in map(as_document, as_list(json_outcome.document["turns"]) or []) if d]
+    assert turn["provider"] is None
+
+
+def test_inspect_blank_line_separates_the_two_sections(cli: Cli, bench_paths: BenchPaths) -> None:
+    """Item 2's layout rule: one blank line between the conversations section and the
+    turns section, no blank line inside either, and no leading or trailing blank."""
+    trace = bench_paths.traces_dir / "t.jsonl"
+    append_entry(trace, _entry(1, "main", "hi"))
+
+    outcome = cli.run("inspect", "t", tty=True, env=bench_paths.env)
+    assert outcome.code == 0, outcome.stderr
+    lines = outcome.stdout.splitlines()
+    assert lines[0] != ""
+    assert lines[-1] != ""
+    blanks = [i for i, line in enumerate(lines) if line == ""]
+    assert blanks == [lines.index("turns: main") - 1]

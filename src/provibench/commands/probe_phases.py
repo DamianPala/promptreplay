@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class Checked:
-    """What the availability check left: the specs to probe, and the candidates it removed."""
+    """What the availability check left: the endpoints to probe, and the candidates it removed."""
 
     specs: list[RunSpec]
     drops: list[SelectionDrop]
@@ -46,11 +46,11 @@ class Checked:
 
 
 def planned_specs(request: ProbeRequest) -> list[RunSpec]:
-    """The specs the estimate prices and the confirmation names.
+    """The endpoints the estimate prices and the confirmation names.
 
-    With `--top N` that is the N best candidates, which are the specs the run probes unless
-    the availability check removes one and promotes the next ranked candidate (priced the
-    same way); without it, every spec. The references are always included.
+    With `--top N` that is the N best candidates, which are the endpoints the run probes
+    unless the availability check removes one and promotes the next ranked candidate
+    (priced the same way); without it, every endpoint. The references are always included.
     """
     plan = request.pre_check
     if plan is None or plan.keep is None:
@@ -68,7 +68,7 @@ def estimates(
     options: ProbeOptions,
     prices: Mapping[str, SpecPrices],
 ) -> list[SpecEstimate]:
-    """One worst case per spec the run means to probe; the check is priced once, by the plan."""
+    """One worst case per endpoint the run means to probe; the check is priced once, by the plan."""
     from provibench.bench.estimate import probe_estimate
 
     return [
@@ -90,8 +90,8 @@ def upper_bound_estimate(
     The estimate prices the N best-ranked candidates, but the availability check decides
     which candidates the run probes: any N of them can be the ones that survive it, so the
     priced rows are the expectation and this is the ceiling. A run without `--top` already
-    prices every spec it will probe, and a candidate with no listed price cannot be ranked
-    by one — both say `None`, which leaves the total in charge of the budget.
+    prices every endpoint it will probe, and a candidate with no listed price cannot be
+    ranked by one — both say `None`, which leaves the total in charge of the budget.
     """
     from provibench.bench.estimate import UpperBound, estimate_total, probe_estimate
 
@@ -142,7 +142,7 @@ def confirm(
     worst = "an unknown amount" if total is None else f"up to ${total:.4f} at worst, no cache hit"
     requests = len(specs) * _requests(options)
     question = (
-        f"Send {requests} probe request(s) to {len(specs)} spec(s) over turn(s) "
+        f"Send {requests} probe request(s) to {len(specs)} endpoint(s) over turn(s) "
         f"{options.rungs}, spending {worst}"
     )
     if pre_check is not None:
@@ -175,7 +175,7 @@ def checked_specs(
     options: ProbeOptions,
     invocation: Invocation,
 ) -> Checked:
-    """The availability phase, or every spec when the run planned no check."""
+    """The availability phase, or every endpoint when the run planned no check."""
     if request.pre_check is None:
         return Checked(list(request.specs), [])
     return run_check(invocation, request.pre_check, request.specs, selected, options)
@@ -237,7 +237,7 @@ def recorded_sweep(sweep: SweepInfo | None, checked: Checked) -> SweepInfo | Non
 
 
 def _requests(options: ProbeOptions) -> int:
-    """How many requests one spec sends: cold and warm per rung, plus the extras."""
+    """How many requests one endpoint sends: cold and warm per rung, plus the extras."""
     per_spec = sum(1 + count for count in options.repeats)
     if options.throughput:
         per_spec += len(options.repeats)

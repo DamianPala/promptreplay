@@ -1,8 +1,8 @@
 """The report's charts: inline SVG built in Python, no library and no external assets.
 
 Three forms, one per question the report answers: grouped bars for the cache hit rate of
-every spec at every rung, horizontal bars for the effective prompt price of each spec, and
-a line for one spec's cache curve across a full replay's turns.
+every endpoint at every rung, horizontal bars for the effective prompt price of each
+endpoint, and a line for one endpoint's cache curve across a full replay's turns.
 
 Everything a mark needs to be readable on its own is in the markup: a `class` naming the
 series (`s1`..`s8`), which the page's stylesheet maps to a light or dark value, and a
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from html import escape
 
 MAX_SERIES = 8
-"""How many specs the grouped chart colours: the palette's validated slots, in order."""
+"""How many endpoints the grouped chart colours: the palette's validated slots, in order."""
 
 _CHART_WIDTH = 1080
 """The user units one chart is laid out in; CSS scales it to the page."""
@@ -47,7 +47,7 @@ _ROW_BAR = 11
 _LABEL_COLUMN = 236
 _VALUE_COLUMN = 64
 _LABEL_CHARS = 34
-"""A spec label is clipped to this many characters before the bars start."""
+"""An endpoint label is clipped to this many characters before the bars start."""
 _MARKER_RADIUS = 4
 _MAX_X_LABELS = 10
 _ELLIPSIS = "…"
@@ -246,8 +246,8 @@ def _rounded(x: float, y: float, width: float, height: float, corners: str) -> s
 def _row_label(label: str, y: float) -> str:
     """A row's label, carrying the full text on hover when the column clipped it.
 
-    The clipped text says a name was cut and the hover says what it was, so a long spec id
-    is never lost to the column width — the bar beside it can only be identified by it.
+    The clipped text says a name was cut and the hover says what it was, so a long endpoint
+    id is never lost to the column width — the bar beside it can only be identified by it.
     """
     shown = _clip(label)
     title = _title(label) if shown != label else ""

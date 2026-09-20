@@ -1,4 +1,4 @@
-"""The command-layer wiring `probe` and `replay` share: targets, run specs, conversations.
+"""The command-layer wiring `probe` and `replay` share: targets, endpoints, conversations.
 
 `provibench.bench.targets` and `provibench.bench.trace` pull in pydantic; their symbols are
 imported only inside the functions that use them, so building the CLI stays cheap.
@@ -29,14 +29,17 @@ def load_targets(invocation: Invocation) -> dict[str, Target]:
     targets_path = Path(invocation.setting("targets_path") or "")
     if targets_path.is_file():
         return _parse_targets(targets_path)
-    invocation.message(f"No targets file at {targets_path}; using the packaged defaults")
+    invocation.message(
+        f"No targets file at {targets_path}; using the packaged defaults; "
+        "provibench config init copies them there"
+    )
     packaged = resources.files("provibench.data").joinpath("targets.toml")
     with resources.as_file(packaged) as path:
         return _parse_targets(path)
 
 
 def parse_specs(raw_specs: Iterable[str], targets: dict[str, Target]) -> list[RunSpec]:
-    """One `<target>:<model>[@provider,...]` run spec per argument, or `invalid_input`."""
+    """One `<target>:<model>[@provider,...]` endpoint per argument, or `invalid_input`."""
     from provibench.bench.targets import parse_run_spec
 
     specs: list[RunSpec] = []
@@ -97,14 +100,14 @@ def fetch_zdr_tags(model: str) -> set[str]:
 
 
 def gateway_target(name: str | None, targets: Mapping[str, Target]) -> Target:
-    """The `kind = "openrouter"` target whose endpoints a sweep pins its specs to."""
+    """The `kind = "openrouter"` target whose endpoints a sweep pins its endpoints to."""
     if name is None:
         first = next((t for t in targets.values() if t.kind == "openrouter"), None)
         if first is None:
             known = ", ".join(sorted(targets)) or "(none)"
             raise InvalidInput(
                 'No OpenRouter target to sweep: targets.toml has no kind="openrouter" entry',
-                hint=f"Add one, or pass a run spec to probe directly; known targets: {known}",
+                hint=f"Add one, or pass an endpoint to probe directly; known targets: {known}",
             )
         return first
     target = targets.get(name)
@@ -148,7 +151,7 @@ def filtered_endpoints(
 
 
 def native_specs(model: str, targets: Mapping[str, Target]) -> list[RunSpec]:
-    """One spec per `kind = "anthropic"` target whose aliases map `model` to its own name.
+    """One endpoint per `kind = "anthropic"` target whose aliases map `model` to its own name.
 
     A native target is selected by the model, not by a tag: it carries the slug through
     `[targets.<name>.aliases]`, which is an explicit statement of which of its models the
@@ -198,7 +201,7 @@ def _selected(tags: Sequence[str], patterns: Sequence[str], *, flag: str) -> set
 def validate_pinned_providers(
     run_specs: Sequence[RunSpec], index: Mapping[str, list[Endpoint]]
 ) -> None:
-    """Fail fast when a pinned gateway spec names a tag or provider no endpoint carries.
+    """Fail fast when a pinned gateway endpoint names a tag or provider no endpoint carries.
 
     `spec_prices` already returns `None` for a pin that matches nothing, which reads to
     `--budget` as merely unpriced and invites pricing a provider that will never answer
@@ -206,9 +209,9 @@ def validate_pinned_providers(
     tags come from the same endpoint list `sweep --include` validates a prefix against, so
     both name the unknown-tag error the same way and point at the same command.
 
-    A spec whose model has no entry in `index` is left alone: the lookup itself failed or
-    was never attempted, which is reported separately, and guessing "no such provider" from
-    an empty list would be wrong as often as right.
+    An endpoint whose model has no entry in `index` is left alone: the lookup itself failed
+    or was never attempted, which is reported separately, and guessing "no such provider"
+    from an empty list would be wrong as often as right.
     """
     from provibench.bench.openrouter import normalize_provider
 
@@ -240,7 +243,7 @@ def spec_price_map(
     *,
     table: PriceTable | None = None,
 ) -> dict[str, SpecPrices]:
-    """The listed price of every spec that has one, keyed by label; `table` prices natives."""
+    """The listed price of every endpoint that has one, keyed by label; `table` prices natives."""
     from provibench.bench.estimate import spec_prices
 
     prices: dict[str, SpecPrices] = {}
@@ -252,7 +255,7 @@ def spec_price_map(
 
 
 def unpriced_labels(estimates: Sequence[SpecEstimate]) -> list[str]:
-    """The specs whose worst case could not be computed, in the order given."""
+    """The endpoints whose worst case could not be computed, in the order given."""
     return [estimate.label for estimate in estimates if estimate.usd is None]
 
 
@@ -266,7 +269,7 @@ def check_budget(
 ) -> None:
     """Refuse a budget the estimate cannot cover, before anything is sent.
 
-    An unpriced spec makes the total unknowable, so `--budget` is refused outright rather
+    An unpriced endpoint makes the total unknowable, so `--budget` is refused outright rather
     than checked against the priced part of it; the hint is the caller's own advice for a
     total that is merely too big. The availability check is part of that total — it is the
     run's own spend, priced from the plan — so a refusal says how much of it the check is
@@ -314,7 +317,7 @@ def check_budget(
         and total is not None
         and (total - pre_check.usd <= budget)
     ):
-        # the specs alone fit: the availability check is what tips the total over
+        # the endpoints alone fit: the availability check is what tips the total over
         message += f", ${pre_check.usd:.4f} of it the availability check"
     raise InvalidInput(message, hint=hint)
 

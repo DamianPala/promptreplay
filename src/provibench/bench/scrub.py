@@ -47,7 +47,7 @@ HOME_PLACEHOLDER = "/home/user"
 """What every matched home path becomes, whatever the user was called."""
 
 ENCODED_HOME = "-home-{name}-"
-"""Claude Code encodes a project path into its state directory: `/home/haz/x` as `-home-haz-x`."""
+"""Claude Code encodes a project path into its state directory: `/home/user/x` as `-home-user-x`."""
 
 ENCODED_PLACEHOLDER = "-home-user-"
 """What the encoded form becomes."""

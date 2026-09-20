@@ -3,8 +3,8 @@
 Providers change routing, quantization, cache config and prices from week to week, so the
 useful question is not "which endpoint is cheapest" once but "which one still is, and what
 changed since last time". Every probe and sweep already leaves its runs under
-`runs/<trace>/<timestamp>/`; this command lists them per provider and draws each spec's hit
-rate across them, with no network and nothing recomputed that the run did not measure.
+`runs/<trace>/<timestamp>/`; this command lists them per provider and draws each endpoint's
+hit rate across them, with no network and nothing recomputed that the run did not measure.
 
 `provibench.bench.*` pulls in httpx and pydantic; its symbols are imported only inside the
 callback, so building the CLI (schema, --help, completion) stays cheap.
@@ -30,7 +30,7 @@ from provibench.core.spec import CommandSpec, Effects
     cls=Command,
     spec=CommandSpec(effects=Effects.READ_ONLY, output=HISTORY_OUTPUT, render=render_history),
     help="List the runs of MODEL over time, one row per run and provider.\n\n"
-    "MODEL is the model the runs' specs carry: the OpenRouter slug they were swept by, or "
+    "MODEL is the model the runs' endpoints carry: the OpenRouter slug they were swept by, or "
     "the name a native target serves it under. With no MODEL, every model the runs dir "
     "holds is listed. Runs come from the configured runs dir (runs/<trace>/<timestamp>/), "
     "newest last within a provider; --trace keeps one trace's runs, --since drops the ones "
@@ -38,7 +38,7 @@ from provibench.core.spec import CommandSpec, Effects
     "the listed price its prices block recorded at the time, and '-' where a run "
     "recorded none; the trace and protocol columns say which recording and which "
     "measurement (probe or full replay) a row belongs to. The block under the table draws "
-    "one sparkline per spec, trace and protocol: its hit rate across the runs it has, "
+    "one sparkline per endpoint, trace and protocol: its hit rate across the runs it has, "
     "oldest on the left, with the number of runs.",
 )
 @click.argument(
@@ -76,7 +76,7 @@ def history(
 
 
 def _native_labels(model: str, invocation: Invocation) -> frozenset[str]:
-    """The run-spec labels of the native targets MODEL's aliases carry it under.
+    """The endpoint labels of the native targets MODEL's aliases carry it under.
 
     A native row's `model` is the name its own target serves it under (`deepseek-flash`),
     not the OpenRouter slug this argument names, so a slug alone would never match it;
@@ -94,7 +94,7 @@ def _nothing_found(runs_dir: Path, *, model: str | None, trace: str | None) -> N
     if not everything:
         return NotFound(
             f"No runs under {runs_dir}",
-            hint="Run one first: provibench probe TRACE SPEC, or provibench sweep TRACE MODEL",
+            hint="Run one first: provibench probe TRACE ENDPOINT, or provibench sweep TRACE MODEL",
         )
     if trace is not None and trace not in {run.trace for run in everything}:
         known = ", ".join(sorted({run.trace for run in everything})) or "(none)"

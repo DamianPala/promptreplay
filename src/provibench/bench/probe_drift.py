@@ -94,7 +94,7 @@ def _incomplete(rung: RungSummary | None, reference: RungSummary | None) -> bool
 
 def tokens_delta(rung: RungSummary | None, reference: RungSummary | None) -> float | None:
     """The largest rung's prompt size against the reference's; `None` for the reference."""
-    if rung is None or reference is None or reference.spec == rung.spec:
+    if rung is None or reference is None or reference.endpoint == rung.endpoint:
         return None
     if reference.prompt_cold <= 0:
         return None
@@ -109,7 +109,7 @@ def fingerprint_match(rung: RungSummary | None, reference: RungSummary | None) -
     """
     if rung is None or reference is None or rung.fingerprint is None:
         return None
-    if reference.fingerprint is None or reference.spec == rung.spec:
+    if reference.fingerprint is None or reference.endpoint == rung.endpoint:
         return None
     return rung.fingerprint == reference.fingerprint
 

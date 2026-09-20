@@ -26,15 +26,15 @@ _READ_ROLES = ("cold", "warm", "ttl")
 def first_read_stats(
     records: Sequence[ProbeResult],
 ) -> tuple[float | None, float | None, float | None]:
-    """`(first_hit_rate, first_prefix_fraction, first_h)`, pooled over every rung's read 1."""
+    """`(first_hit_rate, first_cached_fraction, first_h)`, pooled over every rung's read 1."""
     prefixes = {rung: _cold_prefix(records, rung) for rung in {r.rung for r in records}}
     first_reads = [r for r in records if r.role == "warm" and r.attempt == 1]
     served = [r for r in first_reads if is_served(r)]
     hits = [r for r in served if _cached(r) > 0]
     hit_rate = len(hits) / len(served) if served else None
-    prefix_fraction = fmean(_fraction(_cached(r), prefixes[r.rung]) for r in hits) if hits else None
-    h = hit_rate * (prefix_fraction or 0.0) if hit_rate is not None else None
-    return hit_rate, prefix_fraction, h
+    cached_fraction = fmean(_fraction(_cached(r), prefixes[r.rung]) for r in hits) if hits else None
+    h = hit_rate * (cached_fraction or 0.0) if hit_rate is not None else None
+    return hit_rate, cached_fraction, h
 
 
 def output_token_stats(records: Sequence[ProbeResult]) -> tuple[int, int]:

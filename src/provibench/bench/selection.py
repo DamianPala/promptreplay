@@ -18,7 +18,7 @@ from collections.abc import Sequence, Set
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from provibench.bench.labels import text_table
 from provibench.bench.openrouter import Endpoint
@@ -81,17 +81,18 @@ class SelectionDrop(BaseModel):
     """One endpoint the sweep did not probe, and why."""
 
     tag: str
-    spec: str
+    endpoint: str = Field(validation_alias=AliasChoices("endpoint", "spec"))
+    """The label of the endpoint; `spec` is the key a run written before the rename used."""
     reason: str
     checked: bool = False
     """The availability pre-check produced the reason, not the listing criteria."""
 
     @classmethod
     def for_spec(cls, spec: RunSpec, reason: str, *, checked: bool = False) -> SelectionDrop:
-        """The drop of one run spec, tagged the way that spec pins its endpoint."""
+        """The drop of one endpoint, tagged the way that endpoint pins its provider."""
         return cls(
             tag=spec.providers[0] if spec.providers else spec.model,
-            spec=spec.label,
+            endpoint=spec.label,
             reason=reason,
             checked=checked,
         )
@@ -102,7 +103,7 @@ class SweepInfo(BaseModel):
 
     Recorded so a reader of one run directory can tell how the endpoints were chosen — a
     sweep with `--top 5 --sort uptime` is a different measurement from the same command
-    without the criteria, and the spec list alone does not say which of them produced it.
+    without the criteria, and the endpoint list alone does not say which of them produced it.
     `ranking` is the snapshot the order was decided from, so `report` prints the selection
     offline; `dropped` names the endpoints the criteria removed, and why.
     """
@@ -273,12 +274,12 @@ def selection_line(sweep: SweepInfo) -> str:
 
 
 def not_probed_lines(sweep: SweepInfo) -> list[str]:
-    """One `spec: not probed, reason` line per candidate the availability pre-check removed.
+    """One `endpoint: not probed, reason` line per candidate the availability pre-check removed.
 
     These are notes in the same shape as the probe's own note lines, because that is what
     they are: an endpoint the run has nothing to say about, and the reason it has nothing.
     """
-    return [f"{drop.spec}: not probed, {drop.reason}" for drop in sweep.dropped if drop.checked]
+    return [f"{drop.endpoint}: not probed, {drop.reason}" for drop in sweep.dropped if drop.checked]
 
 
 def _drop_cell(drop: SelectionDrop) -> str:

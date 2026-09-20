@@ -9,7 +9,7 @@ description: Measure prompt-cache hit rate, effective price and latency of one m
 
 - Replays a recorded agent session against the same model on each target.
 - Uses probe rungs, with cold writes and repeated warm reads at several prompt sizes.
-- Reports cache hit rate and the cached prefix fraction.
+- Reports cache hit rate and the cached fraction.
 - Calculates effective USD per million prompt tokens, including cache-read pricing.
 - Measures time to first token and generated tokens per second when the provider streams.
 
@@ -64,7 +64,7 @@ is accepted and ignored.
 
 With `--json`, a real run's document has `run_dir`, `run_hex`, `conversation`, `rungs`,
 `summaries`, `partial`, `changed`, and `sweep`. Each `summaries` item includes `label`,
-`hit_rate`, `prefix_fraction`, `eff_per_m_prompt`, and `ttft_ms`, so name the winner from those
+`hit_rate`, `cached_fraction`, `eff_per_m_prompt`, and `ttft_ms`, so name the winner from those
 measured values. `partial: true` means a request failed or a rung was skipped; the run still
 persisted, and the command still exits non-zero.
 
@@ -75,10 +75,10 @@ an offline HTML report.
 
 ## Recipe 2: re-check one endpoint by hand
 
-Copy the spec label from a sweep summary row and run:
+Copy the endpoint label from a sweep summary row and run:
 
 ```sh
-provibench probe TRACE SPEC --yes --json --rungs 1,13,30 --repeats 6,2,2 --ttl 60,300
+provibench probe TRACE ENDPOINT --yes --json --rungs 1,13,30 --repeats 6,2,2 --ttl 60,300
 ```
 
 Use `--warm` when you intentionally want to measure the cache as it currently exists, including
@@ -103,12 +103,12 @@ provibench compare previous latest
 
 ## Reading a report
 
-The five columns that matter are `hit %`, `prefix %`, `eff $/M`, `TTFT`, and `tok/s`.
+The five columns that matter are `hit %`, `cached %`, `eff $/M`, `TTFT`, and `tok/s`.
 
 - Burst delivery makes `tok/s` undefined.
-- A partial-prefix cache appears as `prefix %` below 100.
+- A partial cache appears as `cached %` below 100.
 - A listed price is not the effective price.
-- `compare` pairs specs by label, so an OpenRouter tag renamed between runs, such as `@novita` one week and `@novita/fp8` the next, appears under `only in A` or `only in B` instead of as a delta.
+- `compare` pairs endpoints by label, so an OpenRouter tag renamed between runs, such as `@novita` one week and `@novita/fp8` the next, appears under `only in A` or `only in B` instead of as a delta.
 
 ## Cost and safety
 

@@ -1,7 +1,7 @@
 """The flags `probe` and `sweep` share, and the request they build.
 
-The two commands differ in one thing only — where their specs come from — so everything a
-flag controls (the rungs, the repeats, the extras, the estimate, the confirmation) has to
+The two commands differ in one thing only — where their endpoints come from — so everything
+a flag controls (the rungs, the repeats, the extras, the estimate, the confirmation) has to
 mean the same in both, or the same endpoint measured by `probe` and by `sweep` would not be
 the same measurement. The flags are declared once here and applied to both commands;
 `ProbeRequest` is what crosses into `commands.probe.execute_probe`, which owns the flow.
@@ -38,14 +38,14 @@ _DEFAULT_TIMEOUT_S = float(parse_duration(_DEFAULT_TIMEOUT))
 
 @dataclass(frozen=True, slots=True)
 class ProbeRequest:
-    """One probe-shaped run: the trace, the specs, and the flags that shape the protocol.
+    """One probe-shaped run: the trace, the endpoints, and the flags that shape the protocol.
 
-    `probe` fills `specs` from its arguments and `sweep` expands them from an endpoint list
-    first; every other field comes from the flags both commands declare. `endpoints`,
-    `pre_check` and `sweep` belong to a sweep: the endpoint snapshot it already fetched (so
-    the estimate is priced from the list the specs were built from, not a second fetch), the
-    availability check it planned (priced in the estimate, run after the confirmation), and
-    what `run.json` records about the expansion.
+    `probe` fills `specs` from its arguments and `sweep` expands them from an OpenRouter
+    listing first; every other field comes from the flags both commands declare.
+    `endpoints`, `pre_check` and `sweep` belong to a sweep: the OpenRouter listing it already
+    fetched (so the estimate is priced from the same listing the run's endpoints were built
+    from, not a second fetch), the availability check it planned (priced in the estimate,
+    run after the confirmation), and what `run.json` records about the expansion.
     """
 
     trace: str

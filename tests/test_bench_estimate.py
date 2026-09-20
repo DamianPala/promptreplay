@@ -241,7 +241,7 @@ def test_render_estimate_says_retries_are_excluded() -> None:
 
 def test_render_estimate_without_specs_is_only_a_header_and_a_total() -> None:
     lines = render_estimate([]).splitlines()
-    assert lines[0].startswith("spec")
+    assert lines[0].startswith("endpoint")
     assert lines[2].startswith("total")
 
 
@@ -261,8 +261,8 @@ def test_render_estimate_shortens_the_spec_column_like_the_probe_tables() -> Non
         ]
     )
     lines = text.splitlines()
-    assert lines[0] == "specs: openrouter:deepseek/deepseek-v4.1-flash@<provider>"
-    assert lines[1].startswith("spec")  # the table itself is unchanged, one line lower
+    assert lines[0] == "endpoints: openrouter:deepseek/deepseek-v4.1-flash@<provider>"
+    assert lines[1].startswith("endpoint")  # the table itself is unchanged, one line lower
     assert "@relace/fp8" in text and "@deepinfra/turbo" in text
     assert "deepseek:deepseek-flash" in text
     assert "…" not in text  # nothing had to be cut

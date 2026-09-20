@@ -743,12 +743,31 @@ def test_sweep_estimates_every_spec_and_the_budget_refuses_above_it(
     # one estimate row per spec, named by the same column the tables use: the shared
     # `target:model` is in the caption and each row keeps the `@tag` a reader picks with
     estimate = within.stderr
-    assert f"specs: or:{_MODEL}@<provider>" in estimate
+    assert f"endpoints: or:{_MODEL}@<provider>" in estimate
     for tag in ("@novita", "@novita/fp8", "@siliconflow", "@gmicloud"):
         assert tag in estimate
     assert f"deepseek:{_NATIVE}" in estimate  # the native spec keeps its whole label
     assert estimate.count("openrouter-endpoint") == 4  # the gateway specs
     assert "targets" in estimate  # the native spec is priced from targets.toml
+
+
+def test_sweep_separates_the_candidates_section_from_the_estimate_section(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One blank line, no more and no less, between the `candidates:` table and the
+    `endpoints:` estimate table -- each is its own section (item 2's layout rule)."""
+    _write_targets(bench_paths.targets_path)
+    _install(monkeypatch, _transport(sent=[]))
+
+    within = _sweep(cli, bench_paths, *_one_rung("--budget", "0.01"))
+    assert within.code == 0, within.stderr
+    lines = within.stderr.splitlines()
+    candidates_at = next(i for i, line in enumerate(lines) if line.startswith("candidates:"))
+    estimate_at = next(i for i, line in enumerate(lines) if line.startswith("endpoints:"))
+    assert estimate_at > candidates_at
+    between = lines[candidates_at + 1 : estimate_at]
+    assert between[-1] == ""  # exactly one blank line closes the candidates section
+    assert between[-2] != ""  # and nothing but that one blank line
 
 
 def test_sweep_dry_run_sends_no_probe_request(
@@ -1222,7 +1241,7 @@ def test_sweep_availability_check_removes_a_candidate_without_a_summary_row(
     assert _block(outcome)["dropped"] == [
         {
             "tag": "gmicloud",
-            "spec": f"or:{_MODEL}@gmicloud",
+            "endpoint": f"or:{_MODEL}@gmicloud",
             "reason": _GUARDRAIL_REASON,
             "checked": True,
         }

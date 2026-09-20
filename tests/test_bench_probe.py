@@ -768,7 +768,7 @@ def test_summarize_rung_hit_rate_fractions_and_cache_write() -> None:
     assert rung.prompt_cold == 100
     assert rung.cached_cold == 0
     assert rung.hit_rate == pytest.approx(2 / 3)
-    assert rung.prefix_fraction == pytest.approx((0.98 + 1.0) / 2)  # capped at 1.0 per hit
+    assert rung.cached_fraction == pytest.approx((0.98 + 1.0) / 2)  # capped at 1.0 per hit
     assert rung.hits == [0.0, 0.98, 1.0]
     assert rung.cache_write_cold == 50
     assert rung.cold_ms == pytest.approx(20.0)
@@ -797,7 +797,7 @@ def test_summarize_rung_skips_a_rung_whose_cold_request_failed() -> None:
     rung = summarize_rung("fake:model-a", 1, records)
     assert rung.skipped is True
     assert rung.cold_error == "down"
-    assert rung.prefix_fraction is None
+    assert rung.cached_fraction is None
     assert rung.hits == []
     assert rung.hit_rate == 0.0
     assert rung.warm_ms is None
@@ -902,12 +902,52 @@ def test_summarize_probe_pools_the_rungs_and_prices_the_result() -> None:
     summary = summarize_probe("fake:model-a", records, prices=_prices())
     assert [rung.rung for rung in summary.rungs] == [1, 2]
     assert summary.hit_rate == pytest.approx(2 / 3)  # 2 hits over 3 served warm reads
-    assert summary.prefix_fraction == pytest.approx((1.0 + 0.5) / 2)
+    assert summary.cached_fraction == pytest.approx((1.0 + 0.5) / 2)
     assert summary.h == pytest.approx(2 / 3 * 0.75)
-    assert summary.eff_per_m_prompt == pytest.approx((1 - 0.5) * 1.0 + 0.5 * 0.1)
+    # Both rungs' attempt-1 read hit (rung 1 fully, rung 2 half), so first_h -- not the
+    # pooled h -- is what eff_per_m_prompt is priced from: an agent loop never sees rung
+    # 1's second, redundant warm read.
+    assert summary.first_hit_rate == pytest.approx(1.0)
+    assert summary.first_cached_fraction == pytest.approx((1.0 + 0.5) / 2)
+    assert summary.first_h == pytest.approx(0.75)
+    assert summary.eff_per_m_prompt == pytest.approx((1 - 0.75) * 1.0 + 0.75 * 0.1)
     assert summary.price_source == "targets"
     assert summary.errors == 0
     assert summary.skipped == 0
+    assert "eff $/M from pooled reads" not in " ".join(summary.notes)
+
+
+def test_summarize_probe_prices_from_pooled_reads_when_no_first_read_was_served() -> None:
+    """Every rung's attempt-1 read failed; the only served warm reads are repeats. `eff $/M`
+    falls back to the pooled reads and says so, since there is no first read to price from."""
+    records = [
+        _record("cold", 0, rung=1, prompt=100),
+        _record("warm", 1, rung=1, status=500, error="boom"),
+        _record("warm", 2, rung=1, cached=100),
+    ]
+    summary = summarize_probe("fake:model-a", records, prices=_prices())
+    assert summary.first_hit_rate is None
+    assert summary.first_cached_fraction is None
+    assert summary.first_h is None
+    assert summary.h == pytest.approx(1.0)  # the one served warm read, a full hit
+    assert summary.eff_per_m_prompt == pytest.approx((1 - 1.0) * 1.0 + 1.0 * 0.1)
+    assert "eff $/M from pooled reads: no first read served" in summary.notes
+
+
+def test_summarize_probe_eff_per_m_equals_pooled_with_one_repeat_per_rung() -> None:
+    """With one warm read per rung (`--repeats 1`), the first read is the only read, so the
+    first-read price and the pooled price are the same number by construction."""
+    records = [
+        _record("cold", 0, rung=1, prompt=100),
+        _record("warm", 1, rung=1, cached=40),
+        _record("cold", 0, rung=2, prompt=200),
+        _record("warm", 1, rung=2, cached=200),
+    ]
+    summary = summarize_probe("fake:model-a", records, prices=_prices())
+    assert summary.first_h == pytest.approx(summary.h)
+    assert summary.eff_per_m_prompt == pytest.approx(
+        (1 - summary.h) * 1.0 + summary.h * 0.1  # type: ignore[operator]
+    )
 
 
 def test_summarize_probe_reports_a_skipped_rung_and_no_hit_rate_without_warm_reads() -> None:
@@ -919,7 +959,7 @@ def test_summarize_probe_reports_a_skipped_rung_and_no_hit_rate_without_warm_rea
     assert summary.eff_per_m_prompt is None
 
 
-def test_summarize_probe_caps_the_prefix_fraction_and_falls_back_to_native_cached() -> None:
+def test_summarize_probe_caps_the_cached_fraction_and_falls_back_to_native_cached() -> None:
     records = [
         _record("cold", 0, prompt=100),
         # the response reports nothing, but the gateway says the whole prefix was cached
@@ -927,7 +967,7 @@ def test_summarize_probe_caps_the_prefix_fraction_and_falls_back_to_native_cache
     ]
     summary = summarize_probe("fake:model-a", records)
     assert summary.hit_rate == 1.0
-    assert summary.prefix_fraction == 1.0  # 120 / 100 is capped
+    assert summary.cached_fraction == 1.0  # 120 / 100 is capped
     assert cached_of(records[1]) == 120
     assert "cached taken from the OpenRouter generation for 1 request(s)" in summary.notes
 
@@ -964,11 +1004,11 @@ def test_summarize_probe_counts_errors_retries_and_providers() -> None:
 
 
 def test_render_probe_without_summaries_is_two_headers() -> None:
-    assert render_probe([]).split("\n\n")[0].startswith("spec")
-    assert render_probe([]).split("\n\n")[1].startswith("spec | rung")
+    assert render_probe([]).split("\n\n")[0].startswith("endpoint")
+    assert render_probe([]).split("\n\n")[1].startswith("endpoint | rung")
 
 
-def test_render_probe_has_a_spec_table_and_a_rung_table_within_120_columns() -> None:
+def test_render_probe_has_an_endpoint_table_and_a_rung_table_within_120_columns() -> None:
     records = [
         _record("cold", 0, prompt=100),
         _record("warm", 1, cached=0),
@@ -977,12 +1017,12 @@ def test_render_probe_has_a_spec_table_and_a_rung_table_within_120_columns() -> 
     ]
     summary = summarize_probe("fake:model-a", records, prices=_prices())
     blocks = [block.splitlines() for block in render_probe([summary]).split("\n\n")]
-    spec_table, rung_table = blocks[0], blocks[1]
-    spec_header = [cell.strip() for cell in spec_table[0].split("|")]
-    assert spec_header[:3] == ["spec", "hit %", "1st hit %"]
-    assert spec_table[2].startswith("fake:model-a")
+    endpoint_table, rung_table = blocks[0], blocks[1]
+    endpoint_header = [cell.strip() for cell in endpoint_table[0].split("|")]
+    assert endpoint_header[:3] == ["endpoint", "hit %", "1st hit %"]
+    assert endpoint_table[2].startswith("fake:model-a")
     rung_header = [cell.strip() for cell in rung_table[0].split("|")]
-    assert rung_header[:5] == ["spec", "rung", "prompt", "cached cold", "hits"]
+    assert rung_header[:5] == ["endpoint", "rung", "prompt", "cached cold", "hits"]
     assert "0 x 1" in rung_table[2]  # one cell per warm attempt, `x` for the failed one
     assert all(len(line) <= 120 for block in blocks for line in block)
 
@@ -1186,7 +1226,7 @@ def test_column_labels_shorten_the_openrouter_pair_under_a_caption() -> None:
         _summary("openrouter:deepseek/deepseek-v4.1-flash@gmicloud"),
     ]
     caption, labels = _column_labels(summaries)
-    assert caption == "specs: openrouter:deepseek/deepseek-v4.1-flash@<provider>"
+    assert caption == "endpoints: openrouter:deepseek/deepseek-v4.1-flash@<provider>"
     assert labels == ["@novita", "@gmicloud"]
 
 
@@ -1198,7 +1238,7 @@ def test_column_labels_keep_a_native_spec_named_and_shorten_the_rest() -> None:
         _summary("openrouter:deepseek/deepseek-v4.1-flash@gmicloud"),
     ]
     caption, labels = _column_labels(summaries)
-    assert caption == "specs: openrouter:deepseek/deepseek-v4.1-flash@<provider>"
+    assert caption == "endpoints: openrouter:deepseek/deepseek-v4.1-flash@<provider>"
     assert labels == ["deepseek:deepseek-flash", "@novita", "@gmicloud"]
     assert len(set(labels)) == 3
 
@@ -1517,10 +1557,10 @@ def test_a_label_the_caption_does_not_cover_wins_its_width() -> None:
     for summary in summaries:
         summary.rungs[0].hits = [0.9] * 6
 
-    spec_block = next(
-        block for block in render_probe(summaries).split("\n\n") if block.startswith("spec ")
+    endpoint_block = next(
+        block for block in render_probe(summaries).split("\n\n") if block.startswith("endpoint ")
     )
-    labels = [line.split("|")[0].strip() for line in spec_block.splitlines()[2:]]
+    labels = [line.split("|")[0].strip() for line in endpoint_block.splitlines()[2:]]
     assert labels[-1] == "deepseek:deepseek-flash"  # whole, not folded
     assert len(set(labels)) == len(labels)  # and no two `@tag` rows were cut together
 
@@ -1536,10 +1576,10 @@ def test_a_label_the_caption_does_not_cover_keeps_its_target_head() -> None:
     _, labels = _column_labels(summaries, label_width=17)
     assert labels[2] == "deepseek:…at-v3.1"  # the head whole, the model's tail for the rest
 
-    spec_block = next(
-        block for block in render_probe(summaries).split("\n\n") if block.startswith("spec ")
+    endpoint_block = next(
+        block for block in render_probe(summaries).split("\n\n") if block.startswith("endpoint ")
     )
-    native = next(line for line in spec_block.splitlines() if line.startswith("deepseek"))
+    native = next(line for line in endpoint_block.splitlines() if line.startswith("deepseek"))
     assert native.startswith("deepseek:") and "…" in native
 
 
@@ -1550,10 +1590,10 @@ def test_the_label_column_spends_its_columns_and_the_drift_gets_the_rest() -> No
         _summary("openrouter:deepseek/deepseek-v4.1-flash@novita", drift="provider,tokens+3%"),
         _summary("openrouter:deepseek/deepseek-v4.1-flash@gmicloud", drift="provider,tokens+3%"),
     ]
-    spec_block = next(
-        block for block in render_probe(summaries).split("\n\n") if block.startswith("spec ")
+    endpoint_block = next(
+        block for block in render_probe(summaries).split("\n\n") if block.startswith("endpoint ")
     )
-    assert "provider,tokens+3%" in spec_block
+    assert "provider,tokens+3%" in endpoint_block
 
 
 def test_a_squeezed_table_still_renders_the_whole_drift_marker() -> None:
@@ -1577,10 +1617,10 @@ def test_a_squeezed_table_still_renders_the_whole_drift_marker() -> None:
         rung.cold_ms, rung.warm_ms = 12_345_678.0, 87_654_321.0
         rung.ttft_ms, rung.gen_tok_s = 11_111_111.0, 12_345.6
 
-    spec_block = next(
-        block for block in render_probe(summaries).split("\n\n") if block.startswith("spec ")
+    endpoint_block = next(
+        block for block in render_probe(summaries).split("\n\n") if block.startswith("endpoint ")
     )
-    cells = [line.split("|")[-1].strip() for line in spec_block.splitlines()[2:]]
+    cells = [line.split("|")[-1].strip() for line in endpoint_block.splitlines()[2:]]
     assert cells == ["provider,tokens+3%", "provider,tokens+3%", "-"]
     assert all("…" not in cell for cell in cells)
 
@@ -1606,8 +1646,8 @@ def test_first_hit_rate_pools_only_each_rungs_first_warm_read() -> None:
     assert summary.hit_rate == pytest.approx(4 / 5)  # 4 hits over 5 served warm reads, pooled
     assert summary.first_hit_rate == pytest.approx(1 / 2)
     assert summary.first_hit_rate is not None
-    assert summary.first_prefix_fraction is not None
-    assert summary.first_h == pytest.approx(summary.first_hit_rate * summary.first_prefix_fraction)
+    assert summary.first_cached_fraction is not None
+    assert summary.first_h == pytest.approx(summary.first_hit_rate * summary.first_cached_fraction)
 
 
 def test_first_hit_rate_equals_hit_rate_with_one_repeat() -> None:
@@ -1621,7 +1661,7 @@ def test_first_hit_rate_equals_hit_rate_with_one_repeat() -> None:
     ]
     summary = summarize_probe("fake:model-a", records)
     assert summary.first_hit_rate == summary.hit_rate
-    assert summary.first_prefix_fraction == summary.prefix_fraction
+    assert summary.first_cached_fraction == summary.cached_fraction
     assert summary.first_h == summary.h
 
 
@@ -1721,7 +1761,7 @@ def test_a_skipped_largest_rung_suppresses_the_spurious_token_drift_marker() -> 
 
 
 def test_a_late_ttl_read_does_not_shrink_the_label_column() -> None:
-    """The lateness marker is worth its columns; the spec column keeps enough to name a row."""
+    """The lateness marker is worth its columns; the endpoint column keeps enough to name a row."""
     summaries = [
         _summary("or:model@novita", prompt=20000),
         _summary("or:model@gmicloud", prompt=20000),
@@ -1731,11 +1771,13 @@ def test_a_late_ttl_read_does_not_shrink_the_label_column() -> None:
             TtlRead(offset_s=60, hit=True, offset_actual_s=66.2),
         ]
     blocks = render_probe(summaries).split("\n\n")
-    spec_block, rung_block = [block for block in blocks if block.startswith(("spec ", "spec |"))]
-    labels = [line.split("|")[0].strip() for line in spec_block.splitlines()[2:]]
+    endpoint_block, rung_block = [
+        block for block in blocks if block.startswith(("endpoint ", "endpoint |"))
+    ]
+    labels = [line.split("|")[0].strip() for line in endpoint_block.splitlines()[2:]]
     assert labels == [
         "@novita",
         "@gmicloud",
     ]  # the shared head is in the caption, so it stays whole
-    assert all(len(line) <= 120 for line in spec_block.splitlines())
+    assert all(len(line) <= 120 for line in endpoint_block.splitlines())
     assert "60s:1 (+6)" in rung_block

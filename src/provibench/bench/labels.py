@@ -1,16 +1,18 @@
-"""The spec column every table shares: one caption, whole `@tags`, elision as a last resort.
+"""The endpoint column every table shares: one caption, whole `@tags`, elision as a last resort.
 
-A list of specs is a list of near-identical `target:model@provider` strings, and the part
+A list of endpoints is a list of near-identical `target:model@provider` strings, and the part
 that tells one row from another is the tail. Cutting the middle out of those strings is what
 makes `@relace/…` and `@relace/…-fp8` read alike, so what a table needs is a decision about
 the whole column at once: which shared prefix moves into a caption above the table, and what
 each row then shows on its own. `column_labels` makes that decision for the probe tables and
-for the estimate table, so a spec reads the same in either place.
+for the estimate table, so an endpoint reads the same in either place.
 
-`text_table` is the other half of that: the columns-and-rows layout the estimate, the
-selection listing and the probe tables all draw, in one place so the three cannot drift.
+`text_table` -- the columns-and-rows layout every table in the tool draws -- lives in
+`core.text_table` instead: `core/config_command.py` and `core/render.py` need it too, and
+`core` may not import from here. It is re-exported below for every caller that already reads
+it from this module.
 
-(`targets.py` imports nothing here and this module imports nothing from the package: a
+(`targets.py` imports nothing here and this module imports nothing else from the package: a
 table's labels are strings, and every table in the tool needs them.)
 """
 
@@ -18,30 +20,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from provibench.core.text_table import text_table
+
 _ELLIPSIS = "…"
-_SEPARATOR = " | "
 
 __all__ = ["column_labels", "elide", "named", "rendered", "text_table", "uncovered_width"]
-
-
-def text_table(columns: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
-    """A fixed-width table: the header, a rule of the same widths, then one line per row.
-
-    Every cell is padded to the widest in its column, so a reader compares a cell by looking
-    at the column rather than counting characters. A table with no rows is its header and
-    the rule, which is what a listing with nothing left to show looks like.
-    """
-    widths = [
-        max([len(columns[index]), *(len(row[index]) for row in rows)])
-        for index in range(len(columns))
-    ]
-    lines = [_join(columns, widths), _join(["-" * width for width in widths], widths)]
-    lines.extend(_join(row, widths) for row in rows)
-    return lines
-
-
-def _join(cells: Sequence[str], widths: Sequence[int]) -> str:
-    return _SEPARATOR.join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True))
 
 
 def column_labels(labels: Sequence[str], *, label_width: int) -> tuple[str | None, list[str]]:
@@ -62,7 +45,7 @@ def column_labels(labels: Sequence[str], *, label_width: int) -> tuple[str | Non
     if not named(column):
         shared = []
         column = [elide(label, label_width) for label in labels]
-    caption = "specs: " + ", ".join(f"{head}@<provider>" for head in shared) if shared else None
+    caption = "endpoints: " + ", ".join(f"{head}@<provider>" for head in shared) if shared else None
     return caption, column
 
 
@@ -133,6 +116,6 @@ def _shared_heads(labels: Sequence[str]) -> list[str]:
 
 
 def _short_label(label: str, head: str, shared: Sequence[str], width: int) -> str:
-    """`label` without the shared head, or whole when this spec's model is its own."""
+    """`label` without the shared head, or whole when this endpoint's model is its own."""
     tail = label[len(head) :] if head in shared else ""
     return elide(tail or label, width)

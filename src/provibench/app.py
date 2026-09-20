@@ -6,6 +6,7 @@ Adding, replacing, or deleting a command group changes exactly one `add_command`
 import os
 import sys
 from collections.abc import Sequence
+from importlib import resources
 from pathlib import Path
 
 from provibench.commands.compare import compare as compare_command
@@ -35,6 +36,14 @@ CONFORMANCE = Conformance(
     extensions=(),
 )
 
+
+def packaged_targets_path() -> Path:
+    """The packaged `targets.toml`'s real filesystem path, for the default nothing is at."""
+    packaged = resources.files("provibench.data").joinpath("targets.toml")
+    with resources.as_file(packaged) as path:
+        return path
+
+
 SETTINGS: list[Setting] = [
     Setting(
         "targets_path",
@@ -44,6 +53,7 @@ SETTINGS: list[Setting] = [
         config_key="targets_path",
         default=XdgPath("XDG_CONFIG_HOME", ".config", "provibench/targets.toml"),
         is_path=True,
+        packaged=packaged_targets_path,
     ),
     Setting(
         "traces_dir",

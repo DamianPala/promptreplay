@@ -20,9 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Streamed generation on each rung: time to first token, tokens per second and the model's
   first output tokens as a fingerprint; `--no-throughput` skips it
 - `drift` column: served provider, response model and prompt tokenization delta against the
-  reference spec
-- `sweep TRACE MODEL`: list a model's OpenRouter endpoints, pin one probe spec to every
-  provider tag, add a spec for each native target that carries the model, and probe them in
+  reference endpoint
+- `sweep TRACE MODEL`: list a model's OpenRouter endpoints, pin one probe endpoint to every
+  provider tag, add an endpoint for each native target that carries the model, and probe them in
   one run ordered by the measured effective price
 - `sweep` endpoint selection: a stability floor on endpoint status and one-day uptime,
   `--include`/`--exclude` by tag prefix, `--zdr`, `--sort price|uptime|throughput|latency`
@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sweep` availability pre-check: one `max_tokens 1` request per ranked candidate, so an
   endpoint the account's settings exclude is named with the gateway's reason instead of
   failing three cold requests
-- `sweep --parallel N` to probe several specs at once, recorded in the run's notes because
+- `sweep --parallel N` to probe several endpoints at once, recorded in the run's notes because
   it moves the latency numbers
 - `report --format html --output-file PATH`: one self-contained page with the same tables, hit-rate bars per
   rung, effective prompt price bars and the full-replay cache curve, in dark mode, with no
@@ -43,13 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Traces load from gzipped files, and `scrub TRACE OUT` writes them
 - Runs persist their protocol, nonce, prices and an endpoint snapshot, so `report`
   re-renders a run with no network, in the terminal, markdown or HTML
-- The endpoint snapshot is per spec and dated: every probe and sweep records the listed
+- The endpoint snapshot is per endpoint and dated: every probe and sweep records the listed
   input and cache-read price, quantization, context length, uptime 1d and status of the
   endpoint it pinned, so price and endpoint drift are part of the record
 - `history [MODEL]`: every run of a model in the runs dir as one table — date, hit %,
   effective $/M, TTFT, tok/s, errors and the listed price of that week — with `--trace` and
-  `--since`, a hit-rate sparkline per spec, and `--json` rows and series
-- `compare RUN_A RUN_B`: the per-spec delta between two runs of one trace, with the listed
+  `--since`, a hit-rate sparkline per endpoint, and `--json` rows and series
+- `compare RUN_A RUN_B`: the per-endpoint delta between two runs of one trace, with the listed
   price change taken from the two endpoint snapshots, `latest`/`previous` naming, and an
   `invalid_input` refusal across traces or protocols unless `--force`
 - `--force` for scrub's OUT or `--output-file`, which are otherwise refused when the target
@@ -63,26 +63,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `1st hit %` column: hit rate pooled over only each rung's first warm read, the only one an
   agent loop performs, next to the pooled `hit %` that flatters it
 - Every probe and sweep persists the swept model's listed endpoint prices as `listing_prices`
-  in `run.json`; an unpinned OpenRouter spec is repriced by what actually served it, from that
+  in `run.json`; an unpinned OpenRouter endpoint is repriced by what actually served it, from that
   listing where the run has one (one provider takes its listed rate as is, several combine by
   a prompt-token-weighted mean), or from rates fitted from the provider's own billed records
   on a run written before this field existed, rejected as noise past ten times the run's own
   worst-case listed rate; `priced_as` says which, on the summary and as a note under the
   table, and `listed_input`/`listed_cache_read`/`listed_source` carry the price `history` and
   `compare` treat as this run's own, never a fit
-- `spend_usd` per spec and per run: OpenRouter's own bill where it reported one, else the
+- `spend_usd` per endpoint and per run: OpenRouter's own bill where it reported one, else the
   usage priced at the listed rates; `probe` and `report` print `spent $X (worst case $Y)` as
   the closing line of the rendered tables, and `history` gets a `spend $` column
-- `output_tokens` per spec, and a note when a read returned more than its `max_tokens: 1`
+- `output_tokens` per endpoint, and a note when a read returned more than its `max_tokens: 1`
   budget (GMICloud and native DeepSeek both do)
 - The availability pre-check's own requests persist to `precheck.jsonl`, kept out of every
-  spec's own records; `probe`/`report` print `pre-check: N requests, $X`
-- `rate_limited` next to `errors`: how many of a spec's requests came back HTTP 429, with a
+  endpoint's own records; `probe`/`report` print `pre-check: N requests, $X`
+- `rate_limited` next to `errors`: how many of an endpoint's requests came back HTTP 429, with a
   note when non-zero
 - A session-projection footer line under the summary table: what a session shaped like the
-  recorded trace would bill in prompt tokens, per spec, at its measured effective price
+  recorded trace would bill in prompt tokens, per endpoint, at its measured effective price
+- `config init [--force]`: copies the packaged `targets.toml` to its effective user path, so
+  `config show`'s `packaged` source has a file the user can actually edit
 
 ### Changed
+
+- Every user-facing "spec" is now "endpoint": `probe`'s positional argument, table captions
+  and columns, JSON fields (`summaries[].rungs[].spec` is now `endpoint`, and likewise across
+  probe/sweep/replay/report/history/compare), help text and error messages. The persisted
+  `run.json` `specs` key, per-endpoint JSONL `spec_label` field, and internal `RunSpec` name
+  are unchanged
+- A `--json` document written to a terminal is pretty-printed with two-space indent; off a
+  terminal, and every NDJSON stream record everywhere, it stays the same compact single line
+- `config show` names the packaged `targets.toml` with source `packaged` when no user file
+  exists yet, instead of a default path nothing is at
+- `inspect`'s text view drops `first_seq`/`last_seq` for a `prompt tokens` `first → last`
+  column, and drops the `provider` column when no turn in the conversation carries one
+  (`--json` is unchanged in both cases)
+- Contract change: `prefix %` is now `cached %` everywhere it is shown (headers, captions,
+  notes, HTML tooltips, docs), and the JSON fields it comes from are renamed to match --
+  `prefix_fraction` to `cached_fraction`, `first_prefix_fraction` to `first_cached_fraction`
+  (`ProbeSummary`/`RungSummary` and the probe/sweep/report/history/compare output schemas);
+  persisted run files are unaffected
+- Contract change: `eff $/M` is now priced from each rung's first warm read (`first_h`)
+  instead of the pooled reads (`h`); an agent loop only ever performs a rung's first read,
+  so reads 2+ re-reading what read 1 just wrote no longer inflate the price. `h`/`first_h`
+  stay in JSON; `eff $/M` falls back to the pooled reads only when a rung served no first
+  read, noted as `eff $/M from pooled reads: no first read served`. `session_prompt_usd` and
+  `history`/`compare`'s `eff $/M` follow automatically, since both read it off the summary
 
 - `report --json`'s summaries array is named `summaries` for both a probe and a full-replay
   run, the name `sweep` and `probe --json` already used; the separate, always-empty
@@ -100,11 +126,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory, a trace name or `latest`
 - Terminal, markdown and HTML reports build every cell from the same row, so the three
   cannot disagree on a number
-- Spec labels are shortened under a caption instead of being clipped into identical rows;
+- Endpoint labels are shortened under a caption instead of being clipped into identical rows;
   a sweep's native reference row keeps its label whole
 - A slash tag such as `@novita/fp8` parses as a provider pin; only `@preset/...` stays part
   of the model name
-- The `--budget` refusal names the ways to fit: fewer specs or rungs, lower `--repeats`, or
+- The `--budget` refusal names the ways to fit: fewer endpoints or rungs, lower `--repeats`, or
   `--no-throughput`
 
 ### Fixed
@@ -132,7 +158,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OpenRouter's raw HTML 404 page
 - `endpoints` reads the same default API key `sweep`'s listing does, so `latency_ms_30m`
   and `throughput_30m` are populated instead of `null` when a key is configured
-- `tokens±N%` no longer fires when a spec's largest rung was skipped and its comparison
+- `tokens±N%` no longer fires when an endpoint's largest rung was skipped and its comparison
   fell back to a smaller one; a `token drift n/a (rung skipped)` note explains why instead
 - The `drift` column renders its marker in full instead of eliding it, even past 120 columns
 - Cache-creation tokens on a cold write are no longer billed at both the input rate and the
@@ -143,5 +169,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `probe` and `report` now print the same worst-case number for the same run
 - The session-projection footer's prompt-token count reads `N k prompt tokens` under 1M and
   `N.N M prompt tokens` at or above it, instead of a small trace rounding to `0.0 M`
+- `sweep`'s `candidates:` table and its `endpoints:` estimate table are separated by one
+  blank line instead of running straight into each other
 
 [Unreleased]: https://github.com/DamianPala/provibench/commits/main

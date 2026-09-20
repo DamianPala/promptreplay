@@ -38,7 +38,7 @@ def test_json_before_and_after_the_path(cli: Cli) -> None:
     after = cli.run("config", "show", "--json", tty=True)
     assert before.code == 0 and after.code == 0
     assert before.document == after.document
-    assert before.stdout.count("\n") == 1
+    assert before.stdout == after.stdout  # same flag, same position in the terminal, byte-for-byte
 
 
 def test_error_object_is_the_last_stderr_line_and_never_on_stdout(cli: Cli) -> None:

@@ -3,7 +3,7 @@
 The documents are the source of truth (`commands.run_view` builds them): the terminal
 renders the same strings a script parses, so the two cannot disagree about a rounding. The
 layout goes through `bench.labels`, like the probe tables, which is what shortens a column
-of near-identical spec labels into a caption plus `@tag` tails — the same rule, and the
+of near-identical endpoint labels into a caption plus `@tag` tails — the same rule, and the
 same `text_table`, as everywhere else in the tool.
 
 The numbers stay what the runs measured: a hit rate is a fraction in the document, and a
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 _LABEL_CAP = 40
-"""Widest the spec column is planned to be; past this a row's name is elided."""
+"""Widest the endpoint column is planned to be; past this a row's name is elided."""
 _PCT_DIGITS = 1
 _USD_DIGITS = 3
 _MS_DIGITS = 0
@@ -35,7 +35,7 @@ _HISTORY_COLUMNS = (
     "date",
     "trace",
     "protocol",
-    "spec",
+    "endpoint",
     "hit %",
     "eff $/M",
     "TTFT ms",
@@ -44,16 +44,16 @@ _HISTORY_COLUMNS = (
     "spend $",
     "in $/M",
 )
-_COMPARE_COLUMNS = ("spec", "hit %", "eff $/M", "TTFT ms", "tok/s")
-_LISTED_COLUMNS = ("spec", "listed $/M in", "listed cache read $/M")
-_NO_SNAPSHOT = "listed prices: no spec was priced in both runs"
+_COMPARE_COLUMNS = ("endpoint", "hit %", "eff $/M", "TTFT ms", "tok/s")
+_LISTED_COLUMNS = ("endpoint", "listed $/M in", "listed cache read $/M")
+_NO_SNAPSHOT = "listed prices: no endpoint was priced in both runs"
 
 
 def history_text(document: Document) -> str:
-    """The history table, then one sparkline line per spec, trace and protocol."""
+    """The history table, then one sparkline line per endpoint, trace and protocol."""
     rows = _rows(document, "rows")
     series = _rows(document, "series")
-    caption, labels = _labels([str(entry.get("spec")) for entry in series])
+    caption, labels = _labels([str(entry.get("endpoint")) for entry in series])
     traces = {str(entry.get("trace")) for entry in series}
     protocols = {str(entry.get("protocol")) for entry in series}
     lines = [
@@ -77,7 +77,7 @@ def history_text(document: Document) -> str:
 def compare_text(document: Document) -> str:
     """What the two runs are, the delta per metric, then the listed prices and the unpaired."""
     rows = _rows(document, "rows")
-    caption, labels = _labels([str(row.get("spec")) for row in rows])
+    caption, labels = _labels([str(row.get("endpoint")) for row in rows])
     lines = [
         f"A: {_run_line(document.get('run_a'))}",
         f"B: {_run_line(document.get('run_b'))}",
@@ -93,9 +93,9 @@ def compare_text(document: Document) -> str:
         # cannot recompute, and a reader is owed the reason it is missing.
         lines.extend(["", _NO_SNAPSHOT])
     for key, label in (("only_in_a", "only in A"), ("only_in_b", "only in B")):
-        specs = [str(spec) for spec in as_list(document.get(key)) or []]
-        if specs:
-            lines.append(f"{label}: {', '.join(specs)}")
+        endpoints = [str(endpoint) for endpoint in as_list(document.get(key)) or []]
+        if endpoints:
+            lines.append(f"{label}: {', '.join(endpoints)}")
     return "\n".join(lines)
 
 
@@ -105,7 +105,7 @@ def render_history(invocation: Invocation, document: Document) -> None:
 
 
 def render_compare(invocation: Invocation, document: Document) -> None:
-    """`compare`'s human rendering: the two run names, the deltas and the unpaired specs."""
+    """`compare`'s human rendering: the two run names, the deltas and the unpaired endpoints."""
     _write_lines(invocation, compare_text(document))
 
 
@@ -126,12 +126,12 @@ def _rows(document: Document, key: str) -> list[Document]:
     return [d for d in map(as_document, as_list(document.get(key)) or []) if d]
 
 
-def _labels(specs: Sequence[str]) -> tuple[str | None, dict[str, str]]:
-    """The caption and one label per spec, shortened by the rule every other table uses."""
+def _labels(endpoints: Sequence[str]) -> tuple[str | None, dict[str, str]]:
+    """The caption and one label per endpoint, shortened by the rule every other table uses."""
     from provibench.bench.labels import column_labels, rendered
 
-    caption, column = column_labels(specs, label_width=min(_LABEL_CAP, rendered(specs)))
-    return caption, dict(zip(specs, column, strict=True))
+    caption, column = column_labels(endpoints, label_width=min(_LABEL_CAP, rendered(endpoints)))
+    return caption, dict(zip(endpoints, column, strict=True))
 
 
 def _history_cells(row: Document, labels: dict[str, str]) -> list[str]:
@@ -175,7 +175,7 @@ def _series_line(
     show_trace: bool,
     show_protocol: bool,
 ) -> tuple[str, str]:
-    """One spec's name, and its sparkline with its run count, labelled as its rows are.
+    """One endpoint's name, and its sparkline with its run count, labelled as its rows are.
 
     A run that measured no hit rate has `null` in the series. It gets a placeholder so the
     bars remain aligned with the run count and the time axis. The name comes back apart
@@ -183,10 +183,10 @@ def _series_line(
     """
     from provibench.bench.summary import sparkline
 
-    spec = str(entry.get("spec"))
+    endpoint = str(entry.get("endpoint"))
     rates = as_list(entry.get("hit_rates")) or []
     bars = [sparkline([float(value)]) if isinstance(value, int | float) else "·" for value in rates]
-    name = labels.get(spec, spec)
+    name = labels.get(endpoint, endpoint)
     if show_trace:
         name += f"  trace={entry.get('trace')}"
     if show_protocol:
@@ -195,8 +195,8 @@ def _series_line(
 
 
 def _label(row: Document, labels: dict[str, str]) -> str:
-    spec = str(row.get("spec"))
-    return labels.get(spec, spec)
+    endpoint = str(row.get("endpoint"))
+    return labels.get(endpoint, endpoint)
 
 
 def _metric(value: object, digits: int, *, percent: bool = False) -> str:

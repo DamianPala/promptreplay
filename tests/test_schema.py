@@ -21,6 +21,7 @@ from tests.conftest import Cli, install_price_cache
 EXPECTED_COMMANDS = {
     "compare": ("read_only", False, False),
     "completion": ("idempotent", False, False),
+    "config init": ("idempotent", False, False),
     "config show": ("read_only", False, False),
     "endpoints": ("read_only", False, False),
     "history": ("read_only", False, False),
@@ -212,6 +213,9 @@ _O4_TYPES: dict[str, tuple[type, ...]] = {
 _SUCCESS_ARGV: dict[str, list[str]] = {
     "compare": ["--trace", "fixture-run", "latest", "previous"],
     "completion": ["bash"],
+    # A relative --targets keeps this off the fixture targets.toml `probe` and `sweep` need;
+    # --force: the schema check runs every command twice, with --json in each position.
+    "config init": ["--targets", "schema-config-init.toml", "--force"],
     "endpoints": ["deepseek/model"],
     "history": [],
     "inspect": ["fixture"],

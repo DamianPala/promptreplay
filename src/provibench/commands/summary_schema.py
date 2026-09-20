@@ -82,12 +82,12 @@ _TTL_READ = _all(
 )
 _RUNG_SUMMARY = _all(
     {
-        "spec": string(),
+        "endpoint": string(),
         "rung": integer(),
         "prompt_cold": integer(),
         "cached_cold": integer(),
         "hit_rate": number(),
-        "prefix_fraction": nullable_number(),
+        "cached_fraction": nullable_number(),
         "hits": array(nullable_number()),
         "cold_ms": number(),
         "warm_ms": nullable_number(),
@@ -108,10 +108,10 @@ PROBE_SUMMARY = _all(
         "label": string(),
         "rungs": array(_RUNG_SUMMARY),
         "hit_rate": nullable_number(),
-        "prefix_fraction": nullable_number(),
+        "cached_fraction": nullable_number(),
         "h": nullable_number(),
         "first_hit_rate": nullable_number(),
-        "first_prefix_fraction": nullable_number(),
+        "first_cached_fraction": nullable_number(),
         "first_h": nullable_number(),
         "input_price": nullable_number(),
         "cache_read_price": nullable_number(),
@@ -143,7 +143,9 @@ PROBE_SUMMARY = _all(
     }
 )
 
-_SWEEP_DROP = _all({"tag": string(), "spec": string(), "reason": string(), "checked": boolean()})
+_SWEEP_DROP = _all(
+    {"tag": string(), "endpoint": string(), "reason": string(), "checked": boolean()}
+)
 _SWEEP_RANKED = _all(
     {
         "tag": string(),
@@ -204,10 +206,10 @@ def probe_summary_to_document(summary: ProbeSummary) -> Document:
         "label": summary.label,
         "rungs": [rung.model_dump() for rung in summary.rungs],
         "hit_rate": summary.hit_rate,
-        "prefix_fraction": summary.prefix_fraction,
+        "cached_fraction": summary.cached_fraction,
         "h": summary.h,
         "first_hit_rate": summary.first_hit_rate,
-        "first_prefix_fraction": summary.first_prefix_fraction,
+        "first_cached_fraction": summary.first_cached_fraction,
         "first_h": summary.first_h,
         "input_price": summary.input_price,
         "cache_read_price": summary.cache_read_price,

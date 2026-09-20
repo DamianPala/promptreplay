@@ -4,8 +4,8 @@ One block of CSS for one file: the light values in `:root`, the dark ones steppe
 dark surface under `prefers-color-scheme`. Nothing here is generated and nothing is
 conditional, so the whole sheet can be read next to the markup it styles.
 
-The eight series slots are a validated categorical palette in fixed order — a spec keeps
-its slot across both probe charts, and past eight the report charts the first eight and
+The eight series slots are a validated categorical palette in fixed order — an endpoint
+keeps its slot across both probe charts, and past eight the report charts the first eight and
 says so rather than inventing a ninth hue. The dark column is the same eight hues stepped
 for the dark surface, not a second palette.
 """

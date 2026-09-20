@@ -197,15 +197,15 @@ def test_page_carries_the_run_and_its_cache_mode() -> None:
 
 def test_both_tables_keep_the_terminal_columns_and_short_labels() -> None:
     html = render_html(probe_document())
-    assert '<p class="caption">specs: or:model@&lt;provider&gt;</p>' in html
-    spec_table, rung_table = html.split('<div class="scroll">')[1:3]
-    assert '<th scope="col">spec</th>' in spec_table
-    for column in ("hit %", "prefix %", "eff $/M", "TTFT ms", "tok/s", "drift"):
-        assert f'<th scope="col">{column}</th>' in spec_table
-    assert "<td>@novita</td>" in spec_table and "<td>@gmicloud</td>" in spec_table
+    assert '<p class="caption">endpoints: or:model@&lt;provider&gt;</p>' in html
+    endpoint_table, rung_table = html.split('<div class="scroll">')[1:3]
+    assert '<th scope="col">endpoint</th>' in endpoint_table
+    for column in ("hit %", "1st hit %", "cached %", "eff $/M", "TTFT ms", "tok/s", "drift"):
+        assert f'<th scope="col">{column}</th>' in endpoint_table
+    assert "<td>@novita</td>" in endpoint_table and "<td>@gmicloud</td>" in endpoint_table
     for column in ("rung", "prompt", "cached cold", "hits", "ttl"):
         assert f'<th scope="col">{column}</th>' in rung_table
-    assert "<td>20,410</td>" not in spec_table  # the numbers stay as the terminal formats them
+    assert "<td>20,410</td>" not in endpoint_table  # the numbers stay as the terminal formats them
     assert "<td>20410</td>" in rung_table
 
 
@@ -311,7 +311,7 @@ def test_hit_rate_chart_keeps_a_slot_per_spec_and_labels_every_bar() -> None:
     assert bars.count("<title>") == _bars(bars) + 1  # one per bar, plus the chart's own
     assert (
         "or:model@novita · rung 1 · 20,410 prompt tokens · "
-        "hit 100.0% (1/1 warm reads) · prefix 93.6%" in bars
+        "hit 100.0% (1/1 warm reads) · cached 93.6%" in bars
     )
     assert "hit 0.0% (0/1 warm reads)" in bars
     assert '<text class="tick mid"' in bars
@@ -347,7 +347,7 @@ def test_specs_past_the_eight_slots_stay_in_the_tables_and_are_named() -> None:
     charts = _SVG.findall(html)
     assert _bars(charts[0]) == MAX_SERIES * 2  # the fixture entry's two rungs, eight times
     assert _bars(charts[1]) == MAX_SERIES
-    assert "8 of 9 specs are charted; the rest are in the tables above: @r8" in html
+    assert "8 of 9 endpoints are charted; the rest are in the tables above: @r8" in html
     assert "<td>@r0</td>" in html and "<td>@r8</td>" in html
 
 

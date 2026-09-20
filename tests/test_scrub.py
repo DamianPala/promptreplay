@@ -462,11 +462,26 @@ def test_scrub_human_table_lists_the_rules(cli: Cli, bench_paths: BenchPaths) ->
     )
 
     assert outcome.code == 0, outcome.stderr
-    assert "Scrubbed" in outcome.stdout
+    assert "scrubbed:" in outcome.stdout
     for label in ("rule", "path", "anthropic-key", "email", "metadata", "user"):
         assert label in outcome.stdout
     assert "User names: operator" in outcome.stdout
     assert "Selection: every entry" in outcome.stdout
+
+
+def test_scrub_human_output_has_no_leading_or_trailing_blank_line(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    trace = bench_paths.traces_dir / "t.jsonl"
+    _fixture(trace)
+
+    outcome = cli.run("scrub", "t", str(cli.root / "clean.jsonl"), tty=True, env=bench_paths.env)
+
+    assert outcome.code == 0, outcome.stderr
+    lines = outcome.stdout.splitlines()
+    assert lines[0] == "scrubbed:"
+    assert lines[-1] != ""
+    assert "" not in lines
 
 
 def test_scrub_missing_trace_is_not_found(cli: Cli, bench_paths: BenchPaths) -> None:

@@ -84,3 +84,49 @@ def test_sanitize_document_replaces_lone_surrogates_anywhere_in_the_tree() -> No
 def test_sanitize_document_leaves_ascii_and_valid_unicode_untouched() -> None:
     document: Document = {"name": "billing", "note": "café", "count": 3, "ok": True, "none": None}
     assert sanitize_document(document) == document
+
+
+def test_json_document_is_indented_on_a_terminal(cli: Cli) -> None:
+    """A JSON document read directly on a terminal is pretty-printed, not one long line."""
+    outcome = cli.run("schema", "--json", tty_stdout=True)
+    assert outcome.code == 0, outcome.stderr
+    assert outcome.stdout.endswith("\n")
+    assert outcome.stdout.count("\n") > 1
+    assert json.loads(outcome.stdout) == outcome.document
+
+
+def test_json_document_stays_one_line_off_a_terminal(cli: Cli) -> None:
+    """The same document off a terminal (a script, a pipe) is the original compact line."""
+    outcome = cli.run("schema", "--json")
+    assert outcome.code == 0, outcome.stderr
+    assert outcome.stdout.count("\n") == 1
+    tty_outcome = cli.run("schema", "--json", tty_stdout=True)
+    assert json.loads(outcome.stdout) == json.loads(tty_outcome.stdout)
+
+
+def test_a_second_document_command_is_indented_on_a_terminal_too(cli: Cli) -> None:
+    """The seam is generic: `schema probe`, a second document command, is indented as well."""
+    outcome = cli.run("schema", "probe", "--json", tty_stdout=True)
+    assert outcome.code == 0, outcome.stderr
+    assert outcome.stdout.count("\n") > 1
+    assert json.loads(outcome.stdout) == outcome.document
+
+
+def test_ndjson_stream_records_stay_one_compact_line_regardless_of_tty() -> None:
+    """O7a: `write_document` never indents unless its caller asks, so a stream record stays
+    compact on a terminal too -- only the single-document path in `core.render` sets `indent`.
+    """
+    import io
+
+    from provibench.core.output import write_document
+
+    class _TtyStream(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    stream = _TtyStream()
+    write_document(stream, {"seq": 1, "ok": True})
+    write_document(stream, {"seq": 2, "ok": False})
+    lines = stream.getvalue().splitlines()
+    assert len(lines) == 2
+    assert [json.loads(line) for line in lines] == [{"seq": 1, "ok": True}, {"seq": 2, "ok": False}]

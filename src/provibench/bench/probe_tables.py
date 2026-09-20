@@ -1,10 +1,10 @@
-"""The probe's two tables: one row per spec, one row per rung, as text or markdown.
+"""The probe's two tables: one row per endpoint, one row per rung, as text or markdown.
 
 Kept apart from `probe_summary` (which folds the records into the numbers) because the
-rendering has its own problems: the spec column has to stay readable when every spec shares
-the `target:model` prefix without ever clipping two specs into the same string, a column
-that only exists when `--ttl` ran must not leave a hole when it did not, and the whole
-thing has to fit 120 columns.
+rendering has its own problems: the endpoint column has to stay readable when every
+endpoint shares the `target:model` prefix without ever clipping two endpoints into the
+same string, a column that only exists when `--ttl` ran must not leave a hole when it did
+not, and the whole thing has to fit 120 columns.
 """
 
 from __future__ import annotations
@@ -32,10 +32,10 @@ _PLACEHOLDER = ""
 """Stands in for a label cell while the other columns are measured."""
 
 _RUN_COLUMNS = (
-    "spec",
+    "endpoint",
     "hit %",
     "1st hit %",
-    "prefix %",
+    "cached %",
     "eff $/M",
     "in $/M",
     "cold ms",
@@ -46,7 +46,7 @@ _RUN_COLUMNS = (
     "drift",
 )
 _RUNG_COLUMNS = (
-    "spec",
+    "endpoint",
     "rung",
     "prompt",
     "cached cold",
@@ -70,19 +70,19 @@ class TableBlock:
 
 @dataclass(frozen=True, slots=True)
 class ProbeBlocks:
-    """The caption (when the specs share a prefix) and the two tables, in reading order.
+    """The caption (when the endpoints share a prefix) and the two tables, in reading order.
 
     The cells are the same strings the terminal prints, so a second renderer (the HTML
     report) shows the same numbers without recomputing them; only the layout differs.
     """
 
     caption: str | None
-    spec: TableBlock
+    endpoint: TableBlock
     rungs: TableBlock
 
 
 def render_probe(summaries: Sequence[ProbeSummary]) -> str:
-    """The probe's human output: one row per spec, then one row per rung; for a tty."""
+    """The probe's human output: one row per endpoint, then one row per rung; for a tty."""
     lines = [*_lines(summaries, markdown=False), *probe_note_lines(summaries)]
     return "\n".join(lines) if lines else "\n\n"
 
@@ -103,7 +103,7 @@ def _lines(summaries: Sequence[ProbeSummary], *, markdown: bool) -> list[str]:
 
 
 def probe_blocks(summaries: Sequence[ProbeSummary]) -> ProbeBlocks:
-    """The caption, the spec table and the rung table as data, for any renderer.
+    """The caption, the endpoint table and the rung table as data, for any renderer.
 
     The caption is its own block, which is what `report`'s text extraction splits on to
     recover the two tables whether or not there is one.
@@ -116,7 +116,7 @@ def probe_blocks(summaries: Sequence[ProbeSummary]) -> ProbeBlocks:
     run_rows = [_run_cells(summary, label) for summary, label in rows]
     return ProbeBlocks(
         caption=caption,
-        spec=TableBlock(columns=_RUN_COLUMNS, rows=tuple(tuple(row) for row in run_rows)),
+        endpoint=TableBlock(columns=_RUN_COLUMNS, rows=tuple(tuple(row) for row in run_rows)),
         rungs=TableBlock(
             columns=rung_columns,
             rows=tuple(tuple(row) for row in _rung_rows(summaries, labels, rung_columns)),
@@ -125,22 +125,22 @@ def probe_blocks(summaries: Sequence[ProbeSummary]) -> ProbeBlocks:
 
 
 def _blocks(summaries: Sequence[ProbeSummary], *, markdown: bool) -> list[str]:
-    """The optional caption, the spec table and the rung table, rendered as text."""
+    """The optional caption, the endpoint table and the rung table, rendered as text."""
     blocks = probe_blocks(summaries)
     table = _md_table if markdown else _table
-    rendered = [table(block.columns, block.rows) for block in (blocks.spec, blocks.rungs)]
+    rendered = [table(block.columns, block.rows) for block in (blocks.endpoint, blocks.rungs)]
     return [blocks.caption, *rendered] if blocks.caption is not None else rendered
 
 
 def probe_note_lines(summaries: Sequence[ProbeSummary]) -> list[str]:
-    """One `label: note` line per note, in spec order; shared by every renderer."""
+    """One `label: note` line per note, in endpoint order; shared by every renderer."""
     return [f"{summary.label}: {note}" for summary in summaries for note in summary.notes]
 
 
 def _labels_of(
     summaries: Sequence[ProbeSummary], *, label_width: int
 ) -> tuple[str | None, list[str]]:
-    """The caption and the spec column of every row: the shared decision, on the labels."""
+    """The caption and the endpoint column of every row: the shared decision, on the labels."""
     return column_labels([summary.label for summary in summaries], label_width=label_width)
 
 
@@ -154,8 +154,8 @@ def _planned_widths(summaries: Sequence[ProbeSummary], rung_columns: Sequence[st
     columns are reserved for it here, as a floor under the label's own budget.
 
     A label the caption does not cover — the native endpoint next to a column of gateway
-    tags — wins the width it needs, up to `_LABEL_WIN`, even past what the spec table can
-    otherwise spare the drift floor: the `@tag` rows are short and can be elided, while that
+    tags — wins the width it needs, up to `_LABEL_WIN`, even past what the endpoint table
+    can otherwise spare the drift floor: the `@tag` rows are short and can be elided, while that
     row is the reference every other row is read against (slice 3c), the same trade item 8
     made so a drift marker is never elided either. A dense table (many providers plus the
     `1st hit %` column) can end up past `_MAX_TABLE` by the width of that one label.
@@ -166,7 +166,7 @@ def _planned_widths(summaries: Sequence[ProbeSummary], rung_columns: Sequence[st
     drift marker longer than the floor, or the uncovered label above, are all worth the
     columns they cost.
     """
-    spare = _MAX_TABLE - _spec_middle(summaries) - _MIN_DRIFT
+    spare = _MAX_TABLE - _endpoint_middle(summaries) - _MIN_DRIFT
     budget = min(spare, _MAX_TABLE - _rung_span(summaries, rung_columns))
     required = uncovered_width([summary.label for summary in summaries], cap=_LABEL_WIN)
     for width in range(max(budget, _LABEL_FLOOR, required), _LABEL_FLOOR - 1, -1):
@@ -177,8 +177,8 @@ def _planned_widths(summaries: Sequence[ProbeSummary], rung_columns: Sequence[st
     return _LABEL_FLOOR
 
 
-def _spec_middle(summaries: Sequence[ProbeSummary]) -> int:
-    """The spec table's width without its label and drift cells, every separator counted."""
+def _endpoint_middle(summaries: Sequence[ProbeSummary]) -> int:
+    """The endpoint table's width without its label and drift cells, every separator counted."""
     return _columns_span(
         _RUN_COLUMNS,
         [_run_cells(summary, _PLACEHOLDER) for summary in summaries],
@@ -214,11 +214,11 @@ def _rung_span(summaries: Sequence[ProbeSummary], rung_columns: Sequence[str]) -
 def _rung_rows(
     summaries: Sequence[ProbeSummary], labels: Sequence[str], columns: Sequence[str]
 ) -> list[list[str]]:
-    """One row per rung, each labelled as its spec row is."""
+    """One row per rung, each labelled as its endpoint row is."""
     column = {summary.label: label for summary, label in zip(summaries, labels, strict=True)}
     with_ttl = _TTL_COLUMN in columns
     return [
-        _rung_cells(rung, column.get(rung.spec, rung.spec), with_ttl)
+        _rung_cells(rung, column.get(rung.endpoint, rung.endpoint), with_ttl)
         for summary in summaries
         for rung in summary.rungs
     ]
@@ -229,7 +229,7 @@ def _run_cells(summary: ProbeSummary, label: str) -> list[str]:
         label,
         _pct(summary.hit_rate),
         _pct(summary.first_hit_rate),
-        _pct(summary.prefix_fraction),
+        _pct(summary.cached_fraction),
         _money(summary.eff_per_m_prompt, 3),
         _money(summary.input_price, 3),
         _ms(summary.cold_ms),

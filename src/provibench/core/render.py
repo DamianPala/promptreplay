@@ -6,16 +6,13 @@ rich, imported inside the functions that need it, so `--json` never loads it.
 
 import shlex
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from provibench.core.context import Invocation
 from provibench.core.documents import Document, as_document, as_list, sanitize_document
 from provibench.core.output import Format, write_document, write_plain_line
 from provibench.core.spec import CommandSpec, Result
 from provibench.core.terminal_text import escape_terminal_text
-
-if TYPE_CHECKING:
-    from rich.console import Console
 
 
 def emit_result(invocation: Invocation, spec: CommandSpec, result: Result) -> None:
@@ -52,7 +49,10 @@ def _emit_result(invocation: Invocation, spec: CommandSpec, result: Result) -> N
 def _emit_document(invocation: Invocation, spec: CommandSpec, document: Document) -> None:
     stdout = invocation.streams.stdout
     match invocation.format:
-        case Format.JSON | Format.NDJSON:
+        case Format.JSON:
+            indent = 2 if stdout.isatty() else None
+            write_document(stdout, document, indent=indent)  # sanitizes internally
+        case Format.NDJSON:
             write_document(stdout, document)  # sanitizes internally
         case Format.PLAIN:
             document = sanitize_document(document)
@@ -68,13 +68,15 @@ def _emit_document(invocation: Invocation, spec: CommandSpec, document: Document
 
 def render_document(invocation: Invocation, document: Document) -> None:
     """The generic human-readable rendering: a table for pages, `Key: value` lines otherwise."""
-    console = invocation.stdout_console()
     if "items" in document:
-        _render_table(console, _items(document))
+        _render_table(invocation, _items(document))
         if document.get("has_more"):
-            cursor = document.get("next_cursor")
-            console.print(f"More items available. Continue with --cursor {_escape(str(cursor))}")
+            cursor = escape_terminal_text(str(document.get("next_cursor")))
+            stdout = invocation.streams.stdout
+            stdout.write(f"More items available. Continue with --cursor {cursor}\n")
+            stdout.flush()
         return
+    console = invocation.stdout_console()
     for key, value in document.items():
         parts = as_list(value)
         if key == "next" and parts is not None:
@@ -88,20 +90,22 @@ def _items(document: Document) -> list[Document]:
     return [item for item in map(as_document, entries) if item is not None]
 
 
-def _render_table(console: "Console", rows: list[Document]) -> None:
-    from rich import box
-    from rich.table import Table
+def _render_table(invocation: Invocation, rows: list[Document]) -> None:
+    """A page of items as a plain fixed-width table, or `No items` when there are none."""
+    from provibench.core.text_table import text_table
 
+    stdout = invocation.streams.stdout
     if not rows:
-        console.print("No items")
+        stdout.write("No items\n")
+        stdout.flush()
         return
-    table = Table(box=box.SIMPLE, header_style="bold")
     columns = list(rows[0].keys())
-    for column in columns:
-        table.add_column(_escape(_label(column)))
-    for row in rows:
-        table.add_row(*(_escape(format_value(row.get(column))) for column in columns))
-    console.print(table)
+    lines = text_table(
+        [_label(column) for column in columns],
+        [[format_value(row.get(column)) for column in columns] for row in rows],
+    )
+    stdout.write("\n".join(escape_terminal_text(line) for line in lines) + "\n")
+    stdout.flush()
 
 
 def _render_records(invocation: Invocation, spec: CommandSpec, records: Iterator[Document]) -> None:

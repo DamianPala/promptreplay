@@ -25,16 +25,16 @@ _ERROR_TRUNCATE = 120
 
 
 def parallel_note(parallel: int) -> list[str]:
-    """One note for a run that probed several specs at once, and none for a sequential one.
+    """One note for a run that probed several endpoints at once, and none for a sequential one.
 
     A `run.json` reader comparing latency medians between runs has to know which of them
-    were measured with other specs in flight on the same connection pool; the note is part
-    of the run's record, not of its options, because it describes how the numbers were
+    were measured with other endpoints in flight on the same connection pool; the note is
+    part of the run's record, not of its options, because it describes how the numbers were
     taken rather than what the protocol did.
     """
     if parallel <= 1:
         return []
-    return [f"parallel {parallel}: latency measured with specs in flight together"]
+    return [f"parallel {parallel}: latency measured with endpoints in flight together"]
 
 
 def by_price(summaries: Sequence[ProbeSummary]) -> list[ProbeSummary]:
@@ -42,7 +42,7 @@ def by_price(summaries: Sequence[ProbeSummary]) -> list[ProbeSummary]:
 
     That is the question a sweep asks — which endpoint to use this week — so the effective
     price leads and the hit rate breaks its ties, being the other half of why one endpoint
-    is cheaper than another. A spec with no listed price cannot be ranked and sorts last.
+    is cheaper than another. An endpoint with no listed price cannot be ranked and sorts last.
     """
     return sorted(
         summaries,
@@ -51,7 +51,7 @@ def by_price(summaries: Sequence[ProbeSummary]) -> list[ProbeSummary]:
 
 
 def in_order(specs: Sequence[RunSpec], summaries: Sequence[ProbeSummary]) -> list[RunSpec]:
-    """The specs in the order their summaries came out, for the run directory."""
+    """The endpoints in the order their summaries came out, for the run directory."""
     by_label = {spec.label: spec for spec in specs}
     return [by_label[summary.label] for summary in summaries]
 

@@ -8,7 +8,7 @@ are shared with `provibench.commands.replay` and `provibench.commands.scrub`.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -46,8 +46,20 @@ _CONVERSATION = obj(
         "last_seq": integer(),
         "prompt_first": nullable_string(),
         "prompt_last": nullable_string(),
+        "prompt_tokens_first": nullable_integer(),
+        "prompt_tokens_last": nullable_integer(),
     },
-    required=["key", "requests", "bytes", "first_seq", "last_seq", "prompt_first", "prompt_last"],
+    required=[
+        "key",
+        "requests",
+        "bytes",
+        "first_seq",
+        "last_seq",
+        "prompt_first",
+        "prompt_last",
+        "prompt_tokens_first",
+        "prompt_tokens_last",
+    ],
 )
 _TURN = obj(
     {
@@ -87,7 +99,7 @@ _OUTPUT = obj(
     required=["trace", "conversations", "selected", "turns"],
 )
 
-_CONVERSATION_COLUMNS = ("key", "requests", "bytes", "first_seq", "last_seq", "prompt_first")
+_CONVERSATION_COLUMNS = ("key", "requests", "bytes", "prompt tokens")
 _TURN_COLUMNS = (
     "turn",
     "seq",
@@ -100,37 +112,58 @@ _TURN_COLUMNS = (
     "ttft_ms",
     "latency_ms",
 )
+_ARROW = " → "
 
 
 def render_inspect_table(invocation: Invocation, document: Document) -> None:
-    """Two tables: every conversation, then the selected one's turns."""
-    from rich import box
-    from rich.markup import escape
-    from rich.table import Table
+    """Two sections, plain text like the rest of the tool: conversations, then selected turns.
 
-    def cell(value: object) -> str:
-        return escape(escape_terminal_text("-" if value is None else str(value)))
+    The text view trades the JSON's per-request detail for what fits a fixed-width table: a
+    conversation's `first_seq`/`last_seq` and prompt-text previews stay JSON-only, replaced
+    here by the prompt token count of its first and last request; a turns table with no
+    provider on any row (a native trace) drops that column instead of printing it empty.
+    """
+    from provibench.bench.labels import text_table
 
-    console = invocation.stdout_console()
     selected = document.get("selected")
     conversations = [d for d in map(as_document, as_list(document.get("conversations")) or []) if d]
-    conv_table = Table(box=box.SIMPLE, header_style="bold", title="Conversations")
-    for column in _CONVERSATION_COLUMNS:
-        conv_table.add_column(column)
-    for entry in conversations:
-        marker = " *" if entry.get("key") == selected else ""
-        cells = [cell(entry.get(column)) for column in _CONVERSATION_COLUMNS]
-        cells[0] += marker
-        conv_table.add_row(*cells)
-    console.print(conv_table)
-
     turns = [d for d in map(as_document, as_list(document.get("turns")) or []) if d]
-    turn_table = Table(box=box.SIMPLE, header_style="bold", title=f"Turns ({selected or '-'})")
-    for column in _TURN_COLUMNS:
-        turn_table.add_column(column)
-    for entry in turns:
-        turn_table.add_row(*(cell(entry.get(column)) for column in _TURN_COLUMNS))
-    console.print(turn_table)
+    turn_columns = _TURN_COLUMNS
+    if not any(entry.get("provider") is not None for entry in turns):
+        turn_columns = tuple(column for column in _TURN_COLUMNS if column != "provider")
+    lines = [
+        "conversations:",
+        *text_table(
+            _CONVERSATION_COLUMNS, [_conversation_cells(entry, selected) for entry in conversations]
+        ),
+        "",
+        f"turns: {selected or '-'}",
+        *text_table(turn_columns, [_turn_cells(entry, turn_columns) for entry in turns]),
+    ]
+    stdout = invocation.streams.stdout
+    stdout.write("\n".join(escape_terminal_text(line) for line in lines) + "\n")
+    stdout.flush()
+
+
+def _cell(value: object) -> str:
+    return "-" if value is None else str(value)
+
+
+def _conversation_cells(entry: Document, selected: object) -> list[str]:
+    marker = " *" if entry.get("key") == selected else ""
+    first = _cell(entry.get("prompt_tokens_first"))
+    last = _cell(entry.get("prompt_tokens_last"))
+    tokens = f"{first}{_ARROW}{last}"
+    return [
+        f"{_cell(entry.get('key'))}{marker}",
+        _cell(entry.get("requests")),
+        _cell(entry.get("bytes")),
+        tokens,
+    ]
+
+
+def _turn_cells(entry: Document, columns: Sequence[str]) -> list[str]:
+    return [_cell(entry.get(column)) for column in columns]
 
 
 @click.command(
@@ -186,15 +219,23 @@ def _select_key(
 
 def _conversation_document(key: str, group: list[TraceEntry]) -> Document:
     ordered = sorted(group, key=lambda e: e.seq)
+    first, last = ordered[0], ordered[-1]
     return {
         "key": key,
         "requests": len(ordered),
         "bytes": sum(e.body_bytes for e in ordered),
-        "first_seq": ordered[0].seq,
-        "last_seq": ordered[-1].seq,
-        "prompt_first": _preview(ordered[0]),
-        "prompt_last": _preview(ordered[-1]),
+        "first_seq": first.seq,
+        "last_seq": last.seq,
+        "prompt_first": _preview(first),
+        "prompt_last": _preview(last),
+        "prompt_tokens_first": _prompt_tokens(first),
+        "prompt_tokens_last": _prompt_tokens(last),
     }
+
+
+def _prompt_tokens(entry: TraceEntry) -> int | None:
+    usage = entry.response.usage if entry.response else None
+    return usage.prompt_total if usage else None
 
 
 def _preview(entry: TraceEntry) -> str | None:

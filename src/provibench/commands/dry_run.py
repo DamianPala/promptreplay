@@ -90,8 +90,8 @@ def requires_confirmation() -> bool:
 
     R4c fixes the context of that question: it asks about a *non-interactive* context, not
     the one this call happens to run in, so the answer must not read the current streams.
-    `probe`, `sweep`, and `replay` always reach a request that spends API credit — a spec
-    list is never empty, since `probe`/`replay` require one on the command line and a sweep
+    `probe`, `sweep`, and `replay` always reach a request that spends API credit — an
+    endpoint list is never empty, since `probe`/`replay` require one on the command line and a sweep
     that selects nothing fails with `invalid_input` before this point — so the same call
     without `--yes` is always a *gated call* and the answer is always `True`.
     """

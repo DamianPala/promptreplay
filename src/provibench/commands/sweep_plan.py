@@ -1,7 +1,7 @@
 """Planning a sweep: which endpoints it will probe, checked how, and the record of that.
 
 `commands/sweep.py` owns the command — the flags, the flow, the document it prints.
-Everything the flow needs to decide *which* specs it runs lives here, because each piece
+Everything the flow needs to decide *which* endpoints it runs lives here, because each piece
 answers a question the command's help has to keep straight: the tag filters and the
 percentile requirement (what the list can even be ranked by), the API key that makes the
 endpoint list carry the health it ranks by, the ZDR intersection and the stability floor
@@ -101,7 +101,7 @@ def endpoint_list(
     """The model's OpenRouter endpoints: the run's snapshot and the list selection reads.
 
     A sweep without that list is not a sweep, so a failed or empty lookup fails the command
-    here — before a spec is built, an estimate printed or an API key asked for.
+    here — before an endpoint is built, an estimate printed or an API key asked for.
     """
     index, notes = fetch_model_endpoints([model], api_key=api_key)
     endpoints = index.get(model, [])

@@ -48,7 +48,7 @@ __all__ = [
 
 
 def render_probe_run(invocation: Invocation, document: Document) -> None:
-    """Human rendering of a `probe` result: the spec and rung tables, or the dry-run notice."""
+    """Human rendering of a `probe` result: the endpoint and rung tables, or the dry-run notice."""
     if _render_dry_run_notice(invocation, document):
         return
     _render_probe(invocation, document, key="summaries")
@@ -177,25 +177,23 @@ def _probe_summary(entry: Document) -> ProbeSummary:
 
 
 def render_summaries(invocation: Invocation, document: Document) -> None:
-    """One table of every run's totals, then one sparkline line per run, or the dry-run notice."""
+    """One section: an `endpoints:` caption, the totals table, then one sparkline footer per
+    endpoint, or the dry-run notice.
+
+    The caption names endpoints, not runs: one `report` shows one run, and each row is one
+    endpoint's replay of it -- the same thing every other table in the tool captions.
+    """
     if _render_dry_run_notice(invocation, document):
         return
-    from rich import box
-    from rich.markup import escape
-    from rich.table import Table
-
+    from provibench.bench.labels import text_table
     from provibench.bench.summary import SUMMARY_COLUMNS, sparkline, summary_row
 
     entries = [d for d in map(as_document, as_list(document.get("summaries")) or []) if d]
-    table = Table(box=box.SIMPLE, header_style="bold")
-    for column in SUMMARY_COLUMNS:
-        table.add_column(column)
-    for entry in entries:
-        table.add_row(*(escape(escape_terminal_text(cell)) for cell in summary_row(entry)))
-    console = invocation.stdout_console()
-    console.print(table)
+    lines = ["endpoints:", *text_table(SUMMARY_COLUMNS, [summary_row(entry) for entry in entries])]
     for entry in entries:
         curve = [v for v in (as_list(entry.get("curve")) or []) if isinstance(v, int | float)]
         notes = ", ".join(str(note) for note in as_list(entry.get("notes")) or [])
-        line = f"{entry.get('label')}  {sparkline(curve)}  {notes}"
-        console.print(escape(escape_terminal_text(line)))
+        lines.append(f"{entry.get('label')}  {sparkline(curve)}  {notes}")
+    stdout = invocation.streams.stdout
+    stdout.write("\n".join(escape_terminal_text(line) for line in lines) + "\n")
+    stdout.flush()

@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from provibench.bench.estimate import SpecPrices
 from provibench.bench.openrouter import Endpoint
 from provibench.bench.probe_models import ProbeOptions, ProbeResult, ProbeRun, Role
@@ -247,7 +249,7 @@ def test_history_renders_three_runs_a_day_apart_as_one_table(
     outcome = cli.run("history", tty_stdout=True, env=bench_paths.env)
     assert outcome.code == 0, outcome.stderr
     lines = outcome.stdout.splitlines()
-    assert lines[0] == "specs: or:model@<provider>"
+    assert lines[0] == "endpoints: or:model@<provider>"
     assert "date" in lines[1] and lines[1].rstrip().endswith("in $/M")
     dated = [line for line in lines if line.startswith(date_at(3.0)[:4])]
     assert len(dated) == 6  # three runs of two specs
@@ -271,14 +273,19 @@ def test_history_json_carries_the_rows_and_the_series(cli: Cli, bench_paths: Ben
     rows = rows_of(document)
     assert len(rows) == 6
     [newest] = [
-        row for row in rows if row["spec"] == "or:model@novita" and row["created"] == stamp_at(1)
+        row
+        for row in rows
+        if row["endpoint"] == "or:model@novita" and row["created"] == stamp_at(1)
     ]
     assert newest["hit_rate"] == 1.0
+    # eff $/M is read straight off summarize_probe, so it follows the first-read pricing
+    # rule automatically: h=1.0 from the first (and here, every) warm read hitting fully
+    assert newest["eff_per_m_prompt"] == pytest.approx((1 - 1.0) * 0.24 + 1.0 * 0.03)
     assert newest["listed_input"] == 0.24
     assert newest["listed_source"] == "openrouter-endpoint"
     assert newest["quantization"] == "fp8" and newest["status"] == "0"
     series = [d for d in map(as_document, as_list(document["series"]) or []) if d]
-    assert [entry["spec"] for entry in series] == ["or:model@novita", "or:model@relace"]
+    assert [entry["endpoint"] for entry in series] == ["or:model@novita", "or:model@relace"]
     assert series[0]["hit_rates"] == [0.0, 0.5, 1.0]
     assert series[1]["runs"] == 3
 
@@ -368,7 +375,7 @@ def test_history_of_a_slug_also_finds_the_native_target_that_carries_it(
     outcome = cli.run("history", "vendor/slug", "--json", env=bench_paths.env)
     assert outcome.code == 0, outcome.stderr
     rows = rows_of(outcome.document)
-    assert any(row["spec"] == native_spec.label for row in rows)
+    assert any(row["endpoint"] == native_spec.label for row in rows)
 
     # a slug no native target's aliases carry, and that owns no run, is still not_found
     missing = cli.run("history", "no-such/slug", env=bench_paths.env)
@@ -427,7 +434,7 @@ def test_an_old_run_without_the_snapshot_shows_no_listed_price(
     assert compared.document["listed"] == []
     assert rows_of(compared.document)  # the measured numbers are still compared
     text = cli.run("compare", str(old), str(newer), tty_stdout=True, env=bench_paths.env).stdout
-    assert "listed prices: no spec was priced in both runs" in text
+    assert "listed prices: no endpoint was priced in both runs" in text
 
 
 def test_old_run_without_endpoints_still_loads_and_lists_prices(

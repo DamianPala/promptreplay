@@ -302,7 +302,7 @@ def test_probe_runs_a_rung_and_persists_the_run(
     [summary] = [d for d in map(as_document, as_list(doc["summaries"]) or []) if d]
     assert summary["label"] == "fake:model-a"
     assert summary["hit_rate"] == 1.0
-    assert summary["prefix_fraction"] == pytest.approx(0.9)
+    assert summary["cached_fraction"] == pytest.approx(0.9)
     assert summary["price_source"] == "targets"
     assert summary["eff_per_m_prompt"] == pytest.approx((1 - 0.9) * 1.0 + 0.9 * 0.1)
     assert summary["errors"] == 0
@@ -539,9 +539,9 @@ def test_probe_human_output_has_the_two_tables(
         env={**bench_paths.env, **_ENV},
     )
     assert outcome.code == 0, outcome.stderr
-    assert "hit %" in outcome.stdout and "prefix %" in outcome.stdout
+    assert "hit %" in outcome.stdout and "cached %" in outcome.stdout
     assert "cached cold" in outcome.stdout and "hits" in outcome.stdout
-    assert "90.0" in outcome.stdout  # the prefix fraction, as a percentage
+    assert "90.0" in outcome.stdout  # the cached fraction, as a percentage
     assert "0.9 0.9" in outcome.stdout  # the hit sequence, one cell per warm attempt
     assert all(len(line) <= 120 for line in outcome.stdout.splitlines())
 
@@ -996,7 +996,7 @@ def test_report_summarises_a_probe_run_without_the_network(
     )
     assert marked.code == 0, marked.stderr
     assert marked.stdout == ""
-    assert md_path.read_text(encoding="utf-8").startswith("| spec |")
+    assert md_path.read_text(encoding="utf-8").startswith("| endpoint |")
 
 
 # --- the throughput request and TTL -------------------------------------------

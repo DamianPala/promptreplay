@@ -68,7 +68,7 @@ Commands:
 - `provibench probe TRACE SPEC... [--rungs] [--repeats] [--gap] [--ttl] [--no-throughput] [--warm] [--budget USD] [--yes]`: the protocol above; persists under `runs/<trace>/<timestamp>/` with `run.json` (`protocol = "probe"`, nonce, rungs, endpoints snapshot) and one jsonl per spec.
 - `replay` keeps the full per-turn protocol (`protocol = "full"`), gains the nonce (`--warm` to disable) and `--limit`; it exists for the per-turn curve and the headline "your own session" story.
 - Confirmation before any request shows the worst-case estimate per spec (tokens to be sent × listed input price, no cache), because weak resellers bill close to it; `--budget USD` refuses above it, `--yes` skips the prompt.
-- Metrics per spec and rung (computed in `bench/summary.py`): hit rate = hits ÷ served warm attempts; prefix fraction = mean over hits of cached ÷ cold prompt, capped at 1; hit sequence; cached on cold (contamination check); cold and warm latency medians; TTFT, tok/s, fingerprint; errors, retries; served provider, response model, prompt tokens vs the native or first spec (tokenization drift); billed vs computed cost when `/generation` is available. Per spec: hit rate over all warm attempts, eff $/M prompt = (1 − h)·input + h·cache_read with h = hit rate × prefix fraction, price source.
+- Metrics per spec and rung (computed in `bench/summary.py`): hit rate = hits ÷ served warm attempts; cached fraction = mean over hits of cached ÷ cold prompt, capped at 1; hit sequence; cached on cold (contamination check); cold and warm latency medians; TTFT, tok/s, fingerprint; errors, retries; served provider, response model, prompt tokens vs the native or first spec (tokenization drift); billed vs computed cost when `/generation` is available. Per spec: hit rate over all warm attempts, eff $/M prompt = (1 − h)·input + h·cache_read with h = hit rate × cached fraction, price source.
 - Acceptance: `probe` on the raw sample against `deepseek:deepseek-flash` and two OpenRouter resellers reproduces the PoC tables within sampling noise; two consecutive probes give the same per-rung cold `cached = 0`; `--warm` shows contamination; unit tests cover rung selection, nonce placement (byte-identical warm bodies), skip, retry, aggregation and the stream parser on fixtures, no network.
 
 ### 3b. `sweep`: probe over every endpoint
@@ -91,7 +91,7 @@ Commands:
 
 ### 5. HTML report
 
-- `report RUN` (terminal and `--json`) for a probe run: one line per provider with hit %, prefix %, eff $/M next to the listed price, cold/warm prefill ms on the first rung, TTFT ms, tok/s, errors, drift (served provider, tokenization delta vs native, fingerprint mismatch); below it the per-rung table (prompt size, hit sequence, cold/warm ms, tok/s, TTL results when present). Full-replay runs keep today's per-turn table.
+- `report RUN` (terminal and `--json`) for a probe run: one line per provider with hit %, cached %, eff $/M next to the listed price, cold/warm prefill ms on the first rung, TTFT ms, tok/s, errors, drift (served provider, tokenization delta vs native, fingerprint mismatch); below it the per-rung table (prompt size, hit sequence, cold/warm ms, tok/s, TTL results when present). Full-replay runs keep today's per-turn table.
 - `report RUN --format html --output-file PATH`: single self-contained file with the same two tables and one chart per run (probe: hit rate per rung per provider; full: cache curve per spec); light and dark; no external assets.
 - Acceptance: opens offline; screenshot-friendly at 1200 px wide; the terminal report of the PoC-equivalent run fits 120 columns.
 
@@ -125,7 +125,7 @@ The probe measures infrastructure on exact recorded payloads. Cache is the first
 
 | Metric | Source | Status |
 |---|---|---|
-| Cache hit rate and prefix fraction per size rung, hit sequence (replica warm-up) | probe usage / OpenRouter generation | 0.2 slice 3 (full-replay per-turn curve stays under `--full`) |
+| Cache hit rate and cached fraction per size rung, hit sequence (replica warm-up) | probe usage / OpenRouter generation | 0.2 slice 3 (full-replay per-turn curve stays under `--full`) |
 | Cost split, billed vs computed, eff $/M prompt weighted by hit rate | prices, generation | 0.2 slice 3 |
 | Prefill latency cold vs warm at equal size, medians | wall clock | 0.2 slice 3 |
 | Generation TTFT and tok/s, model fingerprint (first 16 tokens at temperature 0) | one streamed request per rung, `max_tokens 256` | 0.2 slice 3 |

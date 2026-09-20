@@ -31,7 +31,7 @@ type EndpointIndex = dict[str, list[Endpoint]]
 
 _ENDPOINTS_TIMEOUT_S = 30.0
 _LABEL_WIDTH = 48
-_HEADERS = ("spec", "tokens", "$/M in", "source", "worst case $")
+_HEADERS = ("endpoint", "tokens", "$/M in", "source", "worst case $")
 _NOTE = (
     "worst case assumes no cache hit: every prompt token billed at the listed input price, "
     "excluding retries"
@@ -39,7 +39,7 @@ _NOTE = (
 
 
 class SpecPrices(BaseModel):
-    """The listed prices of the endpoint a spec would use, and where they came from."""
+    """The listed prices of the endpoint this run spec resolves to, and where they came from."""
 
     prices: Prices
     source: str
@@ -48,7 +48,7 @@ class SpecPrices(BaseModel):
 
 
 class SpecEstimate(BaseModel):
-    """One spec's worst-case spend, before any request is sent."""
+    """One endpoint's worst-case spend, before any request is sent."""
 
     label: str
     tokens: int
