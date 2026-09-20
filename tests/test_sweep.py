@@ -1527,7 +1527,7 @@ def test_sweep_failure_output_keeps_the_selection_lines(
     outcome = _sweep(cli, bench_paths, *_one_rung("--check"), tty=True)
     assert outcome.code == 1
     assert "hit %" in outcome.stderr  # the tables the text failure path prints
-    assert "selection: sort=price, top=-, zdr=off; dropped: novita/fp8" in outcome.stderr
+    assert "selection: every candidate by price; dropped: novita/fp8" in outcome.stderr
     assert f"or:{_MODEL}@novita/fp8: not probed, {_GUARDRAIL_REASON}" in outcome.stderr
 
 
@@ -1578,7 +1578,7 @@ def test_report_shows_the_selection_of_a_sweep_offline(
     printed = cli.run("report", run_dir, tty_stdout=True, env={**bench_paths.env, **_ENV})
     assert printed.code == 0, printed.stderr
     assert (
-        f"selection: sort=uptime, top=3, zdr=off; dropped: gmicloud ({_GUARDRAIL_REASON})"
+        f"selection: the 3 best by uptime; dropped: gmicloud ({_GUARDRAIL_REASON})"
         in printed.stdout
     )
     assert f"or:{_MODEL}@gmicloud: not probed, {_GUARDRAIL_REASON}" in printed.stdout
@@ -1596,7 +1596,7 @@ def test_report_shows_the_selection_of_a_sweep_offline(
     )
     assert written.code == 0, written.stderr
     html = html_path.read_text(encoding="utf-8")
-    assert "selection: sort=uptime, top=3, zdr=off" in html
+    assert "selection: the 3 best by uptime" in html
     assert f"or:{_MODEL}@gmicloud: not probed, {_GUARDRAIL_REASON}" in html
 
 

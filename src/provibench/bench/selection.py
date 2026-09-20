@@ -265,9 +265,16 @@ def render_candidates(selection: Selection, *, model: str, sort: str, zdr: bool)
 
 
 def selection_line(sweep: SweepInfo) -> str:
-    """The line `report` prints under the tables: the criteria and what they dropped."""
-    top = "-" if sweep.top is None else str(sweep.top)
-    line = f"selection: sort={sweep.sort}, top={top}, zdr={_on_off(sweep.zdr)}"
+    """The line `report` prints under the tables: the criteria and what they dropped.
+
+    A sentence, not the `sort=price, top=3, zdr=off` the candidate listing prints: the
+    listing is read by the person who typed those flags, this line by whoever opens the
+    report later.
+    """
+    which = "every candidate" if sweep.top is None else f"the {sweep.top} best"
+    line = f"selection: {which} by {sweep.sort}"
+    if sweep.zdr:
+        line += ", zero-data-retention endpoints only"
     if sweep.dropped:
         line += "; dropped: " + ", ".join(_drop_cell(drop) for drop in sweep.dropped)
     return line

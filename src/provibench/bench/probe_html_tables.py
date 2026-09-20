@@ -39,7 +39,8 @@ GLOSSARY = (
     "<strong>cached %</strong> (share of the prompt served from the cache) — 100% means "
     "the whole prompt was already cached; <strong>eff $/M</strong> — the real price per "
     "1M prompt tokens at the measured hit rate; <strong>1st hit %</strong> — the share of "
-    "rungs whose first warm read hit the cache, the only read an agent loop performs."
+    "rungs whose first warm read after the write hit the cache: the cold-start case, and "
+    "a gap below hit % means the cache needs a few requests before it helps."
 )
 
 BLANKS_LINE = "<code>-</code> means not measured; the caveats say why."
@@ -48,13 +49,16 @@ ENDPOINT_HELP: dict[str, str] = {
     "endpoint": "The target, model and pinned provider this row measured.",
     "hit %": "Warm reads that found any part of the prefix, divided by warm reads served.",
     "1st hit %": (
-        "The same fraction, counting only each rung's first warm read: the only read an "
-        "agent loop performs."
+        "The same fraction, counting only each rung's first warm read after the write: the "
+        "cold-start case (a fresh session, a restart, a gateway switching providers)."
     ),
     "cached %": (
         "On a hit, the share of the prompt served from the cache; 100% means the whole prompt."
     ),
-    "eff $/M": "Hit-weighted prompt price per 1M tokens, priced from each rung's first warm read.",
+    "eff $/M": (
+        "Hit-weighted prompt price per 1M tokens: (1 - h) x input + h x cache read, with h "
+        "over every warm read, the steady state of a long session."
+    ),
     "in $/M": "The listed input price used for eff $/M; repriced when the endpoint is unpinned.",
     "cold ms (rung 1)": "The first rung's cold prefill latency, in milliseconds.",
     "warm ms (rung 1)": "The first rung's warm prefill latency, in milliseconds.",

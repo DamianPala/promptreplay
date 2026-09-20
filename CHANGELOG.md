@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `report --format html --output-file PATH`: one self-contained page with the same tables, hit-rate bars per
   rung, effective prompt price bars and the full-replay cache curve, in dark mode, with no
   scripts and no external resources
+- The HTML page opens with a one-sentence answer (cheapest and priciest endpoint, what a
+  session like the trace bills on each), captions the endpoint table cheapest first, adds a
+  `this trace $` column, drops columns that hold no values, reads `hits` as `n/m cached`,
+  labels the rung-1 latencies, explains every header on hover and in a glossary, charts the
+  cached share `h` the price is computed from, and gathers the notes under a Caveats heading
+  as sentences with the failure reason; the `selection:` line under a sweep report reads as
+  a sentence too
 - `scrub`: write a shareable copy of a trace with home paths, the encoded Claude Code
   project directories, secrets and e-mail addresses removed, `--user` and `--replace` for
   what the patterns cannot know, and `--turns N` to keep a cheaper prefix
