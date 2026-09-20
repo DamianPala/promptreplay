@@ -47,10 +47,12 @@ def test_core_has_no_module_level_metadata_lookup() -> None:
 
 
 def test_constructing_the_cli_and_walking_details_stays_lightweight() -> None:
-    """Building the parser and walking D8 details loads neither rich nor package metadata.
+    """Building the parser and walking D8 details loads neither rich, httpx nor metadata.
 
     Invoking the `schema` command itself would load `importlib.metadata` on purpose, for
     `tool_version`; what this pins is that nothing on the construction path pays for it.
+    `httpx` is the network client every `bench` module pulls in, so its absence is the
+    proof that no command imports `bench` at module level.
     """
     code = (
         "from provibench.app import build_cli; "
@@ -59,6 +61,7 @@ def test_constructing_the_cli_and_walking_details_stays_lightweight() -> None:
         "root = build_cli(); "
         "[build_detail(command, name) for name, command in listed_commands(root)]; "
         "assert 'rich.console' not in sys.modules, sys.modules.keys(); "
+        "assert 'httpx' not in sys.modules, sys.modules.keys(); "
         "assert 'importlib.metadata' not in sys.modules, sys.modules.keys()"
     )
     result = subprocess.run(

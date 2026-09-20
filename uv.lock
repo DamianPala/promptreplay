@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.12"
 
 [options]
-exclude-newer = "2026-09-07T15:32:46.830421308Z"
+exclude-newer = "2026-09-13T10:38:27.684163985Z"
 exclude-newer-span = "P1W"
 
 [[package]]
@@ -160,7 +160,7 @@ wheels = [
 
 [[package]]
 name = "provibench"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

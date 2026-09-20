@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-20
+
+The first published version. Everything below is relative to the unpublished `0.1.0`
+scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
+
 ### Added
 
 - `probe`: a size-rung cache probe as the default measurement — one cold write per rung
@@ -178,4 +183,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sweep`'s `candidates:` table and its `endpoints:` estimate table are separated by one
   blank line instead of running straight into each other
 
-[Unreleased]: https://github.com/DamianPala/provibench/commits/main
+[Unreleased]: https://github.com/DamianPala/provibench/compare/0.2.0...main
+[0.2.0]: https://github.com/DamianPala/provibench/releases/tag/0.2.0
