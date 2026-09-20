@@ -216,7 +216,6 @@ Price precedence for native targets is `targets.toml`, then the cached LiteLLM c
 A missing price remains `n/a`, and a budgeted run refuses an unpriced endpoint.
 
 The community table lists peak rates, and a provider can discount off-peak, so the packaged `targets.toml` explicitly prices native `deepseek-flash` at DeepSeek's off-peak rate.
-`cache_write`, the fourth price, is the per-token cost of writing to the cache rather than reading it back: DeepSeek charges its input price for a write (0.15), and an OpenRouter listing that charges nothing beyond input shows 0.
 
 ### Sharing a trace
 
