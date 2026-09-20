@@ -152,7 +152,7 @@ def not_charted(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> lis
     rest = [label for _, label in list(zip(summaries, labels, strict=True))[MAX_SERIES:]]
     if rest:
         lines.append(
-            f"{MAX_SERIES} of {len(summaries)} endpoints are charted; the rest are in the tables "
+            f"{MAX_SERIES} of {len(summaries)} endpoints are charted. The rest are in the tables "
             f"above: {', '.join(rest)}"
         )
     return lines
@@ -181,7 +181,7 @@ def _price_row(index: int, summary: ProbeSummary, label: str) -> BarRow:
     if summary.h is not None:
         details.append(f"the cache covered {summary.h * 100:.1f}% of prompt tokens")
     details.append(f"priced from the {price_source_words(summary.price_source)}")
-    how = "; ".join(details)
+    how = ", ".join(details)
     title = f"{label}: ${eff:.3f} per 1M prompt tokens at the measured hit rate ({how})"
     return BarRow(index, label, eff, f"${eff:.3f}/M", title)
 

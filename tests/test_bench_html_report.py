@@ -352,7 +352,7 @@ def test_this_trace_column_reports_what_a_session_like_the_trace_would_bill() ->
     assert "<td>$0.0015</td>" in endpoint_table  # evil<spec>:model-z
     # item 12.5: the run's own spend is a caveat sentence now, not a `spent $X` table caption.
     assert (
-        "This run cost $0.1776 in API spend; the estimate before running, assuming no cache "
+        "This run cost $0.1776 in API spend. The estimate before running, assuming no cache "
         "hit, was $0.4851." in html
     )
     assert '<p class="caption">spent ' not in html
@@ -595,7 +595,7 @@ def test_price_chart_draws_the_eff_column_one_bar_per_endpoint() -> None:
     assert 'class="bar s1"' in price and "light" not in price
     assert (
         "@novita: $0.041 per 1M prompt tokens at the measured hit rate (the cache covered "
-        "95.8% of prompt tokens; priced from the OpenRouter listing)" in price
+        "95.8% of prompt tokens, priced from the OpenRouter listing)" in price
     )
     assert "hit-weighted h" not in price  # `h` is the tool's name, never introduced on the page
     assert '<text class="row-label" x="0.0"' in price
@@ -644,7 +644,7 @@ def test_specs_past_the_eight_slots_stay_in_the_tables_and_are_named() -> None:
     charts = _SVG.findall(html)
     assert _bars(charts[0]) == MAX_SERIES  # one price bar for each charted spec
     assert _bars(charts[1]) == MAX_SERIES * 2  # the fixture entry's two rungs, eight times
-    assert "8 of 9 endpoints are charted; the rest are in the tables above: @r8" in html
+    assert "8 of 9 endpoints are charted. The rest are in the tables above: @r8" in html
     assert "<td>@r0</td>" in html and "<td>@r8</td>" in html
 
 
@@ -803,7 +803,7 @@ def test_burst_caveat_merges_endpoints_that_share_the_same_burst_turn() -> None:
     # the run has one turn, so there is no other turn for the summary median to fall back on
     assert (
         "@novita and @gmicloud delivered the 20k-token turn&#x27;s answer in one burst, so "
-        "that turn has no tok/s (shown as - in the per-turn table); their tok/s in the summary "
+        "that turn has no tok/s (shown as - in the per-turn table). Their tok/s in the summary "
         "is - as well." in html
     )
     assert html.count("delivered the 20k-token turn&#x27;s answer in one burst") == 1
@@ -816,7 +816,7 @@ def test_run_cost_sentence_names_the_precheck_share_when_there_was_one() -> None
     share is only mentioned when the run actually spent something checking availability."""
     without = render_html(probe_document())
     assert (
-        "This run cost $0.1776 in API spend; the estimate before running, assuming no cache "
+        "This run cost $0.1776 in API spend. The estimate before running, assuming no cache "
         "hit, was $0.4851." in without
     )
     assert "availability check" not in without
@@ -825,7 +825,7 @@ def test_run_cost_sentence_names_the_precheck_share_when_there_was_one() -> None
     with_precheck["precheck"] = {"requests": 3, "spend_usd": 0.0012, "worst_case_usd": 0.003}
     html = render_html(with_precheck)
     assert (
-        "This run cost $0.1776 in API spend ($0.0012 of it on the availability check); the "
+        "This run cost $0.1776 in API spend ($0.0012 of it on the availability check). The "
         "estimate before running, assuming no cache hit, was $0.4851." in html
     )
 

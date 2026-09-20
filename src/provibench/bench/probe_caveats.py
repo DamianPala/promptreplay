@@ -217,7 +217,7 @@ def _burst_sentence(
     others = len({rung.rung for summary in summaries for rung in summary.rungs}) - len(rungs)
     return (
         f"{names} delivered the {sizes}-token {noun}'s answer in one burst, so {pronoun} no "
-        f"tok/s (shown as - in the per-turn table); {_summary_tok_phrase(others)}."
+        f"tok/s (shown as - in the per-turn table). {_summary_tok_phrase(others)}."
     )
 
 
@@ -225,13 +225,14 @@ def _summary_tok_phrase(others: int) -> str:
     """What the summary's `tok/s` cell holds once the burst turns are left out of it.
 
     The only `-` cells a reader meets are the per-turn ones this sentence explains, so the
-    explanation lives here rather than in a caveat of its own about the symbol.
+    explanation lives here rather than in a caveat of its own about the symbol. Capitalized,
+    because it follows the burst sentence as a sentence of its own.
     """
     if others <= 0:
-        return "their tok/s in the summary is - as well"
+        return "Their tok/s in the summary is - as well"
     if others == 1:
-        return "their tok/s in the summary is the other turn's"
-    return f"their tok/s in the summary is the median of the other {_count_word(others)} turns"
+        return "Their tok/s in the summary is the other turn's"
+    return f"Their tok/s in the summary is the median of the other {_count_word(others)} turns"
 
 
 _COUNT_WORDS: dict[int, str] = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}

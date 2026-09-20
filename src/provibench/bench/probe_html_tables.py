@@ -68,7 +68,7 @@ def endpoint_caption_html(labels: Sequence[str], model: str, *, folded: bool) ->
 _ENDPOINT_TOOLTIP = (
     "Who served the requests: the API, the model and, for OpenRouter rows, the pinned provider."
 )
-_ERRORS_TOOLTIP = "Requests without a usable answer; a failed cold write is not a cache miss."
+_ERRORS_TOOLTIP = "Requests without a usable answer. A failed cold write is not a cache miss."
 
 _NUMBER_WORDS: dict[int, str] = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
 
@@ -146,7 +146,7 @@ def endpoint_help(summaries: Sequence[ProbeSummary], trace_prompt_tokens: object
             "requests before it helps."
         ),
         "cached %": (
-            "When the cache hit, the share of the prompt it covered; 100 means the whole prompt."
+            "When the cache hit, the share of the prompt it covered. 100 means the whole prompt."
         ),
         "in $/M": "Listed price per 1M input tokens: what a cache miss costs.",
         "cache $/M": "Listed price per 1M cached prompt tokens: what a cache hit costs.",
@@ -182,9 +182,9 @@ def rung_help() -> dict[str, str]:
         "endpoint": _ENDPOINT_TOOLTIP,
         "turn": "One turn of the recorded session, with its prompt size.",
         "prompt": "Prompt size of the uncached request, in tokens.",
-        "cached cold": "What the cold write read back; a non-zero value indicates contamination.",
+        "cached cold": "What the cold write read back. A non-zero value indicates contamination.",
         "hits": (
-            "Of this turn's repeat requests, how many the cache answered; a partial hit is "
+            "Of this turn's repeat requests, how many the cache answered. A partial hit is "
             "one where only part of the prompt was cached."
         ),
         "cold ms": "Time to answer this turn's first, uncached request.",

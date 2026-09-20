@@ -169,10 +169,7 @@ def run_cost_sentence(document: Document) -> str | None:
     if isinstance(precheck_spend, int | float) and precheck_spend > 0:
         sentence += f" ({dash_money(precheck_spend)} of it on the availability check)"
     worst = document.get("worst_case_usd")
+    sentence += "."
     if isinstance(worst, int | float):
-        sentence += (
-            f"; the estimate before running, assuming no cache hit, was {dash_money(worst)}."
-        )
-    else:
-        sentence += "."
+        sentence += f" The estimate before running, assuming no cache hit, was {dash_money(worst)}."
     return sentence
