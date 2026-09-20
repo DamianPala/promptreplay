@@ -30,10 +30,8 @@ def test_compare_latest_previous_prints_the_delta_per_spec(
     assert lines[0].startswith("A: ") and lines[0].endswith("probe")
     assert date_at(2.0) in lines[0] and date_at(1.0) in lines[1]
     novita = next(line for line in lines if line.startswith("@novita"))
-    assert "50.0 → 100.0 (+50.0)" in novita  # pooled hit rate in per cent, the delta in points
-    # eff $/M prices from each run's first read, which hit both times, so it does not move
-    # even though the pooled hit rate above does
-    assert "0.030 → 0.030 (+0.000)" in novita
+    assert "50.0 → 100.0 (+50.0)" in novita  # hit rate in per cent, the delta in points
+    assert "0.165 → 0.030 (-0.135)" in novita  # eff $/M: half the reads hit, then all of them
     listed = next(index for index, line in enumerate(lines) if "listed $/M in" in line)
     assert "0.300 → 0.240 (-0.060)" in lines[listed + 2]
     assert "0.030 → 0.030 (+0.000)" in lines[listed + 2]

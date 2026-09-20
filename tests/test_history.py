@@ -278,8 +278,7 @@ def test_history_json_carries_the_rows_and_the_series(cli: Cli, bench_paths: Ben
         if row["endpoint"] == "or:model@novita" and row["created"] == stamp_at(1)
     ]
     assert newest["hit_rate"] == 1.0
-    # eff $/M is read straight off summarize_probe, so it follows the first-read pricing
-    # rule automatically: h=1.0 from the first (and here, every) warm read hitting fully
+    # eff $/M is read straight off summarize_probe: pooled h=1.0, every warm read hit fully
     assert newest["eff_per_m_prompt"] == pytest.approx((1 - 1.0) * 0.24 + 1.0 * 0.03)
     assert newest["listed_input"] == 0.24
     assert newest["listed_source"] == "openrouter-endpoint"

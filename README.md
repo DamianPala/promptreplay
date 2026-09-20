@@ -14,15 +14,16 @@ endpoints: openrouter:deepseek/deepseek-v4.1-flash@<provider>
 
 endpoint                | hit % | 1st hit % | cached % | eff $/M | in $/M | cold ms | warm ms | TTFT ms | tok/s | errors | drift
 ----------------------- | ----- | --------- | -------- | ------- | ------ | ------- | ------- | ------- | ----- | ------ | --------
-@relace/fp4             | 80.0  | 100.0     | 99.8     | 0.003   | 0.130  | 4410    | 2116    | 1677    | 86.5  | 0      | provider
 deepseek:deepseek-flash | 100.0 | 100.0     | 99.9     | 0.003   | 0.150  | 1690    | 1439    | 1083    | 353.3 | 0      | -
-@morph                  | 80.0  | 66.7      | 99.9     | 0.048   | 0.135  | 4677    | 2984    | 2837    | 21.4  | 0      | -
-@deepinfra/fp8          | 90.0  | 66.7      | 90.8     | 0.087   | 0.140  | 1589    | 1292    | 1874    | 54.5  | 0      | provider
+@relace/fp4             | 80.0  | 100.0     | 99.8     | 0.028   | 0.130  | 4410    | 2116    | 1677    | 86.5  | 0      | provider
+@deepinfra/fp8          | 90.0  | 66.7      | 90.8     | 0.029   | 0.140  | 1589    | 1292    | 1874    | 54.5  | 0      | provider
+@morph                  | 80.0  | 66.7      | 99.9     | 0.030   | 0.135  | 4677    | 2984    | 2837    | 21.4  | 0      | -
 pre-check: 3 requests, $0.0081
 spent $0.1712 (worst case $0.4708)
 ```
 
-Two endpoints with almost the same listed price end up 16 and 29 times apart once the cache is measured, and the run cost 17 cents.
+The three resellers list a lower input price than the native API and cost ten times more per prompt token once the cache is measured; two of them also miss on the first read after a write.
+The run cost 17 cents.
 This is one day's measurement, not a standing ranking: routing, quantization, and prices shift week to week, which is what `history` is for.
 
 ## Quickstart
@@ -101,9 +102,9 @@ Native prices follow the precedence in [Prices](#prices).
 | Column | Meaning |
 |---|---|
 | `hit %` | Warm reads that found any part of the prefix divided by warm reads that were served. |
-| `1st hit %` | The same fraction, but counting only each rung's first warm read — the only read an agent loop performs. Pooling every repeat instead (`hit %`) flatters the cache, since reads 2+ re-read what read 1 just wrote. Equal to `hit %` with `--repeats 1`. |
+| `1st hit %` | The same fraction, counting only each rung's first warm read: one write, then one read, with nothing else warm. That is the cold-start case (a fresh session, a restart, a gateway switching providers). A gap between it and `hit %` means the endpoint needs a few requests before its cache helps, either because it admits a prefix only on its second sight or because several replicas each need their own copy. Equal to `hit %` with `--repeats 1`. |
 | `cached %` | On a hit, the share of the prompt served from the provider's cache; 100 % means the whole prompt. A provider that caches a fixed window from the front shows this falling as the conversation grows. |
-| `eff $/M` | Hit-weighted prompt price from each rung's first warm read: `(1 - h) * input + h * cache read`, where `h = 1st hit % * cached %` of that read; the pooled `hit %` is reported but does not enter the price, because reads 2+ re-read what read 1 just wrote. One caveat: a provider that admits a prefix to its cache only on its second sight (Venice cached 16 384 tokens after one write and the whole prompt after two) measures worse here than an agent loop would see, since the loop has already sent everything but its last turn twice. |
+| `eff $/M` | Hit-weighted prompt price: `(1 - h) * input + h * cache read`, where `h = hit % * cached %` over every warm read. The pooled reads stand in for a long session's steady state, in which everything but the last turn has been sent before (Venice, for one, caches 16 384 tokens of a prompt it sees once and the whole prompt the second time). An endpoint whose `1st hit %` is far below its `hit %` will bill closer to the `1st hit %` rate in the first minutes of a session. |
 | `in $/M` | The listed input price used for the calculation; for an unpinned OpenRouter endpoint, a rate fitted from what the provider that actually served it billed, not a listed price, and said so in a `priced as served: <provider> (rates fitted…)` note under the table. It falls back to the worst-case listed price (`worst case: <provider>`) when those records could not be fit. Pinned and native endpoints keep their listed price unchanged. |
 | `cold ms` / `warm ms` | First-rung cold and warm prefill latency; the gap is the cache's latency benefit. |
 | `TTFT ms` / `tok/s` | Median time to the first streamed token and output tokens per second across the endpoint's rungs. |
@@ -114,7 +115,7 @@ Native prices follow the precedence in [Prices](#prices).
 | `ttl` | One cell per requested offset, for example `60s:1` means the cache remained available. |
 | `cached cold` | What the cold write read back; a non-zero value indicates contamination. |
 
-In JSON, `h` (what the prose above calls the hit-weighted cached share) is `hit % * cached %` pooled over every warm read, and `first_h` is its first-read analogue; `eff $/M` prices from `first_h`.
+In JSON, `h` (what the prose above calls the hit-weighted cached share) is `hit % * cached %` pooled over every warm read, and `first_h` is its first-read analogue; `eff $/M` prices from `h`.
 When no rung of an endpoint served a first warm read at all, `eff $/M` falls back to the pooled reads instead, noted as `eff $/M from pooled reads: no first read served`.
 When every endpoint shares one target and model, the table moves them into an `endpoints:` caption and shows provider tails; a different model keeps its complete name as the reference row.
 Reports also retain the served provider, response models, raw per-rung records, and the price source in JSON.

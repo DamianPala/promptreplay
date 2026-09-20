@@ -904,22 +904,22 @@ def test_summarize_probe_pools_the_rungs_and_prices_the_result() -> None:
     assert summary.hit_rate == pytest.approx(2 / 3)  # 2 hits over 3 served warm reads
     assert summary.cached_fraction == pytest.approx((1.0 + 0.5) / 2)
     assert summary.h == pytest.approx(2 / 3 * 0.75)
-    # Both rungs' attempt-1 read hit (rung 1 fully, rung 2 half), so first_h -- not the
-    # pooled h -- is what eff_per_m_prompt is priced from: an agent loop never sees rung
-    # 1's second, redundant warm read.
+    # Both rungs' attempt-1 read hit (rung 1 fully, rung 2 half); the first-read figures
+    # sit next to the pooled ones, and the price is weighted by the pooled h, the steady
+    # state a long session runs in.
     assert summary.first_hit_rate == pytest.approx(1.0)
     assert summary.first_cached_fraction == pytest.approx((1.0 + 0.5) / 2)
     assert summary.first_h == pytest.approx(0.75)
-    assert summary.eff_per_m_prompt == pytest.approx((1 - 0.75) * 1.0 + 0.75 * 0.1)
+    pooled_h = 2 / 3 * 0.75
+    assert summary.eff_per_m_prompt == pytest.approx((1 - pooled_h) * 1.0 + pooled_h * 0.1)
     assert summary.price_source == "targets"
     assert summary.errors == 0
     assert summary.skipped == 0
-    assert "eff $/M from pooled reads" not in " ".join(summary.notes)
 
 
 def test_summarize_probe_prices_from_pooled_reads_when_no_first_read_was_served() -> None:
-    """Every rung's attempt-1 read failed; the only served warm reads are repeats. `eff $/M`
-    falls back to the pooled reads and says so, since there is no first read to price from."""
+    """Every rung's attempt-1 read failed; the only served warm reads are repeats. The
+    first-read figures are absent and the pooled price is still computed."""
     records = [
         _record("cold", 0, rung=1, prompt=100),
         _record("warm", 1, rung=1, status=500, error="boom"),
@@ -931,12 +931,12 @@ def test_summarize_probe_prices_from_pooled_reads_when_no_first_read_was_served(
     assert summary.first_h is None
     assert summary.h == pytest.approx(1.0)  # the one served warm read, a full hit
     assert summary.eff_per_m_prompt == pytest.approx((1 - 1.0) * 1.0 + 1.0 * 0.1)
-    assert "eff $/M from pooled reads: no first read served" in summary.notes
+    assert not [note for note in summary.notes if note.startswith("eff $/M")]
 
 
 def test_summarize_probe_eff_per_m_equals_pooled_with_one_repeat_per_rung() -> None:
     """With one warm read per rung (`--repeats 1`), the first read is the only read, so the
-    first-read price and the pooled price are the same number by construction."""
+    first-read figures and the pooled ones the price uses are the same by construction."""
     records = [
         _record("cold", 0, rung=1, prompt=100),
         _record("warm", 1, rung=1, cached=40),

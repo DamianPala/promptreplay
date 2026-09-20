@@ -5,10 +5,11 @@ a skipped rung and flatters a run that never hit. The cached fraction is how muc
 cold prefix each hit covered, and `h` — the two multiplied — weights the effective input
 price. Both are pure functions of the records, so `report` rebuilds them with no network.
 
-That pooled `hit_rate` flatters an agent loop: reads 2..n of a rung re-read a prompt read 1
-already wrote, hitting almost by construction. Only read 1 measures what an agent turn
-experiences, so `first_hit_rate`/`first_cached_fraction`/`first_h` pool only the first warm
-read of every rung, and `eff_per_m_prompt` is priced from that read too (`_effective_price`).
+The pooled `hit_rate` stands in for a long session's steady state: by read 2 the prefix has
+been seen twice (some caches admit it only then) and more than one replica is warm. Read 1
+alone is the cold-start bound, one write then one read, which is what
+`first_hit_rate`/`first_cached_fraction`/`first_h` report next to it. `eff_per_m_prompt`
+is priced from the pooled `h`; the gap to `first_h` is what the first minutes cost.
 
 The other question the probe exists for — which endpoint is fast, and which is really
 serving the model — is answered here and by the comparisons in `probe_drift`.
@@ -264,10 +265,10 @@ def summarize_probe(
     priced, priced_as, listed = choose_prices(
         prices, records, unpinned_gateway=unpinned_gateway, listing=listing
     )
-    # An agent loop only performs a rung's first warm read (see the module docstring); the
-    # pooled `h` is a fallback for the rare rung where no first read was ever served.
-    priced_from_first = first_h is not None
-    eff_per_m_prompt = _effective_price(first_h if priced_from_first else h, priced)
+    # Priced from the pooled `h`: a long agent session runs in the steady state the later
+    # reads sample (prefixes admitted, several replicas warm); `first_h` is the cold-start
+    # bound and stays visible next to it (see the module docstring).
+    eff_per_m_prompt = _effective_price(h, priced)
     billed_usd = _billed_total(records)
     output_tokens, reads = output_token_stats(records)
     rate_limited = rate_limited_count(records)
@@ -277,9 +278,6 @@ def summarize_probe(
         for note in (
             f"{rate_limited} x 429 rate limit" if rate_limited else None,
             output_tokens_note(output_tokens, reads),
-            "eff $/M from pooled reads: no first read served"
-            if h is not None and not priced_from_first
-            else None,
             # The table's `in $/M` cell cannot say where its number came from, and for an
             # unpinned spec that is not the listed price the estimate showed; the note is
             # where a reader of the rendered report is told.
@@ -358,7 +356,7 @@ def _hit(record: ProbeResult, prefix: int) -> float | None:
 
 def _effective_price(h: float | None, prices: SpecPrices | None) -> float | None:
     """USD per 1M prompt tokens at the given hit-weighted `h`: misses at input, hits at cache
-    read. The caller passes `first_h` when available, `h` (pooled) only as the fallback."""
+    read."""
     if h is None or prices is None:
         return None
     return (1 - h) * prices.prices.input + h * prices.prices.cache_read

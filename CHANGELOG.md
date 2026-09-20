@@ -103,12 +103,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `prefix_fraction` to `cached_fraction`, `first_prefix_fraction` to `first_cached_fraction`
   (`ProbeSummary`/`RungSummary` and the probe/sweep/report/history/compare output schemas);
   persisted run files are unaffected
-- Contract change: `eff $/M` is now priced from each rung's first warm read (`first_h`)
-  instead of the pooled reads (`h`); an agent loop only ever performs a rung's first read,
-  so reads 2+ re-reading what read 1 just wrote no longer inflate the price. `h`/`first_h`
-  stay in JSON; `eff $/M` falls back to the pooled reads only when a rung served no first
-  read, noted as `eff $/M from pooled reads: no first read served`. `session_prompt_usd` and
-  `history`/`compare`'s `eff $/M` follow automatically, since both read it off the summary
+- `eff $/M` stays priced from the pooled reads (`h`), with `1st hit %` beside it as the
+  cold-start bound: a long agent session runs in the steady state the later reads sample
+  (a prefix admitted to the cache on its second sight, several replicas warm), while the
+  first read after one write sees a single warm replica and a once-seen prefix. A probe
+  that replays a few preceding turns before the measured read is the 0.3 follow-up
 
 - `report --json`'s summaries array is named `summaries` for both a probe and a full-replay
   run, the name `sweep` and `probe --json` already used; the separate, always-empty
