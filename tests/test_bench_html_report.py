@@ -15,7 +15,11 @@ import pytest
 from provibench.bench.estimate import SpecPrices
 from provibench.bench.html_report import render_html
 from provibench.bench.html_svg import MAX_SERIES, BarRow, horizontal_bars
-from provibench.bench.probe_html_tables import ENDPOINT_CAPTION_HTML
+from provibench.bench.probe_html_tables import (
+    ENDPOINT_CAPTION_HTML,
+    HOVER_HINT_HTML,
+    endpoint_caption_html,
+)
 from provibench.bench.probe_models import ProbeResult
 from provibench.bench.probe_summary import summarize_probe
 from provibench.bench.replay import ReplayResult
@@ -341,6 +345,20 @@ def test_endpoint_table_caption_does_not_change_when_every_endpoint_errored() ->
     html = render_html(document)
     assert f'<p class="caption">{ENDPOINT_CAPTION_HTML}' in html
     assert '<p class="answer"' not in html
+
+
+def test_caption_ends_with_the_hover_hint_and_tooltip_headers_are_styled() -> None:
+    """The headers carry their meaning as tooltips and nothing on the page said so: the
+    caption's last sentence points at them, folded or not, and a header with a tooltip wears
+    the same dotted underline as the hint's own words."""
+    plain = endpoint_caption_html(["@a", "@b"], "m", folded=False)
+    folded = endpoint_caption_html(["@a", "@b"], "m", folded=True)
+    assert plain.endswith(HOVER_HINT_HTML) and plain.count(HOVER_HINT_HTML) == 1
+    assert folded.endswith(HOVER_HINT_HTML) and folded.count(HOVER_HINT_HTML) == 1
+    assert folded.startswith(ENDPOINT_CAPTION_HTML) and "pinned to the named provider" in folded
+    html = render_html(probe_document())
+    assert f"{HOVER_HINT_HTML}</p>" in html
+    assert "thead th[title] { cursor: help; text-decoration: underline dotted;" in html
 
 
 def test_this_trace_column_reports_what_a_session_like_the_trace_would_bill() -> None:

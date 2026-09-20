@@ -106,6 +106,11 @@ table {
 }
 th, td { padding: 6px 7px; text-align: left; white-space: nowrap; }
 thead th { border-bottom: 1px solid var(--rule); color: var(--ink-2); font-weight: 600; }
+/* A header with a tooltip shows it: the same dotted underline the caption's hint wears,
+   so the hint and the headers it points at read as one device. */
+thead th[title] { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.caption .hint { color: var(--muted); }
+.caption .term { text-decoration: underline dotted; text-underline-offset: 3px; }
 tbody tr + tr td { border-top: 1px solid var(--rule); }
 /* The group header row above the endpoint table (cache / price / speed): a thin rule
    between groups, not around every cell, so the grouping reads as three bands. */

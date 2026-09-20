@@ -21,6 +21,7 @@ from provibench.bench.probe_tables import TableBlock
 __all__ = [
     "ENDPOINT_CAPTION_HTML",
     "GROUPS",
+    "HOVER_HINT_HTML",
     "endpoint_caption_html",
     "endpoint_help",
     "endpoint_view",
@@ -46,9 +47,16 @@ ENDPOINT_CAPTION_HTML = (
 so it survives however the run's own numbers turn out. It names the column it sorts by,
 because the first row can carry the highest `in $/M` and "cheapest" alone reads as false."""
 
+HOVER_HINT_HTML = (
+    '<span class="hint">Hover a <span class="term">column header</span> for what it counts.</span>'
+)
+"""The last sentence of the caption: the headers carry their meaning as tooltips, and
+nothing on the page said so. It wears the same dotted underline as the headers."""
+
 
 def endpoint_caption_html(labels: Sequence[str], model: str, *, folded: bool) -> str:
-    """The table's caption, plus what the folded `@tag` labels stand for when they are folded.
+    """The table's caption, what the folded `@tag` labels stand for when they are folded,
+    and the hover hint last.
 
     The text report keeps its `endpoints: <shared prefix>` line above the table; the page
     says the same thing here, in the caption, as a sentence -- a spec string nobody typed,
@@ -56,12 +64,12 @@ def endpoint_caption_html(labels: Sequence[str], model: str, *, folded: bool) ->
     """
     pinned = [label for label in labels if label.startswith("@")]
     if not folded or not pinned:
-        return ENDPOINT_CAPTION_HTML
+        return f"{ENDPOINT_CAPTION_HTML} {HOVER_HINT_HTML}"
     subject = "row goes" if len(pinned) == 1 else "rows go"
     serve = "it serves" if len(pinned) == 1 else "all serve"
     return (
         f"{ENDPOINT_CAPTION_HTML} The {_count_word(len(pinned))} @ {subject} through "
-        f"OpenRouter, pinned to the named provider; {serve} {escape(model)}."
+        f"OpenRouter, pinned to the named provider; {serve} {escape(model)}. {HOVER_HINT_HTML}"
     )
 
 
