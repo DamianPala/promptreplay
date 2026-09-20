@@ -200,21 +200,29 @@ def _probe_report(run_dir: Path) -> Document:
 
     meta, records = load_probe_run(run_dir)
     notes = [*meta.notes, cache_mode_note(meta.options.warm)]
-    summaries = apply_drift(
-        [
-            summarize_probe(
-                ref.label,
-                records[ref.label],
-                prices=meta.prices.get(ref.label),
-                notes=notes,
-                unpinned_gateway=ref.kind == "openrouter" and not ref.providers,
-                trace_prompt_tokens=meta.trace_prompt_tokens,
-                listing=meta.listing_prices,
-            )
-            for ref in meta.specs
-        ],
-        meta.specs,
-    )
+    summaries = [
+        summarize_probe(
+            ref.label,
+            records[ref.label],
+            prices=meta.prices.get(ref.label),
+            notes=notes,
+            unpinned_gateway=ref.kind == "openrouter" and not ref.providers,
+            trace_prompt_tokens=meta.trace_prompt_tokens,
+            listing=meta.listing_prices,
+        )
+        for ref in meta.specs
+    ]
+    specs = meta.specs
+    if meta.sweep is not None:
+        # A sweep's order is its measured price. The run directory stores the order the
+        # sweep printed, but the price is recomputed here from the records, so a pricing
+        # rule newer than the run would otherwise leave a stale order under a fresh table.
+        from provibench.commands.probe_result import by_price
+
+        summaries = by_price(summaries)
+        by_label = {ref.label: ref for ref in meta.specs}
+        specs = [by_label[summary.label] for summary in summaries]
+    summaries = apply_drift(summaries, specs)
     spend = total_spend([summary.spend_usd for summary in summaries])
     worst = run_worst_case_usd(
         records,

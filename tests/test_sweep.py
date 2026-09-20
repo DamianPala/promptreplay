@@ -586,6 +586,28 @@ def test_report_of_a_sweep_run_reads_the_same_order_with_no_network(
     assert _labels(report.document["summaries"]) == _labels(outcome.document["summaries"])
 
 
+def test_report_of_a_sweep_run_reorders_by_the_price_it_recomputes(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`report` prices a sweep from its records, so the order it prints is the order that
+    price gives, not the one persisted when the sweep ran under an older rule."""
+    _write_targets(bench_paths.targets_path)
+    _install(monkeypatch, _transport(cached={"novita": 90, "gmicloud": 0, _NATIVE: 100}))
+    outcome = _sweep(cli, bench_paths, *_one_rung())
+    assert outcome.code == 0, outcome.stderr
+    run_dir = Path(str(outcome.document["run_dir"]))
+    meta = json.loads((run_dir / "run.json").read_text())
+    meta["specs"] = list(reversed(meta["specs"]))
+    (run_dir / "run.json").write_text(json.dumps(meta))
+
+    report = cli.run("report", str(run_dir), env={**bench_paths.env, **_ENV})
+    assert report.code == 0, report.stderr
+    summaries: Any = report.document["summaries"]
+    assert _labels(summaries) == _labels(outcome.document["summaries"])
+    prices = [float(summary["eff_per_m_prompt"]) for summary in summaries]
+    assert prices == sorted(prices)
+
+
 def test_sweep_ties_are_broken_by_hit_rate(
     cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
