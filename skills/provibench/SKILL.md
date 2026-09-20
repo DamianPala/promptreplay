@@ -52,11 +52,10 @@ The stability floor comes first: an endpoint must not be degraded and must have 
 at or above the floor printed by `sweep --help`; `--include PREFIX` keeps only endpoints whose
 tag starts with PREFIX, and keeps them past the stability floor. Among the survivors, `--sort`
 chooses the candidates: `price` is the default, `throughput` fits interactive agents that
-stream long answers, `latency` is for when time to first token matters, and `uptime` is for
-when reliability matters more than cost. Use `--zdr` when the data must not be retained. The
-listing only chooses candidates; the availability pre-check drops
-what the account cannot use, and the measured effective $/M in the report is the verdict, never
-the listed price.
+stream long answers, `latency` when time to first token matters, and `uptime` when reliability
+matters more than cost. Use `--zdr` when the data must not be retained. The listing only
+chooses candidates; the availability pre-check drops what the account cannot use, and the
+measured effective $/M in the report is the verdict, never the listed price.
 
 The `--dry-run` document has `estimate`, `total_usd`, `pre_check`, `upper_bound`, `runs_dir`, and
 `requires_confirmation` instead of a real run's fields; nothing is sent, and `--yes` alongside it
@@ -81,9 +80,9 @@ Copy the endpoint label from a sweep summary row and run:
 provibench probe TRACE ENDPOINT --yes --json --rungs 1,13,30 --repeats 6,2,2 --ttl 60,300
 ```
 
-Use `--warm` when you intentionally want to measure the cache as it currently exists, including
-possible contamination from earlier runs. Leave it off for an isolated measurement with a fresh
-nonce. Adjust `--rungs`, `--repeats`, and `--ttl` when checking a particular prompt size or cache
+Use `--warm` when you want to measure the cache as it currently exists, including possible
+contamination from earlier runs. Leave it off for an isolated measurement with a fresh nonce.
+Adjust `--rungs`, `--repeats`, and `--ttl` when checking a particular prompt size or cache
 lifetime; the estimate and `--budget` still apply before requests are sent.
 
 ## Recipe 3: watch a provider over time

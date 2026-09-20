@@ -51,7 +51,7 @@ export DEEPSEEK_API_KEY=...
 
 Write your own `targets.toml` to add a target or change a price; `provibench config show` names the path it reads.
 
-An agent scripting this tool should pin `PROVIBENCH_RUNS_DIR`, or always run from the same project directory, before its first paid run: a run and the `report` that reads it later have to resolve `runs_dir` to the same path, or the report looks in the wrong place, or the packaged default, for a run it already paid for.
+An agent scripting this tool should pin `PROVIBENCH_RUNS_DIR`, or always run from the same project directory, before its first paid run: a run and the `report` that reads it later have to resolve `runs_dir` to the same path, otherwise the report looks for a run it already paid for in the wrong directory.
 
 Run the packaged sample:
 
@@ -63,7 +63,7 @@ provibench report latest
 provibench report latest --format html --output-file report.html
 ```
 
-`--dry-run` prices the run and stops there, sending nothing, so it is the way to read the estimate before deciding on a budget.
+`--dry-run` prices the run and stops there, sending nothing, so you can read the estimate before deciding on a budget.
 The sweep prints its worst-case estimate before anything is sent, and refuses the run when it exceeds `--budget`.
 `--budget 1.2` clears this sample's own `--top 3` upper bound with headroom; see `--top` under [Sweep](#sweep) for why a `--top` run needs one.
 
@@ -94,7 +94,7 @@ provibench probe TRACE ENDPOINTS... --rungs 1,13,30 --repeats 6,2,2 --budget 0.5
 Repeat `ENDPOINTS...` to probe several providers in one run.
 The estimate covers every prompt token at the listed input price plus throughput output tokens at the output price, assuming no cache hit, and appears before requests.
 `--budget` refuses a run above that estimate.
-`--dry-run` prints that same estimate as the result and sends nothing, which is the way to read it before deciding to spend; `--yes` alongside it is accepted and ignored.
+`--dry-run` prints that same estimate as the result and sends nothing, so you can read it before deciding to spend; `--yes` alongside it is accepted and ignored.
 Native prices follow the precedence in [Prices](#prices).
 
 | Column | Meaning |
@@ -113,7 +113,7 @@ Native prices follow the precedence in [Prices](#prices).
 | `ttl` | One cell per requested offset, for example `60s:1` means the cache remained available. |
 | `cached cold` | What the cold write read back; a non-zero value indicates contamination. |
 
-In JSON, `h` — prose above calls it the hit-weighted cached share — is `hit % * cached %` pooled over every warm read, and `first_h` is its first-read analogue; `eff $/M` prices from `first_h`.
+In JSON, `h` (what the prose above calls the hit-weighted cached share) is `hit % * cached %` pooled over every warm read, and `first_h` is its first-read analogue; `eff $/M` prices from `first_h`.
 When no rung of an endpoint served a first warm read at all, `eff $/M` falls back to the pooled reads instead, noted as `eff $/M from pooled reads: no first read served`.
 When every endpoint shares one target and model, the table moves them into an `endpoints:` caption and shows provider tails; a different model keeps its complete name as the reference row.
 Reports also retain the served provider, response models, raw per-rung records, and the price source in JSON.
@@ -122,7 +122,7 @@ Runs persist under `runs/<trace>/<timestamp>/` as options, endpoint snapshots, p
 A `probe` that spends money prints `spent $X (worst case $Y)` after it runs, and a `report` of the run shows the same line; `X` sums every endpoint's `spend_usd` (OpenRouter's own bill where it reported one, else the usage priced at the listed rates) plus the availability check's own spend, and `Y` is what the estimate priced beforehand, no cache hit.
 When `--top` ran an availability check, a `pre-check: N requests, $X` line precedes it; the check's own requests persist to `precheck.jsonl`, never inside an endpoint's own file, and never enter its hit rate, error count, or drift.
 A read that returned more output tokens than its `max_tokens: 1` budget (GMICloud and native DeepSeek both do) is noted and billed for those tokens, not silently absorbed into the prompt count.
-The summary table is followed by one line projecting what a session shaped like the recorded trace would bill in prompt tokens per endpoint, at each endpoint's measured effective price — for example `prompt bill for a session like this trace (1.8 M prompt tokens): deepseek:deepseek-flash $0.006, @relace/fp4 $0.07`.
+The summary table is followed by one line projecting what a session shaped like the recorded trace would bill in prompt tokens per endpoint, at each endpoint's measured effective price, for example `prompt bill for a session like this trace (1.8 M prompt tokens): deepseek:deepseek-flash $0.006, @relace/fp4 $0.07`.
 
 Reports: `report RUN --output-file PATH` writes exactly what stdout would have shown to PATH, leaves stdout empty, and replaces an existing file.
 Without `--format`, `report RUN` prints its JSON document on a non-TTY stdout (a script or an agent) and the text table on a terminal; pass `--format text` to get the table regardless of where stdout goes.
@@ -144,7 +144,7 @@ Selection is applied in this order:
 
 The availability check sends one `max_tokens: 1` request on the smallest rung per candidate after confirmation.
 Its tokens are included in the estimate, account-level exclusions are reported as unavailable, and nothing is sent before confirmation.
-`--top N` keeps the N best-ranked candidates once the check has run, and a candidate the check removes frees its slot for the next ranked one — so any candidate up to the cutoff can end up promoted.
+`--top N` keeps the N best-ranked candidates once the check has run, and a candidate the check removes frees its slot for the next ranked one, so any candidate up to the cutoff can end up promoted.
 Because of that, the estimate prices the N best as planned, but a `--top` run also prints an upper bound for what the check could promote it to, and `--budget` is compared against the plain estimate rather than that upper bound.
 A `--top 3` sweep of the packaged sample, for example, estimates about 0.62 USD but has an upper bound near 1.06 USD, which is why the quickstart passes `--budget 1.2` rather than a tighter number.
 `--parallel N` overlaps endpoints, but each endpoint remains sequential, so rerun with `--parallel 1` before trusting small latency differences.
@@ -180,7 +180,7 @@ Each run keeps an endpoint snapshot with the pinned provider, quantization, cont
 
 ### Full replay
 
-`replay` sends every recorded turn and is the path for a per-turn cache curve or the cost of a whole session.
+`replay` sends every recorded turn; use it for a per-turn cache curve or the cost of a whole session.
 It requests one output token by default, discards live output, and stamps a run nonce into turns so the run does not inherit an earlier cache; `--warm` disables the nonce and reads the cache as found.
 `--limit` samples a prefix of a trace, and `--run` accepts the same endpoint shape as `probe`.
 As with `probe`, `--dry-run` prices the run and sends nothing.
@@ -229,7 +229,7 @@ Nested metadata inside a request body remains; only the request's own `body.meta
 `--turns N` keeps the first N entries of the main conversation, or the first N file entries when conversation keys are absent.
 `OUT` is the scrubbed copy, gzip-compressed when its name ends in `.gz`; `--output-file` writes the result summary, and `--force` overwrites an existing copy or summary.
 Read the copy before sending it.
-The packaged sample is the first 30 turns of a real Claude Code session on DeepSeek V4.1 Flash, with prompts growing from 20k to 93k tokens and 1,8 M prompt tokens in total.
+The packaged sample is the first 30 turns of a real Claude Code session on DeepSeek V4.1 Flash, with prompts growing from 20k to 93k tokens and 1.8 M prompt tokens in total.
 
 ### Configuration
 

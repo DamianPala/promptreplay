@@ -140,7 +140,7 @@ Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, con
 ## Scrubbing
 
 `scrub` writes a shareable copy of a trace (`bench/scrub.py`, pure; `commands/scrub.py`, I/O).
-`bench/scrub.py` holds the rule table (`SECRET_RULES`), the recursive walker over entry strings, the `--turns` selection, and the report model; the rules are applied in a fixed order — user paths, secrets, `--user` names, then literal `--replace` pairs — so the same input and options give byte-identical output.
+`bench/scrub.py` holds the rule table (`SECRET_RULES`), the recursive walker over entry strings, the `--turns` selection, and the report model; the rules are applied in a fixed order (user paths, secrets, `--user` names, then literal `--replace` pairs), so the same input and options give byte-identical output.
 
 | removed | how |
 |---|---|
@@ -186,7 +186,7 @@ Persistence: `runs/<trace-name>/<UTC yyyymmdd-HHMMSS>/run.json` (trace name, con
 
 A run's `precheck.jsonl` (present only when the run planned an availability check) holds the pre-check's own requests, role `precheck`; they never enter any endpoint's own records or the fields above. `ProbeRunMeta.precheck` is their count, spend and worst case, and `ProbeRunMeta.trace_prompt_tokens` is the trace's total prompt tokens (`bench.trace.total_prompt_tokens`), both `None` for a run written before this existed.
 
-`ProbeRunMeta.listing_prices` is the swept/probed OpenRouter model's own endpoint listing at run time, one `Prices` per served provider (keyed by `normalize_provider`); `None` for a run written before this field existed, `{}` for a run with no OpenRouter endpoint to list. `served_prices` looks the answering provider up here first, and only falls back to fitting its rates from the run's own billed records when this is `None` — see `bench/probe_pricing.py`.
+`ProbeRunMeta.listing_prices` is the swept/probed OpenRouter model's own endpoint listing at run time, one `Prices` per served provider (keyed by `normalize_provider`); `None` for a run written before this field existed, `{}` for a run with no OpenRouter endpoint to list. `served_prices` looks the answering provider up here first, and only falls back to fitting its rates from the run's own billed records when this is `None` (see `bench/probe_pricing.py`).
 
 ## Commands
 
