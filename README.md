@@ -7,22 +7,23 @@ Replaying preserves the exact prompt bytes and turn sequence; re-running a task 
 
 ## What a run looks like
 
-The first five rows of a 16-endpoint sweep of DeepSeek V4.1 Flash, ranked by price, from a run on 2026-09-14:
+The quickstart's `sweep sample deepseek/deepseek-v4.1-flash --top 3` on 2026-09-20, the three cheapest listed endpoints plus native DeepSeek, ranked by measured price:
 
 ```text
 endpoints: openrouter:deepseek/deepseek-v4.1-flash@<provider>
 
-endpoint                | hit % | cached % | eff $/M | in $/M | cold ms | warm ms | TTFT ms | tok/s | errors | drift
------------------------ | ----- | -------- | ------- | ------ | ------- | ------- | ------- | ----- | ------ | --------
-deepseek:deepseek-flash | 100.0 | 99.9     | 0.003   | 0.150  | 2057    | 1674    | 1280    | 305.4 | 0      | -
-@relace/fp4             | 100.0 | 99.9     | 0.003   | 0.150  | 2202    | 1375    | 1827    | 238.8 | 0      | provider
-@gmicloud/fp8           | 100.0 | 99.9     | 0.006   | 0.300  | 3388    | 3620    | 3066    | 207.9 | 0      | provider
-@together               | 88.9  | 99.9     | 0.039   | 0.300  | 8170    | 8450    | 1182    | 90.7  | 1      | -
-@alibaba                | 100.0 | 93.7     | 0.047   | 0.300  | 9844    | 4293    | 3094    | 234.1 | 0      | -
+endpoint                | hit % | 1st hit % | cached % | eff $/M | in $/M | cold ms | warm ms | TTFT ms | tok/s | errors | drift
+----------------------- | ----- | --------- | -------- | ------- | ------ | ------- | ------- | ------- | ----- | ------ | --------
+@relace/fp4             | 80.0  | 100.0     | 99.8     | 0.003   | 0.130  | 4410    | 2116    | 1677    | 86.5  | 0      | provider
+deepseek:deepseek-flash | 100.0 | 100.0     | 99.9     | 0.003   | 0.150  | 1690    | 1439    | 1083    | 353.3 | 0      | -
+@morph                  | 80.0  | 66.7      | 99.9     | 0.048   | 0.135  | 4677    | 2984    | 2837    | 21.4  | 0      | -
+@deepinfra/fp8          | 90.0  | 66.7      | 90.8     | 0.087   | 0.140  | 1589    | 1292    | 1874    | 54.5  | 0      | provider
+pre-check: 3 requests, $0.0081
+spent $0.1712 (worst case $0.4708)
 ```
 
+Two endpoints with almost the same listed price end up 16 and 29 times apart once the cache is measured, and the run cost 17 cents.
 This is one day's measurement, not a standing ranking: routing, quantization, and prices shift week to week, which is what `history` is for.
-This run predates the `1st hit %` column current output shows between `hit %` and `cached %`, and its `eff $/M` is priced from the pooled reads; a current run prices `eff $/M` from each rung's first read instead (see [Probe](#probe)).
 
 ## Quickstart
 
@@ -102,7 +103,7 @@ Native prices follow the precedence in [Prices](#prices).
 | `hit %` | Warm reads that found any part of the prefix divided by warm reads that were served. |
 | `1st hit %` | The same fraction, but counting only each rung's first warm read — the only read an agent loop performs. Pooling every repeat instead (`hit %`) flatters the cache, since reads 2+ re-read what read 1 just wrote. Equal to `hit %` with `--repeats 1`. |
 | `cached %` | On a hit, the share of the prompt served from the provider's cache; 100 % means the whole prompt. A provider that caches a fixed window from the front shows this falling as the conversation grows. |
-| `eff $/M` | Hit-weighted prompt price from each rung's first warm read: `(1 - h) * input + h * cache read`, where `h = 1st hit % * cached %` of that read; the pooled `hit %` is reported but does not enter the price, because reads 2+ re-read what read 1 just wrote. |
+| `eff $/M` | Hit-weighted prompt price from each rung's first warm read: `(1 - h) * input + h * cache read`, where `h = 1st hit % * cached %` of that read; the pooled `hit %` is reported but does not enter the price, because reads 2+ re-read what read 1 just wrote. One caveat: a provider that admits a prefix to its cache only on its second sight (Venice cached 16 384 tokens after one write and the whole prompt after two) measures worse here than an agent loop would see, since the loop has already sent everything but its last turn twice. |
 | `in $/M` | The listed input price used for the calculation; for an unpinned OpenRouter endpoint, a rate fitted from what the provider that actually served it billed, not a listed price, and said so in a `priced as served: <provider> (rates fitted…)` note under the table. It falls back to the worst-case listed price (`worst case: <provider>`) when those records could not be fit. Pinned and native endpoints keep their listed price unchanged. |
 | `cold ms` / `warm ms` | First-rung cold and warm prefill latency; the gap is the cache's latency benefit. |
 | `TTFT ms` / `tok/s` | Median time to the first streamed token and output tokens per second across the endpoint's rungs. |
