@@ -111,7 +111,7 @@ Native prices follow the precedence in [Prices](#prices).
 | `errors` | Requests without a usable answer; a failed cold write is not counted as a cache miss. A 429 among them is also counted separately (`rate_limited` in `--json`) and noted, so a run's own pace is not confused with a refusal. |
 | `drift` | `provider`, `model`, or `tokens±N%` markers versus the reference endpoint; `-` means no drift. Rendered in full, never truncated. An endpoint whose largest rung was skipped shows no `tokens±N%` marker (comparing prompt sizes across two different turns is not tokenizer drift) and gets a `token drift n/a (rung skipped)` note instead. |
 | `hits` | Per-warm-read cells: `x` failed, `1` is 98 % or better, otherwise the cached fraction. |
-| `ttft ms` / `tok/s` | The same two measurements for each rung. |
+| `TTFT ms` / `tok/s` | The same two measurements for each rung. |
 | `ttl` | One cell per requested offset, for example `60s:1` means the cache remained available. |
 | `cached cold` | What the cold write read back; a non-zero value indicates contamination. |
 

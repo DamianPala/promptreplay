@@ -53,7 +53,9 @@ _RUNG_COLUMNS = (
     "hits",
     "cold ms",
     "warm ms",
-    "ttft ms",
+    # `TTFT` is an acronym and the endpoint table, `sweep` and `compare` all spell it in
+    # caps; the two tables sat side by side spelling the same measurement two ways.
+    "TTFT ms",
     "tok/s",
     "errors",
 )

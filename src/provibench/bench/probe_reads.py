@@ -44,10 +44,18 @@ def output_token_stats(records: Sequence[ProbeResult]) -> tuple[int, int]:
 
 
 def output_tokens_note(output_tokens: int, reads: int) -> str | None:
-    """The note when reads returned more than their `max_tokens: 1` budget, else `None`."""
+    """The note when reads returned more than their `max_tokens: 1` budget, else `None`.
+
+    Every renderer already prefixes a note with its endpoint's own label (the text report's
+    `label: note`, the HTML page's bold short label), so the sentence itself names what
+    happened and what it costs without repeating who did it.
+    """
     if reads == 0 or output_tokens <= reads * _MAX_TOKENS_PER_READ:
         return None
-    return f"returned {output_tokens:,} output tokens on {reads:,} read(s) meant to return 1"
+    return (
+        f"ignored the one-token limit on the cache probes and generated {output_tokens:,} "
+        "tokens, so this run cost more than planned; the prices above are unaffected."
+    )
 
 
 def rate_limited_count(records: Sequence[ProbeResult]) -> int:

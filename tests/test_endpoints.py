@@ -153,4 +153,54 @@ def test_endpoints_has_no_leading_or_trailing_blank_line(
     lines = outcome.stdout.splitlines()
     assert lines[0] != "" and lines[-1] != ""
     assert "" not in lines
-    assert [cell.strip() for cell in lines[0].split(" | ")][:2] == ["tag", "provider"]
+    assert [cell.strip() for cell in lines[0].split(" | ")][:2] == ["tag", "quant"]
+
+
+def test_endpoints_table_drops_provider_and_context_and_fits_120_columns(
+    cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The text table used to render 164 columns wide on real (long) tags and provider
+    names and wrap on a 120-column terminal; `provider` and `context` are dropped there
+    (the tag already names the provider) and the remaining headers are shortened to the
+    ones `sweep`'s candidate table uses."""
+    payload = {
+        "data": {
+            "endpoints": [
+                {
+                    "provider_name": "DeepInfra Serverless Quantized",
+                    "tag": "novita",
+                    "pricing": {"prompt": "0.0000003", "completion": "0.0000006"},
+                    "context_length": 128_000,
+                    "uptime_last_30m": 99.87,
+                    "uptime_last_1d": 99.5,
+                    "latency_last_30m": 1234.5,
+                    "throughput_last_30m": 123.4,
+                    "status": 200,
+                }
+            ]
+        }
+    }
+
+    def big(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(big))
+    outcome = cli.run("endpoints", "deepseek/deepseek-v4.1-flash", tty=True)
+    assert outcome.code == 0, outcome.stderr
+    lines = outcome.stdout.splitlines()
+    assert "provider" not in lines[0].split(" | ") and "context" not in lines[0].split(" | ")
+    header = [cell.strip() for cell in lines[0].split(" | ")]
+    assert header == [
+        "tag",
+        "quant",
+        "in",
+        "cache read",
+        "cache write",
+        "out",
+        "uptime 30m",
+        "uptime 1d",
+        "lat p50 ms",
+        "tput p50",
+        "impl. cache",
+    ]
+    assert all(len(line) <= 120 for line in lines)

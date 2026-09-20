@@ -87,20 +87,22 @@ _SORT_KEYS: dict[str, Callable[[Endpoint], float]] = {
 
 _COLUMNS = (
     "tag",
-    "provider",
     "quant",
-    "context",
     *PRICE_COLUMNS,
     "uptime 30m",
     "uptime 1d",
-    "latency ms",
-    "throughput",
-    "implicit cache",
+    "lat p50 ms",
+    "tput p50",
+    "impl. cache",
 )
+"""`provider` and `context` are dropped from the text table (the tag already names the
+provider, and `provider`/`context` push the table past 120 columns); `latency ms`/
+`throughput`/`implicit cache` are shortened to the names `sweep`'s candidate table uses.
+JSON keeps every field (`_ENDPOINT`, `_endpoint_document`)."""
 
 
 def render_endpoints(invocation: Invocation, document: Document) -> None:
-    """One table: tag, provider, quantization, context, prices, uptime, latency, throughput."""
+    """One table: tag, quantization, prices, uptime, latency, throughput, implicit cache."""
     from provibench.bench.labels import text_table
 
     entries = [d for d in map(as_document, as_list(document.get("endpoints")) or []) if d]
@@ -127,9 +129,7 @@ def _endpoint_cells(entry: Document) -> list[str]:
     implicit = entry.get("supports_implicit_caching")
     return [
         _cell(entry.get("tag")),
-        _cell(entry.get("provider_name")),
         _cell(entry.get("quantization")),
-        _cell(entry.get("context_length")),
         _money(prices.get("input")),
         _money(prices.get("cache_read")),
         _money(prices.get("cache_write")),

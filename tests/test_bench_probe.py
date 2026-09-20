@@ -751,7 +751,10 @@ def test_run_probe_enriches_openrouter_records_from_the_generation(
     summary = summarize_probe(spec.label, [cold, warm])
     assert summary.hit_rate == 1.0
     assert summary.billed_usd == pytest.approx(0.0014)
-    assert "cached taken from the OpenRouter generation for 2 request(s)" in summary.notes
+    assert (
+        "did not report the cached share for 2 requests; using OpenRouter's own billing "
+        "record instead." in summary.notes
+    )
 
 
 # --- aggregation --------------------------------------------------------------
@@ -969,7 +972,10 @@ def test_summarize_probe_caps_the_cached_fraction_and_falls_back_to_native_cache
     assert summary.hit_rate == 1.0
     assert summary.cached_fraction == 1.0  # 120 / 100 is capped
     assert cached_of(records[1]) == 120
-    assert "cached taken from the OpenRouter generation for 1 request(s)" in summary.notes
+    assert (
+        "did not report the cached share for 1 request; using OpenRouter's own billing "
+        "record instead." in summary.notes
+    )
 
 
 def test_summarize_probe_prefers_the_response_usage_over_the_native_count() -> None:
@@ -1147,9 +1153,12 @@ def test_a_burst_record_is_noted_and_the_summary_names_its_rung(
     assert stream.gen_tok_s is None
 
     [summary] = [summarize_probe("fake:model-a", run.records["fake:model-a"])]
-    assert "burst delivery on rung 1" in summary.notes
+    burst_note = (
+        "sent its whole answer in one burst; tok/s could not be measured, so the cell is blank."
+    )
+    assert burst_note in summary.notes
     rendered = render_probe([summary])
-    assert "fake:model-a: burst delivery on rung 1" in rendered
+    assert f"fake:model-a: {burst_note}" in rendered
     rung_table = rendered.split("\n\n")[1]  # no caption here: the spec table comes first
     header = [cell.strip() for cell in rung_table.splitlines()[0].split("|")]
     row = [cell.strip() for cell in rung_table.splitlines()[2].split("|")]
@@ -1701,7 +1710,10 @@ def test_output_tokens_are_summed_and_noted_past_the_max_tokens_1_budget() -> No
     warm.usage = Usage(output_tokens=150)
     summary = summarize_probe("fake:model-a", [cold, warm])
     assert summary.output_tokens == 350
-    assert "returned 350 output tokens on 2 read(s) meant to return 1" in summary.notes
+    assert (
+        "ignored the one-token limit on the cache probes and generated 350 tokens, so this "
+        "run cost more than planned; the prices above are unaffected." in summary.notes
+    )
 
 
 def test_no_output_tokens_note_within_the_max_tokens_1_budget() -> None:

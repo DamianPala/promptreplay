@@ -63,10 +63,13 @@ body {
 .head h1 { margin: 0 0 6px; font-size: 22px; }
 .head .sub { margin: 0; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .head .where { margin: 4px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.head .method { margin: 8px 0 0; color: var(--ink-2); font-size: 13px; }
+.answer { margin: 20px 0 4px; font-size: 16px; }
 section { margin-top: 28px; }
 h2 { margin: 0 0 10px; font-size: 15px; }
 h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
 section.table { margin-top: 20px; }
+section.caveats { margin-top: 20px; }
 .caption { margin: 0 0 8px; color: var(--ink-2); }
 figure { margin: 0 0 24px; }
 figcaption { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
@@ -74,7 +77,15 @@ figcaption { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
   overflow-x: auto;
   border: 1px solid var(--rule);
   border-radius: 6px;
-  background: var(--surface);
+  /* A right-edge fade that only shows while there is more to scroll to: the cover layer
+     (`local`, so it scrolls with the table) sits at the far right of the full scrollable
+     width and hides the shadow layer (`scroll`, pinned to the visible edge) until the
+     table is scrolled away from its own end -- no script needed to know which is true. */
+  background:
+    linear-gradient(to left, var(--surface) 40%, rgba(0, 0, 0, 0)) 100% 0 / 24px 100% local
+      no-repeat,
+    linear-gradient(to left, var(--rule), rgba(0, 0, 0, 0)) 100% 0 / 12px 100% scroll no-repeat,
+    var(--surface);
 }
 /* No horizontal scroll here: a chart scales to the page, only the tables scroll. */
 .chart-scroll {
@@ -101,6 +112,9 @@ ul.legend li { display: flex; align-items: center; gap: 6px; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
 ul.notes { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 13px; }
 ul.notes li + li { margin-top: 4px; }
+sup a { color: var(--ink-2); text-decoration: none; }
+sup a:hover { text-decoration: underline; }
+code { font-family: ui-monospace, monospace; }
 svg.chart {
   display: block;
   width: 100%;
@@ -125,9 +139,9 @@ svg.chart {
 .row-label { fill: var(--ink-2); font-size: 12px; }
 .value { fill: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
 .axis-title { fill: var(--muted); font-size: 11px; text-anchor: end; }
-@media (max-width: 640px) {
+@media (max-width: 900px) {
   .page { padding: 16px 12px 40px; }
-  /* Scaled to a phone column the ticks render at 5 px; scroll the chart readable instead. */
+  /* Scaled to a narrow column the ticks render unreadably small; scroll the chart instead. */
   .chart-scroll { overflow-x: auto; }
   .chart-scroll svg.chart { min-width: 640px; }
 }

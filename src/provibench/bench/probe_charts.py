@@ -76,7 +76,13 @@ def _rung_label(number: int, charted: Sequence[tuple[ProbeSummary, str]]) -> str
 
 
 def _bar(index: int, summary: ProbeSummary, rung: RungSummary) -> Bar:
-    """One endpoint's bar at one rung, with the numbers a reader would otherwise estimate."""
+    """One endpoint's bar at one rung: `h` (hit x prefix), the quantity the price uses.
+
+    A rung with no cached fraction has no `h` to weight by -- it never had a hit, so `h`
+    would be zero either way -- and the bar falls back to the bare hit rate with a word
+    saying so, rather than silently charting a different number than the other bars.
+    """
+    value, fell_back = _h_or_fallback(rung)
     parts = [
         summary.label,
         f"rung {rung.rung}",
@@ -85,7 +91,17 @@ def _bar(index: int, summary: ProbeSummary, rung: RungSummary) -> Bar:
     ]
     if rung.cached_fraction is not None:
         parts.append(f"cached {rung.cached_fraction * 100:.1f}%")
-    return Bar(index, rung.hit_rate, " · ".join(parts))
+    if fell_back:
+        parts.append("h unavailable: showing hit rate")
+    return Bar(index, value, " · ".join(parts))
+
+
+def _h_or_fallback(rung: RungSummary) -> tuple[float, bool]:
+    """`(h, fell_back)`: `h` when the rung has a cached fraction to weight by, else the bare
+    hit rate (numerically the same when there were no hits at all) with `fell_back=True`."""
+    if rung.cached_fraction is None:
+        return rung.hit_rate, True
+    return rung.hit_rate * rung.cached_fraction, False
 
 
 def _reads(rung: RungSummary) -> str:
@@ -136,20 +152,30 @@ def cost_rows(charted: Sequence[tuple[ProbeSummary, str]]) -> list[BarRow]:
             series=index,
             label=label,
             value=summary.eff_per_m_prompt,
-            value_text=_rate(summary.eff_per_m_prompt),
+            value_text=_money_label(summary.eff_per_m_prompt),
             title=_cost_title(summary),
         )
         for index, (summary, label) in enumerate(charted)
     ]
 
 
+def _money_label(value: float | None) -> str:
+    """A chart bar's own value label: `$0.070/M`, not a bare number with no unit."""
+    return "-" if value is None else f"${value:.3f}/M"
+
+
 def _cost_title(summary: ProbeSummary) -> str:
-    """The exact numbers behind one effective-price bar."""
+    """The exact numbers behind one effective-price bar.
+
+    Three decimals throughout, the same as the table: at two decimals a cache-read price
+    under a cent rounds to `$0.00`, which reads as free rather than as cheap, and it made
+    the table's `0.375` and this tooltip's `$0.38` disagree over the same listed price.
+    """
     parts = [summary.label, f"eff ${_rate(summary.eff_per_m_prompt)}/M prompt"]
     if summary.input_price is not None:
-        parts.append(f"listed ${summary.input_price:.2f}/M in")
+        parts.append(f"listed ${summary.input_price:.3f}/M in")
     if summary.cache_read_price is not None:
-        parts.append(f"${summary.cache_read_price:.2f}/M cache read")
+        parts.append(f"${summary.cache_read_price:.3f}/M cache read")
     if summary.h is not None:
         parts.append(f"hit-weighted h {summary.h * 100:.1f}%")
     parts.append(f"prices: {summary.price_source}")
