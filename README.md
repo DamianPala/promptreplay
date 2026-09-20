@@ -34,8 +34,6 @@ prompt bill for a session like this trace (1.8 M prompt tokens):
   @morph                   $0.0547
 ```
 
-The excerpt leaves out the per-turn table the run also prints.
-
 All three resellers list a lower input price than DeepSeek's own API and cost about ten times more per prompt token once the cache is measured.
 Two of them miss on the first read after a write, which is the case a fresh session hits.
 The run itself cost 17 cents.
@@ -66,7 +64,7 @@ export OPENROUTER_API_KEY=...
 export DEEPSEEK_API_KEY=...
 ```
 
-Write your own `targets.toml` to add a target or change a price; `provibench config show` names the path it reads.
+To add a target or change a price, `provibench config init` copies the packaged `targets.toml` into your config directory; its comments show the shape of a target, a model alias, and a price override.
 
 Run the packaged sample:
 
@@ -78,7 +76,7 @@ provibench report latest
 provibench report latest --format html --output-file report.html
 ```
 
-The sample is the first 30 turns of a real Claude Code session on DeepSeek V4.1 Flash, with prompts growing from 20k to 93k tokens and 1.8 M prompt tokens in total.
+The sample is the first 30 turns of a real Claude Code session, with prompts growing from 20k to 93k tokens and 1.8 M prompt tokens in total.
 Most runs use it or a trace someone shared; recording your own session is optional, and `record` is under [Full replay](#full-replay).
 
 `--dry-run` prices the run and sends nothing, so you can read the estimate before deciding on a budget.
@@ -125,7 +123,20 @@ The estimate prices every prompt token at the listed input price plus throughput
 An endpoint far below its own `hit %` there needs a few requests before its cache helps, and bills closer to the first-read rate in the first minutes of a session; the pooled `eff $/M` stands in for the steady state of a long one, in which everything but the last turn has been sent before.
 For an unpinned OpenRouter endpoint, `in $/M` is a rate fitted from what the provider that actually served the run billed, not a listed price, and a note under the table says so; pinned and native endpoints keep their listed price.
 
-A second table repeats the run rung by rung: the prompt size, `cached cold` (what the cold write read back, where a non-zero value indicates contamination), `hits` (one cell per repeat, `x` for a failed read, `1` for 98 % or better, otherwise the cached fraction), the same latency and throughput columns per rung, and with `--ttl` one cell per requested offset, for example `60s:1` when the cache was still available.
+Under the endpoint table the run prints a per-turn table, one row per endpoint and rung; four rows from the run above:
+
+```text
+endpoint                | rung | prompt | cached cold | hits           | cold ms | warm ms | TTFT ms | tok/s | errors
+----------------------- | ---- | ------ | ----------- | -------------- | ------- | ------- | ------- | ----- | ------
+deepseek:deepseek-flash | 1    | 20185  | 0           | 1 1 1 1 1 1    | 1690    | 1439    | 921     | 353.3 | 0
+@relace/fp4             | 1    | 20147  | 0           | 1 1 1 1 1 0    | 4410    | 2116    | 679     | 105.9 | 0
+@deepinfra/fp8          | 29   | 91888  | 0           | 0.23 1         | 3801    | 7190    | 4771    | -     | 0
+@morph                  | 1    | 20071  | 0           | 0 1 1 1 1 1    | 4677    | 2984    | 2837    | 20.2  | 0
+```
+
+`prompt` is the rung's prompt size, `cached cold` what the cold write read back (a non-zero value indicates contamination), and `hits` has one cell per repeat: `1` for 98 % or better, `x` for a failed read, otherwise the cached fraction.
+The latency and throughput columns are the endpoint table's, per rung; a `-` under `tok/s` is a turn answered in one burst.
+With `--ttl`, one more cell per requested offset follows, for example `60s:1` when the cache was still available.
 
 A run that spends money prints `spent $X (worst case $Y)`: `X` is what it actually cost, `Y` what the estimate priced beforehand assuming no cache hit.
 When `--top` ran an availability check, a `pre-check: N requests, $X` line precedes it; those requests persist to `precheck.jsonl` and never enter an endpoint's hit rate, error count, or drift.
