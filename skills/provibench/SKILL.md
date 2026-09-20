@@ -83,6 +83,10 @@ Pass `--rungs` to check a particular prompt size, `--repeats` for more reads, an
 Each rung carries a fresh nonce, so nothing from earlier traffic counts as a hit; `--warm` drops the nonce and measures the cache as it exists now.
 Several endpoints in one command are probed in one run.
 
+`replay TRACE --run ENDPOINT` sends every turn of the trace instead of three: use it only when the user wants the per-turn cache curve or the measured bill of that exact session, not a projection.
+It costs several times a probe (the sample resends about 1.9 M prompt tokens), so the same `--dry-run`, `--budget` and `--yes` steps apply.
+Its runs are protocol `full`, so `compare` pairs them only with other replays.
+
 ## Recipe 3: watch a provider over time
 
 Run the same sweep on a schedule from a fixed directory, or with `PROVIBENCH_RUNS_DIR` set, so every run lands in one `runs_dir`; then read the runs offline:
