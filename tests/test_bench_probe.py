@@ -1542,6 +1542,20 @@ def test_model_drift_still_fires_on_the_gateway_spec_that_varies_within_itself()
     assert summaries[1].drift == "model"
 
 
+def test_a_pin_with_a_variant_suffix_is_not_provider_drift_when_that_provider_served() -> None:
+    """`@relace/fp4` pins the provider `relace` and the variant `fp4`; a response names only
+    `Relace`, so the variant cannot count as drift (G1 of the second reader pass)."""
+    reference = _summary("deepseek:deepseek-flash", provider="DeepSeek")
+    pinned = _summary("or:model@relace/fp4", provider="Relace")
+    elsewhere = _summary("or:model@deepinfra/fp8", provider="Somebody")
+    native, relace, deepinfra = _ref("deepseek"), _ref("openrouter"), _ref("openrouter")
+    relace.providers = ["relace/fp4"]
+    deepinfra.providers = ["deepinfra/fp8"]
+    apply_drift([reference, pinned, elsewhere], [native, relace, deepinfra])
+    assert pinned.drift is None
+    assert elsewhere.drift == "provider"
+
+
 def test_a_single_model_named_by_both_specs_is_not_drift() -> None:
     summaries = [
         _drift_summary("or:model@novita", ["model"]),

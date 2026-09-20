@@ -175,6 +175,9 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
 - `tokens±N%` no longer fires when an endpoint's largest rung was skipped and its comparison
   fell back to a smaller one; a `token drift n/a (rung skipped)` note explains why instead
 - The `drift` column renders its marker in full instead of eliding it, even past 120 columns
+- A pin with a variant suffix (`@relace/fp4`) no longer reads as provider drift when Relace
+  served it: the served provider is compared with the tag's provider part only, since a
+  response names the provider and never the variant
 - Cache-creation tokens on a cold write are no longer billed at both the input rate and the
   cache-write rate
 - A served provider that billed nothing no longer prices as free; it falls back to the

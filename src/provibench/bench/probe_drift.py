@@ -151,13 +151,18 @@ def _markers(
 
 
 def _provider_drift(summary: ProbeSummary, requested: Sequence[str]) -> bool:
-    """Served differs from what was requested, or the spec was served by more than one."""
+    """Served differs from what was requested, or the spec was served by more than one.
+
+    A pin is an endpoint tag, `relace/fp4`: the provider slug and, after the slash, the
+    variant it serves. A response names only the provider (`Relace`), so the comparison is
+    on the slug alone; the variant is not something a response can confirm or deny.
+    """
     served = sorted(summary.providers_seen)
     if len(served) > 1:
         return True
     if not requested or not served:
         return False
-    wanted = {normalize_provider(name) for name in requested}
+    wanted = {normalize_provider(name.partition("/")[0]) for name in requested}
     return all(normalize_provider(name) not in wanted for name in served)
 
 
