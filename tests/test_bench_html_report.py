@@ -15,6 +15,7 @@ import pytest
 from provibench.bench.estimate import SpecPrices
 from provibench.bench.html_report import render_html
 from provibench.bench.html_svg import MAX_SERIES, BarRow, horizontal_bars
+from provibench.bench.probe_html_help import endpoint_help
 from provibench.bench.probe_html_tables import (
     ENDPOINT_CAPTION_HTML,
     HOVER_HINT_HTML,
@@ -358,7 +359,9 @@ def test_endpoint_table_has_a_group_header_row_over_cache_price_and_speed() -> N
     groups = endpoint_table[: endpoint_table.index("</tr>")]
     assert '<tr class="groups"><th></th>' in groups
     assert '<th colspan="3" class="group-start">cache</th>' in groups
-    assert '<th colspan="4" class="group-start">price</th>' in groups
+    # item 1: the printed word says "input" so no price column reads as if it might
+    # include output tokens; the run's row-sort column is still named plain `eff $/M`.
+    assert '<th colspan="4" class="group-start">input price</th>' in groups
     assert '<th colspan="4" class="group-start">speed</th>' in groups
 
 
@@ -402,6 +405,69 @@ def test_caption_ends_with_the_hover_hint_and_tooltip_headers_are_styled() -> No
     html = render_html(probe_document())
     assert f"{HOVER_HINT_HTML}</p>" in html
     assert "thead th[title] { cursor: help; text-decoration: underline dotted;" in html
+
+
+def test_endpoint_caption_states_every_price_is_input_token() -> None:
+    """Item 1: no number on the page should read as what a whole session costs; every $/M
+    is an input-token price, and the caption says so once, for the whole table."""
+    assert (
+        "Every $/M on this page is an input-token price; output tokens are billed apart "
+        "and are not compared here." in ENDPOINT_CAPTION_HTML
+    )
+    html = render_html(probe_document())
+    assert "Every $/M on this page is an input-token price" in html
+
+
+def test_endpoint_help_tooltips_name_every_price_as_input_token() -> None:
+    """Item 1: `in $/M`, `cache $/M` and `eff $/M` each say "input", and `eff $/M`/
+    `this trace $` say output tokens are not in the number at all."""
+    tooltips = endpoint_help([], 1_804_855)
+    assert (
+        tooltips["in $/M"] == "Listed price per 1M input (prompt) tokens: what a cache miss costs."
+    )
+    assert (
+        tooltips["cache $/M"]
+        == "Listed price per 1M cached input (prompt) tokens: what a cache hit costs."
+    )
+    assert tooltips["eff $/M"] == (
+        "Input price per 1M prompt tokens at the measured hit rate: misses pay the listed "
+        "input price, hits the cache price, weighted over every repeat request. Output "
+        "tokens are not in it."
+    )
+    assert tooltips["this trace $"] == (
+        "Input-token bill for a session like the recorded one (1.8M prompt tokens) at this "
+        "endpoint's eff $/M. Output tokens are not in it."
+    )
+
+
+def test_endpoint_help_trace_tooltip_without_a_known_trace_size() -> None:
+    tooltips = endpoint_help([], None)
+    assert tooltips["this trace $"] == (
+        "Input-token bill for a session like the recorded one at this endpoint's eff $/M. "
+        "Output tokens are not in it."
+    )
+
+
+def test_cached_cold_marks_the_hit_percent_cell_with_a_dagger() -> None:
+    """Item 2: a hit rate whose cold write already read back cached tokens gets a dagger
+    and a title on the cell itself, not just the caveat far below the table."""
+    html = render_html(cached_cold_probe_document())
+    endpoint_table = html.split('<div class="scroll">')[1]
+    assert (
+        '<td title="This endpoint&#x27;s cold write already read back cached tokens; see '
+        'the caveats.">100.0&#x2020;</td>' in endpoint_table
+    )
+    caption = html[html.index('<p class="caption">') : html.index("</section>")]
+    assert (
+        "&#x2020; marks a hit rate whose cold write already read back cached tokens "
+        "(see the caveats)." in caption
+    )
+
+
+def test_a_clean_run_has_no_dagger_or_its_caption_sentence() -> None:
+    html = render_html(probe_document())
+    assert "&#x2020;" not in html
+    assert "marks a hit rate whose cold write" not in html
 
 
 def test_this_trace_column_reports_what_a_session_like_the_trace_would_bill() -> None:
@@ -550,7 +616,7 @@ def test_the_page_follows_the_new_reading_order() -> None:
     method = html.index('<p class="method">')
     endpoint = html.index("<h3>Per endpoint</h3>")
     caption = html.index(f'<p class="caption">{ENDPOINT_CAPTION_HTML}')
-    cost_chart = html.index("<h3>Price per 1M prompt tokens at the measured hit rate</h3>")
+    cost_chart = html.index("<h3>Input price per 1M prompt tokens at the measured hit rate</h3>")
     cache_chart = html.index("<h3>Share of prompt tokens served from cache, per turn</h3>")
     details = html.index('<details class="turns"><summary>Per turn: hits and latency</summary>')
     caveats = html.index('<section class="caveats">')
@@ -672,9 +738,17 @@ def test_price_chart_draws_the_eff_column_one_bar_per_endpoint() -> None:
     price = _SVG.findall(html)[0]
     assert _bars(price) == 3  # one bar per priced endpoint
     assert 'class="bar s1"' in price and "light" not in price
+    # item 1, item 4, item 5: input tokens named, and the run's cache share (`h`) kept apart
+    # from its two factors so it is never read as the table's `cached %` for the same row.
     assert (
-        "@novita: $0.041 per 1M prompt tokens at the measured hit rate (the cache covered "
-        "95.8% of prompt tokens, priced from the OpenRouter listing)" in price
+        "@novita: $0.041 per 1M input tokens at this run&#x27;s cache share of 95.8% of "
+        "prompt tokens (100.0% of repeat requests hit, covering 95.8% of the prompt when "
+        "they did), priced from the OpenRouter listing" in price
+    )
+    # @gmicloud never hit, so it has no hit-rate/cached-fraction breakdown to show
+    assert (
+        "@gmicloud: $0.300 per 1M input tokens at this run&#x27;s cache share of 0.0% of "
+        "prompt tokens, priced from the OpenRouter listing" in price
     )
     assert "hit-weighted h" not in price  # `h` is the tool's name, never introduced on the page
     assert '<text class="row-label" x="0.0"' in price
@@ -684,7 +758,7 @@ def test_price_chart_draws_the_eff_column_one_bar_per_endpoint() -> None:
 
 def test_price_chart_has_a_caption_and_no_legend_of_its_own() -> None:
     html = render_html(probe_document())
-    price_figure = html[html.index("<h3>Price per 1M") : html.index("<h3>Share of prompt")]
+    price_figure = html[html.index("<h3>Input price per 1M") : html.index("<h3>Share of prompt")]
     assert '<ul class="legend">' not in price_figure  # one bar per row, the row label names it
     assert (
         "The <code>eff $/M</code> column drawn: a cache miss pays the input price, a hit pays "
@@ -782,11 +856,27 @@ def test_a_warm_runs_page_states_the_cache_mode_too() -> None:
 
 def test_a_cold_runs_page_states_the_nonce_without_the_tools_label() -> None:
     html = render_html(probe_document())
+    # item 3: the marker's position is named too, so a provider engineer can see the shared-
+    # prefix objection does not apply here -- no cached-cold caveat on this fixture, so the
+    # plain marker sentence, not the one that also points at the next caveat.
     assert (
         '<li id="cav-1">Each request carried a unique marker, so every cache hit on this page '
-        "was written by this run; none came from earlier traffic.</li>" in html
+        "was written by this run; none came from earlier traffic. The marker sits at the "
+        "request&#x27;s very first token.</li>" in html
     )
     assert "cold (nonce)" not in html
+
+
+def test_the_nonce_caveat_points_at_the_cached_cold_caveat_when_both_run() -> None:
+    """Item 3: when a cold write already read back cached tokens, the marker-position
+    sentence says so explicitly rather than leaving the two caveats reading as a
+    contradiction (every hit is new vs. a cold write already hit)."""
+    html = render_html(cached_cold_probe_document())
+    caveats = html[html.index('<section class="caveats">') :]
+    assert (
+        "none came from earlier traffic. The marker sits at the request&#x27;s very first "
+        "token, so the next caveat&#x27;s cold writes cannot be explained by a shared prefix."
+    ) in caveats
 
 
 def test_caveats_heading_and_plain_endpoint_label() -> None:

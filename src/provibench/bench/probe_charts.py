@@ -172,17 +172,28 @@ def _price_row(index: int, summary: ProbeSummary, label: str) -> BarRow:
     """The bar's hover says how the price came about, in the page's words.
 
     `h` is the tool's name for hit rate times cached share; the page never introduces it, so
-    the hover says what the number is instead of naming it.
+    the hover says what the number is (the run's cache share) instead of naming it, and
+    breaks it back into its two factors, how often a repeat hit and how much of the prompt
+    it covered when it did, so the run's cache share is never read as the table's
+    `cached %`, which is conditional on a hit and so is usually the larger number. `eff`
+    prices input tokens only, and the hover says so rather than leaving "prompt tokens" to
+    be read as a session's whole bill.
     """
     eff = summary.eff_per_m_prompt
-    if eff is None:
+    h = summary.h
+    if eff is None or h is None:
         return BarRow(index, label, None, "-", f"{label}: no measured price")
-    details: list[str] = []
-    if summary.h is not None:
-        details.append(f"the cache covered {summary.h * 100:.1f}% of prompt tokens")
-    details.append(f"priced from the {price_source_words(summary.price_source)}")
-    how = ", ".join(details)
-    title = f"{label}: ${eff:.3f} per 1M prompt tokens at the measured hit rate ({how})"
+    breakdown = ""
+    if summary.hit_rate is not None and summary.cached_fraction is not None:
+        breakdown = (
+            f" ({summary.hit_rate * 100:.1f}% of repeat requests hit, covering "
+            f"{summary.cached_fraction * 100:.1f}% of the prompt when they did)"
+        )
+    priced = f"priced from the {price_source_words(summary.price_source)}"
+    title = (
+        f"{label}: ${eff:.3f} per 1M input tokens at this run's cache share of "
+        f"{h * 100:.1f}% of prompt tokens{breakdown}, {priced}"
+    )
     return BarRow(index, label, eff, f"${eff:.3f}/M", title)
 
 

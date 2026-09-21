@@ -29,11 +29,13 @@ _NONCE_CAVEATS: dict[bool, str] = {
     True: cache_mode_sentence(True, labelled=False, where="on this page"),
     False: cache_mode_sentence(False, labelled=False, where="on this page"),
 }
-"""The run-wide cache-mode caveat, written once instead of once per endpoint. Keyed by
-`options.warm`, both built from `cache_mode_sentence` so this caveat and the text report's
-first note line (`probe_tables.probe_note_lines`) never say the mode in two different words.
-Unlabelled: the page shows `cold (nonce)` nowhere else, so a quoted label here would point
-at nothing."""
+"""The run-wide cache-mode caveat's first sentence, written once instead of once per
+endpoint. Keyed by `options.warm`, both built from `cache_mode_sentence` so this sentence and
+the text report's first note line (`probe_tables.probe_note_lines`) never say the mode in two
+different words. Unlabelled: the page shows `cold (nonce)` nowhere else, so a quoted label
+here would point at nothing. The cold (nonce) mode's caveat gets a second, page-only sentence
+naming where the marker sits (`_nonce_caveat`); the text report's note line stays this one
+sentence alone."""
 
 _METHOD_NOTES = (cache_mode_note(True), cache_mode_note(False))
 """`warm` and `cold (nonce)`: the short per-endpoint note `_nonce_caveat` already covers once."""
@@ -43,6 +45,20 @@ _OUTPUT_TOKENS_PREFIX = "ignored the one-token limit"
 _CACHED_COLD_MARK = "reported cached tokens"
 """The per-endpoint cached-cold note (`probe_notes._cached_cold_note`), which the page folds
 into one sentence for every endpoint (`_cached_cold_caveat`) instead of listing per row."""
+
+_MARKER_POSITION = "The marker sits at the request's very first token."
+"""Where the cold (nonce) mode's marker sits, in the words a provider engineer would want:
+a block-aligned prefix cache can legitimately report a shared system prefix as cached when
+the marker sits after it, and this run's marker does not (item 3)."""
+
+_MARKER_POSITION_WITH_CACHED_COLD = (
+    "The marker sits at the request's very first token, so the next caveat's cold writes "
+    "cannot be explained by a shared prefix."
+)
+"""Said instead of `_MARKER_POSITION` when the cached-cold caveat also runs: the two caveats
+would otherwise sit side by side making contradictory-looking claims, one nonce hit is always
+new and the other says a cold write already read one back, with nothing on the page saying
+why both are true."""
 
 
 def run_method_sentence(summaries: Sequence[ProbeSummary], document: Document) -> str | None:
@@ -96,10 +112,10 @@ def caveats_section(
         items.append(f'<li id="{anchor}">{html}</li>')
         return anchor
 
-    nonce = _nonce_caveat(document)
+    cached_cold = _cached_cold_caveat(summaries, labels, document)
+    nonce = _nonce_caveat(document, cached_cold_present=cached_cold is not None)
     if nonce:
         add(escape(nonce))
-    cached_cold = _cached_cold_caveat(summaries, labels, document)
     if cached_cold:
         add(escape(cached_cold))
 
@@ -207,10 +223,21 @@ def _cached_cold_caveat(
     )
 
 
-def _nonce_caveat(document: Document) -> str:
+def _nonce_caveat(document: Document, *, cached_cold_present: bool) -> str:
+    """The run-wide cache-mode caveat: `_NONCE_CAVEATS`'s shared sentence, plus, for the cold
+    (nonce) mode only, where the marker sits (item 3). `cached_cold_present` picks which of
+    the two marker sentences applies, since only then does the position need to also explain
+    away the objection that a shared prefix could account for the next caveat's cold writes.
+    """
     options = as_document(document.get("options")) or {}
     warm = options.get("warm")
-    return _NONCE_CAVEATS.get(warm, "") if isinstance(warm, bool) else ""
+    if not isinstance(warm, bool):
+        return ""
+    base = _NONCE_CAVEATS[warm]
+    if warm:
+        return base
+    marker = _MARKER_POSITION_WITH_CACHED_COLD if cached_cold_present else _MARKER_POSITION
+    return f"{base} {marker}"
 
 
 def _burst_sentences(

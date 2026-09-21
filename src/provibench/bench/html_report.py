@@ -49,12 +49,11 @@ from provibench.bench.probe_charts import (
     rung_groups,
     series,
 )
+from provibench.bench.probe_html_help import endpoint_help, rung_help
 from provibench.bench.probe_html_tables import (
     endpoint_caption_html,
-    endpoint_help,
     endpoint_view,
     group_header_row,
-    rung_help,
     rung_view,
 )
 from provibench.bench.probe_summary import ProbeSummary, summary_from_document
@@ -203,16 +202,22 @@ def _probe_sections(document: Document) -> list[str]:
         sections.append(f'<p class="method">{escape(method)}</p>')
 
     caveats_html, tok_footnotes = caveats_section(summaries, labels, document)
-    endpoint_block, _endpoint_dropped = endpoint_view(blocks.endpoint, summaries)
-    cell_extra = tok_footnote_cells(endpoint_block, tok_footnotes)
+    endpoint_block, _endpoint_dropped, dagger_titles, dagger_extra = endpoint_view(
+        blocks.endpoint, summaries
+    )
+    cell_extra = {**tok_footnote_cells(endpoint_block, tok_footnotes), **dagger_extra}
     sections.append(
         table_section(
             "Per endpoint",
             endpoint_block,
             caption_html=endpoint_caption_html(
-                labels, _probe_model(document), folded=bool(blocks.caption)
+                labels,
+                _probe_model(document),
+                folded=bool(blocks.caption),
+                marked=bool(dagger_titles),
             ),
             help=endpoint_help(summaries, trace_prompt_tokens),
+            cell_titles=dagger_titles,
             cell_extra=cell_extra,
             group_row=group_header_row(endpoint_block.columns),
             key_column="eff $/M",
@@ -258,7 +263,7 @@ def _probe_charts(
     unmeasured = not_charted(summaries, labels)
     if any(row.value is not None for row in rows):
         parts.append(
-            "<figure><h3>Price per 1M prompt tokens at the measured hit rate</h3>"
+            "<figure><h3>Input price per 1M prompt tokens at the measured hit rate</h3>"
             + chart(
                 horizontal_bars(rows, label="eff $/M per endpoint"),
                 "The <code>eff $/M</code> column drawn: a cache miss pays the input price, a "

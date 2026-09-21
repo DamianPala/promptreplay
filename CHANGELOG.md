@@ -174,6 +174,9 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
   `@sail-research/fp8` prints whole instead of clipped
 - A single endpoint's own `target:model` prefix folds into the caption when its whole label
   does not fit the column, which until now only happened when two rows shared the prefix
+- The HTML report names every price as an input-token price, marks a hit rate whose cold
+  write already read back cached tokens, says where the cold (nonce) mode's marker sits, and
+  the price bars' hover separates the run's cache share from the conditional `cached %`
 
 ### Fixed
 
