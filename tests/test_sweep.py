@@ -20,7 +20,7 @@ import pytest
 
 from provibench.bench.selection import SweepInfo
 from provibench.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
-from provibench.core.documents import as_document
+from provibench.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
 _RealAsyncClient = httpx.AsyncClient
@@ -1298,6 +1298,239 @@ def test_sweep_zdr_keeps_only_the_endpoints_on_the_list(
     )
     assert "relace/fp4 (not ZDR)" in outcome.stderr
     assert _block(outcome)["zdr"] is True
+
+
+def test_sweep_quantization_keeps_only_the_named_quantizations(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path, aliases=False)
+    endpoints = [
+        _endpoint("novita", quantization="fp8"),
+        _endpoint("relace/fp4", quantization="fp4"),
+        _endpoint("siliconflow", quantization=None),
+    ]
+    _install(monkeypatch, _transport(endpoints=endpoints))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--quantization", "fp8"))
+    assert outcome.code == 0, outcome.stderr
+    assert _specs(outcome) == {f"or:{_MODEL}@novita"}
+    assert [(drop["tag"], drop["reason"]) for drop in _block(outcome)["dropped"]] == [
+        ("relace/fp4", "quantization fp4"),
+        ("siliconflow", "quantization unknown"),
+    ]
+    assert _block(outcome)["quantization"] == ["fp8"]
+    assert "quant=fp8" in outcome.stderr
+
+    # comma-separated in one occurrence keeps the unlabelled endpoint too
+    both = _sweep(cli, bench_paths, *_one_rung("--quantization", "fp8,unknown"))
+    assert both.code == 0, both.stderr
+    assert _specs(both) == {f"or:{_MODEL}@novita", f"or:{_MODEL}@siliconflow"}
+
+    # --include overrides the stability floor, not the quantization filter: one axis at a time
+    included = _sweep(
+        cli,
+        bench_paths,
+        *_one_rung("--quantization", "fp8", "--include", "relace", "--include", "novita"),
+    )
+    assert included.code == 0, included.stderr
+    assert f"or:{_MODEL}@relace/fp4" not in _specs(included)
+    assert f"or:{_MODEL}@novita" in _specs(included)
+
+
+def test_sweep_pin_probes_the_top_n_plus_the_pin(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--pin TAG --top 2` probes the two best plus the pin, outside the ranking's cut.
+
+    Regression: with more ranked candidates ahead of the pin than `--top` needs, a `keep`
+    cut applied to a single list holding both the ranking and the pin stops before it ever
+    reaches the pin, because two of the three ranked candidates here already satisfy it.
+    """
+    _write_targets(bench_paths.targets_path, aliases=False)
+    endpoints = [
+        _endpoint("novita", **_health(99.9)),
+        _endpoint("novita/fp8", **_health(99.5)),
+        _endpoint("siliconflow", **_health(99.0)),
+        _endpoint("gmicloud", **_health(80.0)),
+    ]
+    prechecked: list[str] = []
+    _install(monkeypatch, _transport(endpoints=endpoints, prechecked=prechecked))
+
+    outcome = _sweep(
+        cli, bench_paths, *_one_rung("--sort", "uptime", "--top", "2", "--pin", "gmicloud")
+    )
+    assert outcome.code == 0, outcome.stderr
+    # the ranked check stops after two survive (novita, novita/fp8); siliconflow is never
+    # visited, and the pin is checked afterward regardless
+    assert prechecked == ["novita", "novita/fp8", "gmicloud"]
+    assert _specs(outcome) == {
+        f"or:{_MODEL}@novita",
+        f"or:{_MODEL}@novita/fp8",
+        f"or:{_MODEL}@gmicloud",
+    }
+    assert _block(outcome)["dropped"] == []
+    assert _block(outcome)["pinned"] == ["gmicloud"]
+    assert "pin=gmicloud" in outcome.stderr
+
+
+def test_sweep_pin_that_404s_is_dropped_without_promoting_a_ranked_endpoint(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pin the account can't reach is a checked drop; it never frees a --top slot, since
+    it was never competing with the ranked candidates for one."""
+    _write_targets(bench_paths.targets_path, aliases=False)
+    endpoints = [
+        _endpoint("novita", **_health(99.9)),
+        _endpoint("siliconflow", **_health(99.5)),
+        _endpoint("openinference", **_health(99.0)),
+        _endpoint("gmicloud", **_health(80.0)),
+    ]
+    prechecked: list[str] = []
+    _install(
+        monkeypatch,
+        _transport(
+            endpoints=endpoints,
+            prechecked=prechecked,
+            unavailable={"gmicloud": _GUARDRAIL_404},
+        ),
+    )
+
+    outcome = _sweep(
+        cli, bench_paths, *_one_rung("--sort", "uptime", "--top", "2", "--pin", "gmicloud")
+    )
+    assert outcome.code == 0, outcome.stderr
+    # novita and siliconflow already satisfy --top 2; openinference is never checked or
+    # probed even though the pin later fails
+    assert prechecked == ["novita", "siliconflow", "gmicloud"]
+    assert _specs(outcome) == {f"or:{_MODEL}@novita", f"or:{_MODEL}@siliconflow"}
+    dropped = _block(outcome)["dropped"]
+    assert [(drop["tag"], drop["checked"]) for drop in dropped] == [("gmicloud", True)]
+    assert _GUARDRAIL_REASON in outcome.stderr
+
+
+def test_sweep_pin_is_additive_over_include(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--include` narrows the listing to matching tags; a `--pin` outside that prefix is
+    added on top, not an error -- the caller named it directly rather than by prefix."""
+    _write_targets(bench_paths.targets_path, aliases=False)
+    _install(monkeypatch, _transport(endpoints=_ENDPOINTS))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--include", "novita", "--pin", "gmicloud"))
+    assert outcome.code == 0, outcome.stderr
+    assert _specs(outcome) == {
+        f"or:{_MODEL}@novita",
+        f"or:{_MODEL}@novita/fp8",
+        f"or:{_MODEL}@gmicloud",
+    }
+
+
+def test_sweep_pin_below_the_uptime_floor_is_kept(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path, aliases=False)
+    endpoints = [
+        _endpoint("novita", **_health(99.9)),
+        _endpoint("gmicloud", **_health(50.0)),  # well below the 97 % default floor
+    ]
+    _install(monkeypatch, _transport(endpoints=endpoints))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--pin", "gmicloud"))
+    assert outcome.code == 0, outcome.stderr
+    assert _specs(outcome) == {f"or:{_MODEL}@novita", f"or:{_MODEL}@gmicloud"}
+    assert _block(outcome)["dropped"] == []
+
+
+def test_sweep_pin_of_an_unknown_tag_is_a_usage_error(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path, aliases=False)
+    _install(monkeypatch, _transport(endpoints=_ENDPOINTS))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--pin", "ghost"))
+    assert outcome.code == 2, outcome.stderr
+    assert outcome.error["kind"] == "invalid_input"
+
+
+def test_sweep_pin_and_exclude_of_the_same_tag_is_a_usage_error(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_targets(bench_paths.targets_path, aliases=False)
+    _install(monkeypatch, _transport(endpoints=_ENDPOINTS))
+
+    outcome = _sweep(cli, bench_paths, *_one_rung("--pin", "novita", "--exclude", "novita"))
+    assert outcome.code == 2, outcome.stderr
+    assert outcome.error["kind"] == "invalid_input"
+    # the real reason, not the "matches no endpoint" the exclude-then-pin order would give
+    message = str(outcome.error["message"])
+    assert "--pin 'novita'" in message
+    assert "--exclude 'novita'" in message
+
+
+def test_sweep_dry_run_estimate_includes_the_pinned_endpoint(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `--dry-run` estimate prices the two best ranked candidates plus the pin -- not a
+    third ranked endpoint the plain `--top` cut would otherwise have priced -- and the
+    candidates table names both. `total_usd` is summed from exactly those rows."""
+    _write_targets(bench_paths.targets_path, aliases=False)
+    endpoints = [
+        _endpoint("novita", **_health(99.9)),
+        _endpoint("siliconflow", **_health(99.5)),
+        _endpoint("openinference", **_health(99.0)),
+        _endpoint("gmicloud", **_health(80.0)),
+    ]
+    _install(monkeypatch, _transport(endpoints=endpoints))
+
+    outcome = _sweep(
+        cli,
+        bench_paths,
+        "--rungs",
+        "1",
+        "--repeats",
+        "1",
+        "--gap",
+        "0",
+        "--no-throughput",
+        "--sort",
+        "uptime",
+        "--top",
+        "2",
+        "--pin",
+        "gmicloud",
+        "--dry-run",
+    )
+    assert outcome.code == 0, outcome.stderr
+    rows = [d for d in map(as_document, as_list(outcome.document["estimate"]) or []) if d]
+    assert {str(row["label"]) for row in rows} == {
+        f"or:{_MODEL}@novita",
+        f"or:{_MODEL}@siliconflow",
+        f"or:{_MODEL}@gmicloud",
+    }
+    assert "quant" in outcome.stderr  # the candidates table's column header
+    assert "pin=gmicloud" in outcome.stderr
+
+    # the availability check's own cost still prices its worst case (every ranked candidate
+    # it might have to try, plus the pin); only the estimate rows above are narrowed to the
+    # three the run actually means to probe
+    pre_check = as_document(outcome.document["pre_check"])
+    assert pre_check is not None
+
+    worst_cases = [row.get("worst_case_usd") for row in rows]
+    assert all(isinstance(amount, int | float) for amount in worst_cases)
+    total = outcome.document["total_usd"]
+    assert isinstance(total, int | float)
+    assert total == pytest.approx(
+        sum(float(str(amount)) for amount in worst_cases) + float(str(pre_check["usd"]))
+    )
+
+
+def test_sweep_schema_lists_quantization_and_pinned(cli: Cli) -> None:
+    detail = cli.run("schema", "sweep")
+    assert detail.code == 0, detail.stderr
+    printed = json.dumps(detail.document)
+    assert "quantization" in printed
+    assert "pinned" in printed
 
 
 def test_sweep_availability_check_removes_a_candidate_without_a_summary_row(

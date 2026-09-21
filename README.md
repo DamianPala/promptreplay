@@ -173,6 +173,9 @@ Selection is applied in this order:
 2. Drop degraded endpoints and endpoints whose one-day uptime is below `--min-uptime` (97 % by default, the tool's own floor, not an OpenRouter rule).
    `--include PREFIX` keeps only endpoints whose tag starts with PREFIX and keeps them past this floor, `--exclude PREFIX` drops them.
    A prefix no endpoint has is an error, not a thinner run, and a missing status or uptime counts as unmeasured rather than degraded.
+   `--quantization fp8` keeps only endpoints served at that quantization (`unknown` keeps unlabelled ones), and `--pin TAG` probes an endpoint alongside the ranking without taking a `--top` slot.
+   A pinned tag is kept even when no `--include` prefix matches it.
+   Naming the same tag with `--pin` and `--exclude` is an error.
 3. `--sort price|uptime|throughput|latency` ranks the survivors, with price as the default.
    Price ties prefer throughput and then uptime, and the percentile keys require API data.
 4. `--top N` keeps the N best that pass the availability check.

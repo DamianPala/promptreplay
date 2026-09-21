@@ -22,6 +22,7 @@ from pydantic import AliasChoices, BaseModel, Field
 
 from provibench.bench.openrouter import Endpoint
 from provibench.bench.targets import RunSpec, Target
+from provibench.core.errors import InvalidInput
 
 if TYPE_CHECKING:
     from provibench.core.documents import Document
@@ -32,10 +33,12 @@ __all__ = [
     "UPTIME_FLOOR",
     "RankedEndpoint",
     "Selection",
+    "SelectionCriteria",
     "SelectionDrop",
     "SweepInfo",
     "missing_percentiles",
     "pinned_spec",
+    "prefixed",
     "rank_candidates",
     "ranked",
     "select_candidates",
@@ -104,6 +107,8 @@ class SweepInfo(BaseModel):
     target: str
     included: list[str] = Field(default_factory=list[str])
     excluded: list[str] = Field(default_factory=list[str])
+    quantization: list[str] = Field(default_factory=list[str])
+    pinned: list[str] = Field(default_factory=list[str])
     sort: str = "price"
     top: int | None = None
     zdr: bool = False
@@ -143,42 +148,105 @@ def pinned_spec(gateway: Target, model: str, tag: str) -> RunSpec:
     return RunSpec(target=gateway, model=model, providers=[tag])
 
 
+@dataclass(frozen=True, slots=True)
+class SelectionCriteria:
+    """The tag and health axes `select_candidates` filters and ranks by.
+
+    Bundled into one object because `gateway` and `model` — needed to label a drop with the
+    endpoint it removes — pushed the flat keyword signature past the project's argument
+    limit once quantization and pin joined `include`, `sort`, `zdr` and the floor.
+    """
+
+    include: Sequence[str] = ()
+    pin: Sequence[str] = ()
+    sort: str = "price"
+    zdr: bool = False
+    zdr_tags: Set[str] = frozenset()
+    uptime_floor: float = UPTIME_FLOOR
+    quantization: Sequence[str] = ()
+
+
+_DEFAULT_CRITERIA = SelectionCriteria()
+
+
 def select_candidates(
     endpoints: Sequence[Endpoint],
     *,
     gateway: Target,
     model: str,
-    include: Sequence[str] = (),
-    sort: str = "price",
-    zdr: bool = False,
-    zdr_tags: Set[str] = frozenset(),
-    uptime_floor: float = UPTIME_FLOOR,
+    criteria: SelectionCriteria = _DEFAULT_CRITERIA,
 ) -> Selection:
-    """Apply the ZDR intersection and the stability floor, then rank what survives.
+    """Apply the quantization filter, the ZDR intersection and the stability floor, then rank.
 
-    The order is the one the listing explains: ZDR first (an endpoint outside the account's
-    list is not available on the account's terms at all), then the floor, then the sort.
-    The tag filters are the caller's: a tag no endpoint has is an input error, not a drop.
+    The order is the one the listing explains: quantization and ZDR first (an endpoint of a
+    quantization the caller did not ask for, or outside the account's ZDR list, is not a
+    candidate at all regardless of any tag filter), then the floor, then the sort. `--include`
+    and `--pin` both override the floor for the tag they name, but neither bypasses
+    quantization or ZDR: naming a tag is the operator asking for one axis at a time, not for
+    every axis to be skipped.
+
+    A pinned tag is exempt from `--top` too, which this function expresses in the order it
+    returns: `kept` ranks the non-pinned survivors by `sort` and appends the pinned survivors
+    after them, in the order `pin` named them, so a caller who stops after N candidates never
+    cuts a pin. The tag filters are the caller's: an `--include` tag no endpoint has is an
+    input error, not a drop, and so is a `--pin` tag no endpoint has.
     """
-    allowed = set(zdr_tags)
+    allowed = set(criteria.zdr_tags)
+    pin_set = set(criteria.pin)
+    wanted_quant = {value.lower() for value in criteria.quantization}
+    _check_pins_exist(endpoints, criteria.pin)
 
     def drop(endpoint: Endpoint, reason: str) -> SelectionDrop:
         return SelectionDrop.for_spec(pinned_spec(gateway, model, endpoint.tag), reason)
 
     kept: list[Endpoint] = []
+    pinned_kept: list[Endpoint] = []
     dropped: list[SelectionDrop] = []
     for endpoint in endpoints:
-        if zdr and endpoint.tag not in allowed:
+        if wanted_quant:
+            quant_reason = _quantization_reason(endpoint, wanted_quant)
+            if quant_reason is not None:
+                dropped.append(drop(endpoint, quant_reason))
+                continue
+        if criteria.zdr and endpoint.tag not in allowed:
             dropped.append(drop(endpoint, "not ZDR"))
             continue
+        is_pinned = endpoint.tag in pin_set
         reason = stability_reason(
-            endpoint, included=_prefixed(endpoint.tag, include), floor=uptime_floor
+            endpoint,
+            included=prefixed(endpoint.tag, criteria.include) or is_pinned,
+            floor=criteria.uptime_floor,
         )
         if reason is not None:
             dropped.append(drop(endpoint, reason))
             continue
-        kept.append(endpoint)
-    return Selection(kept=rank_candidates(kept, sort), dropped=dropped)
+        (pinned_kept if is_pinned else kept).append(endpoint)
+    pin_order = {tag: index for index, tag in enumerate(dict.fromkeys(criteria.pin))}
+    pinned_kept.sort(key=lambda endpoint: pin_order[endpoint.tag])
+    return Selection(kept=[*rank_candidates(kept, criteria.sort), *pinned_kept], dropped=dropped)
+
+
+def _check_pins_exist(endpoints: Sequence[Endpoint], pin: Sequence[str]) -> None:
+    """A `--pin` tag no endpoint has is a usage error, the same one `--include` raises."""
+    tags = {endpoint.tag for endpoint in endpoints}
+    for tag in dict.fromkeys(pin):
+        if tag not in tags:
+            available = ", ".join(sorted(tags)) or "(none)"
+            raise InvalidInput(
+                f"--pin {tag!r} matches no endpoint; available tags: {available}",
+                hint="Tags are the endpoint slugs that `provibench endpoints MODEL` prints",
+            )
+
+
+def _quantization_reason(endpoint: Endpoint, wanted: Set[str]) -> str | None:
+    """Why `--quantization` drops this endpoint, or `None` when its quantization is wanted.
+
+    `unknown` in `wanted` matches an endpoint the listing does not label; the comparison is
+    case-insensitive because OpenRouter's own casing for a quantization is not consistent
+    (`fp8` and `FP8` both appear).
+    """
+    label = (endpoint.quantization or "unknown").lower()
+    return None if label in wanted else f"quantization {label}"
 
 
 def stability_reason(
@@ -187,7 +255,8 @@ def stability_reason(
     """Why the stability floor drops this endpoint, or `None` when it passes.
 
     `--include` overrides the floor: naming a tag is the operator saying they want that
-    endpoint measured anyway, which is the one way back in for a degraded endpoint.
+    endpoint measured anyway, which is the one way back in for a degraded endpoint;
+    `--pin` overrides it the same way, for the exact tag it names.
 
     The dropped uptime is printed to two decimals because one is not enough to explain the
     drop: a value just under the floor rounds up to the floor itself (`96.96` reads `97.0`),
@@ -253,8 +322,12 @@ def ranked(endpoint: Endpoint) -> RankedEndpoint:
     )
 
 
-def _prefixed(tag: str, include: Sequence[str]) -> bool:
-    """Whether a tag is one the caller named with `--include`, which overrides the floor."""
+def prefixed(tag: str, include: Sequence[str]) -> bool:
+    """Whether a tag is one the caller named with `--include`, which overrides the floor.
+
+    Public because `selection_text.selection_line` reads it back too, to count how many of
+    the run's kept endpoints an `--include` prefix actually named.
+    """
     return any(tag.startswith(prefix) for prefix in include)
 
 

@@ -48,17 +48,20 @@ class Checked:
 def planned_specs(request: ProbeRequest) -> list[RunSpec]:
     """The endpoints the estimate prices and the confirmation names.
 
-    With `--top N` that is the N best candidates, which are the endpoints the run probes
-    unless the availability check removes one and promotes the next ranked candidate
-    (priced the same way); without it, every endpoint. The references are always included.
+    With `--top N` that is the N best ranked candidates, which are the endpoints the run
+    probes unless the availability check removes one and promotes the next ranked candidate
+    (priced the same way), plus every pin: a pin is never subject to the cut, so it is priced
+    alongside the ranked N rather than instead of one of them. Without `--top`, every
+    endpoint. The references are always included.
     """
     plan = request.pre_check
     if plan is None or plan.keep is None:
         return list(request.specs)
-    candidates = {spec.label for spec in plan.candidates}
+    covered = {spec.label for spec in (*plan.candidates, *plan.pinned)}
     return [
         *plan.candidates[: plan.keep],
-        *(spec for spec in request.specs if spec.label not in candidates),
+        *plan.pinned,
+        *(spec for spec in request.specs if spec.label not in covered),
     ]
 
 
@@ -99,17 +102,18 @@ def upper_bound_estimate(
     if plan is None or plan.keep is None:
         return None
     keep = plan.keep
-    if any(prices.get(spec.label) is None for spec in plan.candidates):
+    if any(prices.get(spec.label) is None for spec in (*plan.candidates, *plan.pinned)):
         return None
 
     def listed(spec: RunSpec) -> float:
         price = prices.get(spec.label)
         return 0.0 if price is None else price.prices.input
 
-    candidates = {spec.label for spec in plan.candidates}
+    covered = {spec.label for spec in (*plan.candidates, *plan.pinned)}
     specs = [
         *sorted(plan.candidates, key=listed, reverse=True)[:keep],
-        *(spec for spec in request.specs if spec.label not in candidates),
+        *plan.pinned,
+        *(spec for spec in request.specs if spec.label not in covered),
     ]
     total = estimate_total(
         [probe_estimate(spec, selected, options, prices.get(spec.label)) for spec in specs],
@@ -190,9 +194,11 @@ def run_check(
 ) -> Checked:
     """Visit the planned candidates and report what the run will probe instead.
 
-    Every candidate is checked in ranking order until `--top` of them have survived, so a
-    removal frees its slot for the next ranked candidate instead of filling it. The native
-    references are neither checked nor cut: a tag is not how they were chosen.
+    Every ranked candidate is checked in order until `--top` of them have survived, so a
+    removal frees its slot for the next ranked candidate instead of filling it. Every pin is
+    then checked too, regardless of `keep`: it competes with nothing, so its own failure
+    frees no slot and none of the ranked failures skip it. The native references are neither
+    checked nor cut: a tag is not how they were chosen.
     """
     from provibench.bench.precheck import precheck_candidates
 
@@ -203,14 +209,15 @@ def run_check(
             options,
             invocation.env,
             keep=plan.keep,
+            pinned=plan.pinned,
             on_result=lambda result: progress_line(invocation, result),
         )
     )
-    candidates = {spec.label for spec in plan.candidates}
+    covered = {spec.label for spec in (*plan.candidates, *plan.pinned)}
     return Checked(
         specs=[
             *(result.spec for result in results if result.kept),
-            *(spec for spec in specs if spec.label not in candidates),
+            *(spec for spec in specs if spec.label not in covered),
         ],
         drops=[_drop(result) for result in results if not result.kept],
         precheck=[result.record for result in results if result.record is not None],

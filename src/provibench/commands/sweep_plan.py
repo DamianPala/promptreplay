@@ -40,6 +40,7 @@ class Criteria:
     model: str
     gateway: Target
     include: Sequence[str]
+    pin: tuple[str, ...]
     exclude: Sequence[str]
     sort: str
     top: int | None
@@ -47,6 +48,7 @@ class Criteria:
     uptime_floor: float
     check: bool
     """The availability check is planned: `--top` turns it on, `--check` adds it alone."""
+    quantization: tuple[str, ...]
 
 
 def sweep_info(selection: Selection, criteria: Criteria) -> SweepInfo:
@@ -61,6 +63,8 @@ def sweep_info(selection: Selection, criteria: Criteria) -> SweepInfo:
         target=criteria.gateway.name,
         included=list(criteria.include),
         excluded=list(criteria.exclude),
+        quantization=list(criteria.quantization),
+        pinned=list(criteria.pin),
         sort=criteria.sort,
         top=criteria.top,
         zdr=criteria.zdr,
@@ -71,32 +75,51 @@ def sweep_info(selection: Selection, criteria: Criteria) -> SweepInfo:
     )
 
 
-def select(
-    model: str,
-    gateway: Target,
-    endpoints: Sequence[Endpoint],
-    *,
-    include: Sequence[str],
-    exclude: Sequence[str],
-    sort: str,
-    zdr: bool,
-    uptime_floor: float,
-) -> Selection:
-    """Apply the tag filters, the percentile requirement, ZDR and the stability floor."""
-    from provibench.bench.selection import select_candidates
+def select(endpoints: Sequence[Endpoint], criteria: Criteria) -> Selection:
+    """Apply the tag filters, the percentile requirement, ZDR and the stability floor.
 
-    filtered = filtered_endpoints(model, endpoints, include=include, exclude=exclude)
-    require_percentiles(filtered, sort, gateway)
+    Takes the whole `Criteria` rather than one keyword per field: quantization and pin would
+    have pushed a flat signature (already carrying `model`, `gateway`, `include`, `exclude`,
+    `sort`, `zdr`, `uptime_floor`) past the project's own argument limit.
+    """
+    from provibench.bench.selection import SelectionCriteria, select_candidates
+
+    model, gateway = criteria.model, criteria.gateway
+    _reject_excluded_pins(criteria)
+    filtered = filtered_endpoints(
+        model, endpoints, include=criteria.include, exclude=criteria.exclude, pin=criteria.pin
+    )
+    require_percentiles(filtered, criteria.sort, gateway)
     return select_candidates(
         filtered,
         gateway=gateway,
         model=model,
-        include=include,
-        sort=sort,
-        zdr=zdr,
-        zdr_tags=fetch_zdr_tags(model) if zdr else frozenset(),
-        uptime_floor=uptime_floor,
+        criteria=SelectionCriteria(
+            include=criteria.include,
+            pin=criteria.pin,
+            sort=criteria.sort,
+            zdr=criteria.zdr,
+            zdr_tags=fetch_zdr_tags(model) if criteria.zdr else frozenset(),
+            uptime_floor=criteria.uptime_floor,
+            quantization=criteria.quantization,
+        ),
     )
+
+
+def _reject_excluded_pins(criteria: Criteria) -> None:
+    """A tag that is both pinned and excluded is a contradiction, not an unknown tag.
+
+    `--exclude` cuts the listing before the pin is looked up, so without this the caller who
+    named the same tag twice is told it matches no endpoint -- true of the filtered list, and
+    unanswerable next to the tag they can see in `provibench endpoints MODEL`.
+    """
+    for tag in criteria.pin:
+        prefix = next((value for value in criteria.exclude if tag.startswith(value)), None)
+        if prefix is not None:
+            raise InvalidInput(
+                f"--pin {tag!r} is also excluded by --exclude {prefix!r}",
+                hint="Drop one of the two: a pinned endpoint is always probed",
+            )
 
 
 def endpoint_list(

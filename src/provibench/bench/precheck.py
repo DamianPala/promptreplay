@@ -49,17 +49,24 @@ with no way to act on it, and the account's own privacy settings are exactly tha
 
 @dataclass(frozen=True, slots=True)
 class CheckPlan:
-    """The availability pre-check a sweep planned: the candidates it visits, and the cut.
+    """The availability pre-check a sweep planned: the ranked candidates, the cut, the pins.
 
     The estimate is rendered before the check runs, so it prices this plan rather than what
-    the check found: every candidate is visited in ranking order — the check only stops early
-    once `keep` of them have survived — and each visit is one smallest-rung request priced at
-    that candidate's listed input price. `keep` is `--top`, and it is also what the estimate
-    narrows its spec rows to: only that many candidates can be probed.
+    the check found: every ranked candidate is visited in ranking order — the check only
+    stops early once `keep` of them have survived — and each visit is one smallest-rung
+    request priced at that candidate's listed input price. `keep` is `--top`, and it is also
+    what the estimate narrows its ranked spec rows to.
+
+    `pinned` is checked too, but never against `keep`: a `--pin` is not competing with the
+    ranked candidates for a slot, so its own failure frees none of theirs, and a ranked
+    candidate's failure never promotes a pin early. Keeping the two lists apart is what makes
+    that true — a single combined list, cut by `keep` in list order, would stop before ever
+    reaching a pin placed after enough healthy ranked candidates.
     """
 
     candidates: Sequence[RunSpec]
     keep: int | None = None
+    pinned: Sequence[RunSpec] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,12 +90,16 @@ async def precheck_candidates(
     env: Mapping[str, str],
     *,
     keep: int | None = None,
+    pinned: Sequence[RunSpec] = (),
     on_result: Callable[[PreCheckResult], None] | None = None,
 ) -> list[PreCheckResult]:
-    """Check candidates in ranking order, stopping once `keep` of them have survived.
+    """Check ranked candidates in order, stopping once `keep` have survived, then every pin.
 
-    Sequential by construction: whether to send the next request depends on the ones already
-    sent, and a failure has to free the slot it was checked for rather than fill it.
+    Sequential by construction: whether to send the next ranked request depends on the ones
+    already sent, and a failure has to free the slot it was checked for rather than fill it.
+    A pin is visited unconditionally after the ranked candidates, regardless of `keep`: it
+    never competed for a ranked slot, so neither its own failure nor a ranked one changes
+    whether it gets checked.
     """
     rungs = options.rungs or []
     if not rungs:
@@ -96,21 +107,28 @@ async def precheck_candidates(
     rung = min(rungs)
     entry = entries[rung - 1]
     try:
-        keys = {spec.label: resolve_api_key(spec.target, env) for spec in candidates}
+        keys = {spec.label: resolve_api_key(spec.target, env) for spec in (*candidates, *pinned)}
     except ValueError as exc:
         raise InvalidInput(str(exc)) from exc
     timeout = httpx.Timeout(options.timeout_s, connect=_CONNECT_TIMEOUT_S)
     results: list[PreCheckResult] = []
+
+    async def visit(spec: RunSpec) -> PreCheckResult:
+        result = await _check(
+            client, spec, entry=entry, options=options, api_key=keys[spec.label], rung=rung
+        )
+        results.append(result)
+        if on_result is not None:
+            on_result(result)
+        return result
+
     async with httpx.AsyncClient(timeout=timeout) as client:
         for spec in candidates:
-            result = await _check(
-                client, spec, entry=entry, options=options, api_key=keys[spec.label], rung=rung
-            )
-            results.append(result)
-            if on_result is not None:
-                on_result(result)
+            await visit(spec)
             if keep is not None and sum(1 for checked in results if checked.kept) >= keep:
                 break
+        for spec in pinned:
+            await visit(spec)
     return results
 
 

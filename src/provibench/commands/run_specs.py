@@ -130,13 +130,19 @@ def filtered_endpoints(
     *,
     include: Sequence[str] = (),
     exclude: Sequence[str] = (),
+    pin: Sequence[str] = (),
 ) -> list[Endpoint]:
     """The endpoints the tag filters select, in the order the endpoint list gave them.
 
     The filters are prefixes of the tag (`--include novita` keeps `novita/fp8`), and a tag no
-    endpoint has is an input error rather than a silently thinner run.
+    endpoint has is an input error rather than a silently thinner run. `pin` is additive over
+    `--include`: a pinned tag survives even when it matches no include prefix, because the
+    caller named it directly rather than by prefix. It is never additive over `--exclude` --
+    the two naming the same tag is rejected before this function is called.
     """
-    kept = _kept_tags([endpoint.tag for endpoint in endpoints], include=include, exclude=exclude)
+    kept = _kept_tags(
+        [endpoint.tag for endpoint in endpoints], include=include, exclude=exclude, pin=pin
+    )
     if not kept:
         untagged = untagged_count(endpoints)
         lost = f"; {untagged} of {len(endpoints)} came back without a tag" if untagged else ""
@@ -176,9 +182,12 @@ def untagged_count(endpoints: Sequence[Endpoint]) -> int:
     return sum(1 for endpoint in endpoints if not endpoint.tag)
 
 
-def _kept_tags(tags: Sequence[str], *, include: Sequence[str], exclude: Sequence[str]) -> list[str]:
+def _kept_tags(
+    tags: Sequence[str], *, include: Sequence[str], exclude: Sequence[str], pin: Sequence[str] = ()
+) -> list[str]:
     """The endpoint tags the filters select, in the order the endpoint list gave them."""
     wanted = _selected(tags, include, flag="--include") if include else set(tags)
+    wanted |= set(pin)
     unwanted: set[str] = _selected(tags, exclude, flag="--exclude") if exclude else set()
     return [tag for tag in dict.fromkeys(tags) if tag and tag in wanted and tag not in unwanted]
 

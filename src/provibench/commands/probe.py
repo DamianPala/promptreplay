@@ -207,7 +207,11 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     table = native_price_table(invocation, request.specs)
     prices = spec_price_map(request.specs, index, table=table)
     plan = request.pre_check
-    pre_check = None if plan is None else precheck_cost(plan.candidates, selected, options, prices)
+    pre_check = (
+        None
+        if plan is None
+        else precheck_cost([*plan.candidates, *plan.pinned], selected, options, prices)
+    )
     estimates = planned_estimates(request, selected, options, prices)
     # Under `--top` the estimate prices the N best-ranked candidates while the check decides
     # which of them the run probes, so the budget is compared against what that can cost.

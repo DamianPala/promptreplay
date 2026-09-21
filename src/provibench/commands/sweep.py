@@ -68,7 +68,8 @@ _OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=_REQUIRED)
     "model's endpoints, keeps only the Zero Data Retention list when --zdr, drops the ones "
     "the stability floor excludes (a status below zero, or one-day uptime below "
     "--min-uptime; --include TAG keeps only matching tags and keeps them past the floor, "
-    "--exclude TAG drops them), ranks what is left by "
+    "--exclude TAG drops them, --quantization keeps one quantization, --pin TAG is always "
+    "probed outside --top), ranks what is left by "
     "--sort (price ascending by default) and keeps the --top N best. Availability is "
     "checked once the run is confirmed: every candidate gets one smallest-rung request, "
     "priced in the estimate you agreed to, so an endpoint the account's settings exclude is "
@@ -93,10 +94,27 @@ _OUTPUT = obj({**_PROPERTIES, "sweep": SWEEP_BLOCK}, required=_REQUIRED)
     "floor; repeatable, unknown tags error",
 )
 @click.option(
+    "--pin",
+    "pin",
+    default=[],
+    multiple=True,
+    help="Always probe this endpoint tag, outside the --top ranking and past the stability "
+    "floor; repeatable",
+)
+@click.option(
     "--exclude",
     default=[],
     multiple=True,
     help="Drop endpoints whose tag starts with this; repeatable, unknown tags error",
+)
+@click.option(
+    "--quantization",
+    "quantization",
+    default=[],
+    multiple=True,
+    help="Keep only endpoints served at one of these quantizations (as OpenRouter lists "
+    "them, e.g. fp8, bf16); `unknown` keeps endpoints the listing does not label. "
+    "Repeatable or comma-separated",
 )
 @click.option(
     "--min-uptime",
@@ -153,7 +171,9 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
     model: str,
     target: str | None,
     include: tuple[str, ...],
+    pin: tuple[str, ...],
     exclude: tuple[str, ...],
+    quantization: tuple[str, ...],
     min_uptime: float,
     sort_key: str,
     top: int | None,
@@ -176,6 +196,7 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
     invocation = require_invocation(ctx)
     targets = load_targets(invocation)
     gateway = gateway_target(target, targets)
+    quantization = _split_commas(quantization)
     # A mistyped TRACE is the cheapest mistake to make, so it fails before the first round
     # trip; `execute_probe` resolves the same path again for the run itself.
     resolve_trace_path(trace, invocation)
@@ -183,16 +204,20 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
     untagged = untagged_count(endpoints)
     if untagged:
         invocation.message(f"{untagged} endpoint(s) of {model} came back without a tag; skipped")
-    selection = select(
-        model,
-        gateway,
-        endpoints,
+    criteria = Criteria(
+        model=model,
+        gateway=gateway,
         include=include,
+        pin=pin,
         exclude=exclude,
         sort=sort_key,
+        top=top,
         zdr=zdr,
         uptime_floor=min_uptime,
+        check=check or top is not None,
+        quantization=quantization,
     )
+    selection = select(endpoints, criteria)
     # The listing goes out before the estimate: it is the criteria's own account of what it
     # chose, and the check results land under it once the run is confirmed.
     from provibench.bench.precheck import CheckPlan
@@ -200,7 +225,13 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
     from provibench.bench.selection_text import render_candidates
 
     lines = render_candidates(
-        selection, model=model, sort=sort_key, zdr=zdr, uptime_floor=min_uptime
+        selection,
+        model=model,
+        sort=sort_key,
+        zdr=zdr,
+        uptime_floor=min_uptime,
+        quantization=quantization,
+        pin=pin,
     )
     for line in lines:
         invocation.message(line)
@@ -213,17 +244,20 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
             f"No endpoint of {model!r} survived the selection and no native target carries it",
             hint="Pass --include TAG to keep a dropped endpoint, or check: provibench endpoints",
         )
-    criteria = Criteria(
-        model=model,
-        gateway=gateway,
-        include=include,
-        exclude=exclude,
-        sort=sort_key,
-        top=top,
-        zdr=zdr,
-        uptime_floor=min_uptime,
-        check=check or top is not None,
-    )
+    # A pin is never cut by --top, so it is checked as its own list rather than appended to
+    # the ranked one: a `keep` cut applied to a single combined list would stop before ever
+    # reaching a pin placed after enough healthy ranked candidates.
+    pin_set = set(pin)
+    ranked_candidates = [
+        spec
+        for spec, endpoint in zip(candidates, selection.kept, strict=True)
+        if endpoint.tag not in pin_set
+    ]
+    pinned_candidates = [
+        spec
+        for spec, endpoint in zip(candidates, selection.kept, strict=True)
+        if endpoint.tag in pin_set
+    ]
     return execute_probe(
         invocation,
         ProbeRequest(
@@ -244,7 +278,16 @@ def sweep(  # noqa: PLR0913 (click binds one parameter per flag; there is no gro
             parallel=parallel,
             by_price=True,
             endpoints=index,
-            pre_check=CheckPlan(candidates=candidates, keep=top) if criteria.check else None,
+            pre_check=(
+                CheckPlan(candidates=ranked_candidates, keep=top, pinned=pinned_candidates)
+                if criteria.check
+                else None
+            ),
             sweep=sweep_info(selection, criteria),
         ),
     )
+
+
+def _split_commas(values: tuple[str, ...]) -> tuple[str, ...]:
+    """Each `--quantization` occurrence, split on its own commas and stripped, flattened."""
+    return tuple(item.strip() for value in values for item in value.split(",") if item.strip())

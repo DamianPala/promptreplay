@@ -161,6 +161,8 @@ SWEEP_BLOCK_PROPERTIES: dict[str, JsonSchema] = {
     "target": string(),
     "included": array(string()),
     "excluded": array(string()),
+    "quantization": array(string()),
+    "pinned": array(string()),
     "sort": string(),
     "top": nullable_integer(),
     "zdr": boolean(),

@@ -27,6 +27,7 @@ Before the first paid run, pin where runs are written: set `PROVIBENCH_RUNS_DIR`
 A run and the later `report` that reads it resolve `runs_dir` independently, so an agent that changes directory between them looks for a run it already paid for in the wrong place.
 
 `provibench inspect sample-trace` shows the packaged trace, 30 turns of a real Claude Code session.
+`provibench endpoints MODEL` lists the model's OpenRouter endpoints with quantization, prices and recent health, without a trace and without spending.
 `provibench schema` prints the whole contract, and `provibench schema sweep` the fields of the sweep document.
 
 ## Cost and consent
@@ -49,6 +50,8 @@ provibench sweep TRACE MODEL --top N --budget USD --yes --json
 The sweep lists the model's OpenRouter endpoints, drops degraded ones and ones whose one-day uptime is below `--min-uptime` (97 % by default, the tool's own floor), ranks the rest by `--sort` (`price` by default, or `uptime`, `throughput`, `latency`; the last two need the OpenRouter key), keeps the N best that pass a one-request availability check, adds the native targets that carry the model, and probes them all.
 Native endpoints are never cut by `--top`.
 `--include PREFIX` keeps only tags starting with PREFIX and keeps them past the stability floor, and `--exclude PREFIX` drops them.
+`--quantization fp8,unknown` keeps only those quantizations, `unknown` being endpoints the listing does not label.
+`--pin TAG` always probes one endpoint alongside the `--top` ranking, for example the model vendor's own endpoint as a reference.
 `--zdr` keeps only Zero Data Retention endpoints.
 `--parallel N` overlaps endpoints.
 Rerun with `--parallel 1` before trusting small latency differences.

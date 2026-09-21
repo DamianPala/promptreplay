@@ -17,6 +17,7 @@ from provibench.bench.precheck import unavailable_reason
 from provibench.bench.probe_models import ProbeOptions
 from provibench.bench.selection import (
     UPTIME_FLOOR,
+    SelectionCriteria,
     SelectionDrop,
     SweepInfo,
     missing_percentiles,
@@ -34,6 +35,7 @@ from provibench.bench.selection_text import (
 )
 from provibench.bench.targets import Prices, RunSpec, Target
 from provibench.bench.trace import RecordedResponse, TraceEntry, Usage
+from provibench.core.errors import InvalidInput
 
 _GATEWAY = Target(
     name="or", url="https://openrouter.test/v1/messages", api_key_env="OR_KEY", kind="openrouter"
@@ -56,6 +58,7 @@ def _endpoint(
     status: int | str | None = 0,
     latency: float | None = None,
     throughput: float | None = None,
+    quantization: str | None = None,
 ) -> Endpoint:
     return Endpoint(
         provider_name=tag.split("/")[0].title(),
@@ -65,6 +68,7 @@ def _endpoint(
         status=status,
         latency_ms_30m=latency,
         throughput_30m=throughput,
+        quantization=quantization,
     )
 
 
@@ -162,9 +166,9 @@ def test_select_candidates_drops_non_zdr_first_then_the_floor() -> None:
         endpoints,
         gateway=_GATEWAY,
         model=_MODEL,
-        sort="price",
-        zdr=True,
-        zdr_tags={"novita", "relace/fp4", "gmicloud"},
+        criteria=SelectionCriteria(
+            sort="price", zdr=True, zdr_tags={"novita", "relace/fp4", "gmicloud"}
+        ),
     )
     assert [endpoint.tag for endpoint in selection.kept] == ["novita", "gmicloud"]
     assert [(drop.tag, drop.reason) for drop in selection.dropped] == [
@@ -182,7 +186,7 @@ def test_candidate_table_prints_two_decimals_only_next_to_the_floor() -> None:
         [_endpoint("parasail/fp8", uptime=96.96), _endpoint("novita", uptime=99.9)],
         gateway=_GATEWAY,
         model=_MODEL,
-        include=["parasail"],
+        criteria=SelectionCriteria(include=["parasail"]),
     )
     lines = render_candidates(selection, model=_MODEL, sort="price", zdr=False)
     row = next(line for line in lines if line.startswith("parasail/fp8"))
@@ -193,9 +197,145 @@ def test_candidate_table_prints_two_decimals_only_next_to_the_floor() -> None:
 
 def test_select_candidates_include_overrides_the_floor_for_that_tag() -> None:
     endpoints = [_endpoint("relace/fp4", status=-2), _endpoint("novita")]
-    selection = select_candidates(endpoints, gateway=_GATEWAY, model=_MODEL, include=["relace"])
+    selection = select_candidates(
+        endpoints, gateway=_GATEWAY, model=_MODEL, criteria=SelectionCriteria(include=["relace"])
+    )
     assert [endpoint.tag for endpoint in selection.kept] == ["relace/fp4", "novita"]
     assert selection.dropped == []
+
+
+def test_quantization_drops_the_wrong_and_the_unlabelled_endpoint() -> None:
+    endpoints = [
+        _endpoint("novita", quantization="fp8"),
+        _endpoint("relace/fp4", quantization="fp4"),
+        _endpoint("siliconflow", quantization=None),
+    ]
+    selection = select_candidates(
+        endpoints,
+        gateway=_GATEWAY,
+        model=_MODEL,
+        criteria=SelectionCriteria(quantization=["fp8"]),
+    )
+    assert [endpoint.tag for endpoint in selection.kept] == ["novita"]
+    assert [(drop.tag, drop.reason) for drop in selection.dropped] == [
+        ("relace/fp4", "quantization fp4"),
+        ("siliconflow", "quantization unknown"),
+    ]
+
+
+def test_quantization_unknown_keeps_the_unlabelled_endpoint() -> None:
+    endpoints = [
+        _endpoint("novita", quantization="fp8"),
+        _endpoint("siliconflow", quantization=None),
+    ]
+    selection = select_candidates(
+        endpoints,
+        gateway=_GATEWAY,
+        model=_MODEL,
+        criteria=SelectionCriteria(quantization=["fp8", "unknown"]),
+    )
+    assert {endpoint.tag for endpoint in selection.kept} == {"novita", "siliconflow"}
+    assert selection.dropped == []
+
+
+def test_quantization_matches_case_insensitively() -> None:
+    endpoints = [_endpoint("novita", quantization="FP8")]
+    selection = select_candidates(
+        endpoints,
+        gateway=_GATEWAY,
+        model=_MODEL,
+        criteria=SelectionCriteria(quantization=["fp8"]),
+    )
+    assert [endpoint.tag for endpoint in selection.kept] == ["novita"]
+
+
+def test_quantization_drops_an_included_tag_of_the_wrong_quantization() -> None:
+    """`--include` overrides the stability floor, not quantization: one axis at a time."""
+    endpoints = [_endpoint("relace/fp4", quantization="fp4", status=-2)]
+    selection = select_candidates(
+        endpoints,
+        gateway=_GATEWAY,
+        model=_MODEL,
+        criteria=SelectionCriteria(include=["relace"], quantization=["fp8"]),
+    )
+    assert selection.kept == []
+    assert [(drop.tag, drop.reason) for drop in selection.dropped] == [
+        ("relace/fp4", "quantization fp4"),
+    ]
+
+
+def test_quantization_drops_a_pinned_tag_of_the_wrong_quantization() -> None:
+    """`--pin` overrides the stability floor, not quantization either."""
+    endpoints = [_endpoint("relace/fp4", quantization="fp4")]
+    selection = select_candidates(
+        endpoints,
+        gateway=_GATEWAY,
+        model=_MODEL,
+        criteria=SelectionCriteria(pin=["relace/fp4"], quantization=["fp8"]),
+    )
+    assert selection.kept == []
+    assert [(drop.tag, drop.reason) for drop in selection.dropped] == [
+        ("relace/fp4", "quantization fp4"),
+    ]
+
+
+def test_pin_is_kept_past_the_floor_and_appended_after_the_ranking() -> None:
+    endpoints = [
+        _endpoint("novita", price=0.3, uptime=99.9),
+        _endpoint("siliconflow", price=0.2, uptime=99.5),
+        _endpoint("gmicloud", price=0.4, uptime=50.0),  # would fail the floor unpinned
+    ]
+    selection = select_candidates(
+        endpoints, gateway=_GATEWAY, model=_MODEL, criteria=SelectionCriteria(pin=["gmicloud"])
+    )
+    # ranked by price ascending among the non-pinned two, then the pin appended after
+    assert [endpoint.tag for endpoint in selection.kept] == ["siliconflow", "novita", "gmicloud"]
+    assert selection.dropped == []
+
+
+def test_multiple_pins_are_appended_in_the_order_pin_named_them() -> None:
+    endpoints = [_endpoint("a", price=0.3), _endpoint("b", price=0.1), _endpoint("c", price=0.2)]
+    selection = select_candidates(
+        endpoints, gateway=_GATEWAY, model=_MODEL, criteria=SelectionCriteria(pin=["a", "c"])
+    )
+    # "b" is the only non-pinned candidate; the pins follow in the order --pin named them,
+    # not the price order they would otherwise rank in
+    assert [endpoint.tag for endpoint in selection.kept] == ["b", "a", "c"]
+
+
+def test_pin_of_an_unknown_tag_is_a_usage_error() -> None:
+    endpoints = [_endpoint("novita")]
+    with pytest.raises(InvalidInput, match=r"--pin 'ghost' matches no endpoint"):
+        select_candidates(
+            endpoints, gateway=_GATEWAY, model=_MODEL, criteria=SelectionCriteria(pin=["ghost"])
+        )
+
+
+def test_render_candidates_shows_quant_and_only_prints_quant_and_pin_headers_when_set() -> None:
+    endpoints = [
+        _endpoint("novita", quantization="fp8"),
+        _endpoint("relace/fp4", quantization=None),
+    ]
+    selection = select_candidates(endpoints, gateway=_GATEWAY, model=_MODEL)
+
+    plain = render_candidates(selection, model=_MODEL, sort="price", zdr=False)
+    assert "quant=" not in plain[0]
+    assert "pin=" not in plain[0]
+    assert plain[1].split(" | ")[1].strip() == "quant"
+    rows = {line.split(" | ")[0].strip(): line for line in plain[3:]}
+    assert rows["novita"].split(" | ")[1].strip() == "fp8"
+    assert rows["relace/fp4"].split(" | ")[1].strip() == "-"
+
+    decorated = render_candidates(
+        selection,
+        model=_MODEL,
+        sort="price",
+        zdr=False,
+        quantization=["fp8", "unknown"],
+        pin=["novita"],
+    )
+    assert "quant=fp8,unknown" in decorated[0]
+    assert "pin=novita" in decorated[0]
 
 
 def test_unavailable_reason_quotes_the_first_guardrail_reason() -> None:
@@ -308,6 +448,71 @@ def test_a_sweep_block_written_before_the_rename_still_loads() -> None:
     ]
     # a record written before --min-uptime existed had no floor of its own; it read 97 %
     assert info.uptime_floor == UPTIME_FLOOR == 97.0
+
+
+def test_a_sweep_block_without_quantization_or_pin_reads_empty_lists() -> None:
+    """A run recorded before this slice had neither field; the record still loads."""
+    info = SweepInfo.model_validate({"model": _MODEL, "target": "or"})
+    assert info.quantization == []
+    assert info.pinned == []
+
+
+def test_selection_line_names_include_when_the_endpoints_were_named() -> None:
+    """The clause claims a name, not a ranking, when `--include` picked the endpoints."""
+    sweep = SweepInfo(
+        model=_MODEL,
+        target="or",
+        included=["novita", "relace"],
+        ranking=[
+            *(ranked(_endpoint(f"novita/{i}")) for i in range(4)),
+            *(ranked(_endpoint(f"relace/{i}")) for i in range(3)),
+            ranked(_endpoint("other")),
+        ],
+    )
+    line = selection_line(sweep)
+    assert line.startswith(
+        "Of the OpenRouter providers, the run took the 7 endpoints named with --include."
+    )
+
+
+def test_selection_line_include_count_excludes_a_pin_that_also_matches_the_prefix() -> None:
+    """A pin gets its own "plus M pinned" clause; counting it again in the --include clause
+    would double-report the same endpoint. One endpoint left in that clause reads singular."""
+    sweep = SweepInfo(
+        model=_MODEL,
+        target="or",
+        included=["novita"],
+        pinned=["novita/fp8"],
+        ranking=[ranked(_endpoint("novita")), ranked(_endpoint("novita/fp8"))],
+    )
+    line = selection_line(sweep)
+    assert line.startswith(
+        "Of the OpenRouter providers, the run took the 1 endpoint named with --include, "
+        "plus 1 pinned."
+    )
+
+
+def test_selection_line_names_a_pin_addition() -> None:
+    sweep = SweepInfo(model=_MODEL, target="or", top=3, pinned=["gmicloud"])
+    line = selection_line(sweep)
+    assert line.startswith(
+        "Of the OpenRouter providers, the run took the 3 cheapest by listed price, plus 1 pinned."
+    )
+
+
+def test_selection_line_states_a_quantization_drop_in_words() -> None:
+    sweep = SweepInfo(
+        model=_MODEL,
+        target="or",
+        quantization=["fp8", "unknown"],
+        dropped=[
+            SelectionDrop.for_spec(pinned_spec(_GATEWAY, _MODEL, "relace/fp4"), "quantization fp4"),
+        ],
+    )
+    line = selection_line(sweep)
+    assert (
+        "relace/fp4 was skipped because its quantization (fp4) was not among fp8, unknown." in line
+    )
 
 
 def test_selection_line_states_a_status_drop_and_an_uptime_drop_in_words() -> None:

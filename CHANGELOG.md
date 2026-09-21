@@ -34,6 +34,11 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
   and `--top N`
 - `sweep --min-uptime PERCENT` sets the one-day uptime floor an endpoint must clear (97 by
   default); the run records it as `sweep.uptime_floor` and the selection sentence names it
+- `sweep --quantization VALUES` keeps only endpoints served at one of the named quantizations
+  (`unknown` for endpoints the listing does not label); the candidates table gains a `quant`
+  column and the run records the filter as `sweep.quantization`
+- `sweep --pin TAG` always probes an endpoint alongside the `--top` ranking, past the
+  stability floor and outside the ranking's own cut; the run records it as `sweep.pinned`
 - `sweep` availability pre-check: one `max_tokens 1` request per ranked candidate, so an
   endpoint the account's settings exclude is named with the gateway's reason instead of
   failing three cold requests
@@ -150,6 +155,9 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
   cannot disagree on a number
 - Endpoint labels are shortened under a caption instead of being clipped into identical rows;
   a sweep's native reference row keeps its label whole
+- `sweep`'s selection sentence names `--include` ("the N endpoints named with --include")
+  instead of claiming a ranking that never happened ("the N cheapest by listed price") when
+  the endpoints were named rather than ranked
 - A slash tag such as `@novita/fp8` parses as a provider pin; only `@preset/...` stays part
   of the model name
 - The `--budget` refusal names the ways to fit: fewer endpoints or rungs, lower `--repeats`, or
