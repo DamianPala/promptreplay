@@ -40,6 +40,10 @@ _METHOD_NOTES = (cache_mode_note(True), cache_mode_note(False))
 
 _OUTPUT_TOKENS_PREFIX = "ignored the one-token limit"
 
+_CACHED_COLD_MARK = "reported cached tokens"
+"""The per-endpoint cached-cold note (`probe_notes._cached_cold_note`), which the page folds
+into one sentence for every endpoint (`_cached_cold_caveat`) instead of listing per row."""
+
 
 def run_method_sentence(summaries: Sequence[ProbeSummary], document: Document) -> str | None:
     """The sentence above the endpoint table: how many turns, at what sizes, how many repeats.
@@ -95,6 +99,9 @@ def caveats_section(
     nonce = _nonce_caveat(document)
     if nonce:
         add(escape(nonce))
+    cached_cold = _cached_cold_caveat(summaries, labels, document)
+    if cached_cold:
+        add(escape(cached_cold))
 
     for line in _selection_lines(document):
         add(escape(line))
@@ -159,7 +166,44 @@ def _add_remaining_notes(
 def _is_categorized(note: str) -> bool:
     """Whether `note` already has its own caveat slot, so it is skipped from the leftovers."""
     return (
-        note in _METHOD_NOTES or "burst" in note.lower() or note.startswith(_OUTPUT_TOKENS_PREFIX)
+        note in _METHOD_NOTES
+        or "burst" in note.lower()
+        or note.startswith(_OUTPUT_TOKENS_PREFIX)
+        or _CACHED_COLD_MARK in note
+    )
+
+
+def _cached_cold_caveat(
+    summaries: Sequence[ProbeSummary], labels: Sequence[str], document: Document
+) -> str | None:
+    """One sentence for every endpoint whose cold writes reported cached tokens.
+
+    The text report says it once per endpoint (`probe_notes`), which is its per-row shape;
+    six near-identical lines on the page bury the one fact they share, so the page names
+    the endpoints inside one sentence and gives each its count. Nothing under `--warm`,
+    where a cold write hitting the cache is the thing the run set out to measure.
+    """
+    options = as_document(document.get("options")) or {}
+    if options.get("warm") is True:
+        return None
+    parts: list[str] = []
+    for summary, label in zip(summaries, labels, strict=True):
+        colds = [rung for rung in summary.rungs if rung.prompt_cold > 0]
+        hit = sum(1 for rung in colds if rung.cached_cold > 0)
+        if hit:
+            noun = "turn" if len(colds) == 1 else "turns"
+            parts.append(f"{label} on {hit} of {len(colds)} {noun}")
+    if not parts:
+        return None
+    plural = len(parts) > 1
+    verdict = (
+        "Their caches are not strict prefix caches, or their counts are not what they say."
+        if plural
+        else "Its cache is not a strict prefix cache, or its count is not what it says."
+    )
+    return (
+        f"Cold writes reported cached tokens although the nonce made them new prompts: "
+        f"{join_and(parts)}. {verdict}"
     )
 
 

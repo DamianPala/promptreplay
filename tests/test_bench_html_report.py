@@ -905,13 +905,30 @@ def test_cached_cold_note_is_silent_when_every_cold_write_is_actually_cold() -> 
     assert not any("reported cached tokens" in note for note in summary.notes)
 
 
-def test_cached_cold_caveat_appears_in_the_html_pages_caveats_list() -> None:
+def test_cached_cold_caveat_is_one_sentence_naming_every_endpoint() -> None:
+    """The text report says it per endpoint; the page folds the endpoints into one sentence
+    with each one's count, right after the nonce caveat, and drops the per-row copies."""
     html = render_html(cached_cold_probe_document())
     caveats = html[html.index('<section class="caveats">') :]
-    assert (
-        "1 of 1 cold write reported cached tokens (the largest 15,040 of 19,542) although "
-        "the nonce made it a new prompt" in caveats
+    assert caveats.count("reported cached tokens") == 1
+    assert "the largest 15,040 of 19,542" not in caveats
+    sentence = caveats[caveats.index("Cold writes reported cached tokens") :]
+    assert sentence.startswith(
+        "Cold writes reported cached tokens although the nonce made them new prompts: "
+        "or:model@novita on 1 of 1 turn. Its cache is not a strict prefix cache, or its count "
+        "is not what it says."
     )
+    nonce = caveats.index("none came from earlier traffic")
+    assert nonce < caveats.index("Cold writes reported cached tokens")
+
+
+def test_cached_cold_caveat_is_silent_under_warm() -> None:
+    document = cached_cold_probe_document()
+    options = dict(as_document(document["options"]) or {})
+    options["warm"] = True
+    document["options"] = options
+    html = render_html(document)
+    assert "reported cached tokens" not in html
 
 
 def test_a_2xx_error_types_reads_provider_error_and_its_kind() -> None:
