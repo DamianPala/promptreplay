@@ -3,9 +3,10 @@
 A rung is a 1-based turn `k` of the conversation. The cold request sends turn `k`, which
 writes the cache; the warm requests send turn `k+1`, whose prompt starts with the same
 bytes, so what they read back measures whether the provider cached the prefix and whether
-the next request landed on a replica that has it. Each rung carries its own nonce, so rung
-30 does not read what rung 1 wrote; a cold request that fails skips its rung, because there
-is nothing cached to warm — a skipped rung is not a miss.
+the next request landed on a replica that has it. Each rung and endpoint carries its own
+nonce, so rung 30 does not read what rung 1 wrote and one endpoint never reads what another
+endpoint of the same run wrote; a cold request that fails skips its rung, because there is
+nothing cached to warm — a skipped rung is not a miss.
 
 Two requests ride along. The throughput request sends the warm body once more, streamed and
 with a real output budget, which is where time-to-first-token, tokens per second and the
@@ -67,9 +68,9 @@ class _Run:
     rungs: list[int]
     counts: list[int]
 
-    def nonce(self, rung: int) -> str | None:
-        """The rung's nonce, or `None` in warm mode, where no nonce is stamped."""
-        return None if self.warm else probe_nonce(self.run_hex, rung)
+    def nonce(self, rung: int, endpoint: str) -> str | None:
+        """The rung and endpoint's nonce, or `None` in warm mode, where no nonce is stamped."""
+        return None if self.warm else probe_nonce(self.run_hex, rung, endpoint)
 
 
 async def run_probe(
@@ -179,7 +180,7 @@ async def _probe_spec(
     """Send every rung of one spec; a rung whose cold request fails is skipped."""
     ttl_rung: _Rung | None = None
     for rung, count in zip(run.rungs, run.counts, strict=True):
-        nonce = run.nonce(rung)
+        nonce = run.nonce(rung, probe.spec.label)
         cold_entry = conversation[rung - 1]
         cold = await _send(
             probe, cold_entry, _body(cold_entry, probe, nonce), ProbeCall(rung, "cold", 0, nonce)

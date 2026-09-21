@@ -12,16 +12,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from provibench.bench.labels import column_labels, named, text_table, uncovered_width
+from provibench.bench.labels import column_labels, named, text_table
 from provibench.bench.probe_summary import ProbeSummary, RungSummary, TtlRead
 from provibench.bench.summary import cache_mode_note, cache_mode_sentence
 
 _HIT_FULL = 0.98
 """A cached fraction at or above this renders as a full hit: Claude Code moves the marker."""
-_LABEL_FLOOR = 16
-"""Narrowest label column: below this a row loses the name it is read by."""
-_LABEL_WIN = 24
-"""Widest a row the caption does not cover may win the plan, before the budget cuts it."""
+_LABEL_FLOOR = 32
+"""Narrowest label column: below this a row loses the name it is read by. Wide enough that a
+provider tag like `@sail-research/fp8` or `@sail-research/us` survives whole; there is
+plenty of room in a table capped at `_MAX_TABLE`."""
 _MIN_DRIFT = 9
 """Narrowest drift column that still shows at least one whole marker."""
 _SEPARATOR = " | "
@@ -207,23 +207,15 @@ def _planned_widths(summaries: Sequence[ProbeSummary], rung_columns: Sequence[st
     showing whole even when that runs the table past `_MAX_TABLE`, so only `_MIN_DRIFT`
     columns are reserved for it here, as a floor under the label's own budget.
 
-    A label the caption does not cover — the native endpoint next to a column of gateway
-    tags — wins the width it needs, up to `_LABEL_WIN`, even past what the endpoint table
-    can otherwise spare the drift floor: the `@tag` rows are short and can be elided, while that
-    row is the reference every other row is read against (slice 3c), the same trade item 8
-    made so a drift marker is never elided either. A dense table (many providers plus the
-    `1st hit %` column) can end up past `_MAX_TABLE` by the width of that one label.
-
     A width that would name two rows alike is skipped, and the label is never cut below
     `_LABEL_FLOOR` — past that a readable name beats the column budget. A row wider than
     `_MAX_TABLE` is still possible: a late TTL read writes `(+6)` into the rung table, a
-    drift marker longer than the floor, or the uncovered label above, are all worth the
-    columns they cost.
+    drift marker longer than the floor, or a dense table whose spare width falls under the
+    floor, are all worth the columns they cost.
     """
     spare = _MAX_TABLE - _endpoint_middle(summaries) - _MIN_DRIFT
     budget = min(spare, _MAX_TABLE - _rung_span(summaries, rung_columns))
-    required = uncovered_width([summary.label for summary in summaries], cap=_LABEL_WIN)
-    for width in range(max(budget, _LABEL_FLOOR, required), _LABEL_FLOOR - 1, -1):
+    for width in range(max(budget, _LABEL_FLOOR), _LABEL_FLOOR - 1, -1):
         labels = _labels_of(summaries, label_width=width)[1]
         if named(labels):
             return width

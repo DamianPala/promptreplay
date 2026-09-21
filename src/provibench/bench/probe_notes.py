@@ -12,8 +12,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from provibench.bench.labels import join_and, size_label
-from provibench.bench.probe_errors import skip_note
-from provibench.bench.probe_models import ProbeResult, is_failed
+from provibench.bench.probe_errors import error_type, skip_note
+from provibench.bench.probe_models import ProbeResult, is_failed, is_served
 from provibench.bench.probe_stream import BURST_NOTE
 
 __all__ = ["probe_notes"]
@@ -30,7 +30,9 @@ _OK_MIN, _OK_MAX = 200, 300
 """The 2xx band `probe_models.is_served` reads a status against."""
 
 
-def probe_notes(records: Sequence[ProbeResult], models: Sequence[str]) -> list[str]:
+def probe_notes(
+    records: Sequence[ProbeResult], models: Sequence[str], *, warm: bool = False
+) -> list[str]:
     """What a spec's records amount to beyond the numbers: the notes a reader is owed.
 
     Every renderer already prefixes a note with its endpoint's own label (the text report's
@@ -50,6 +52,9 @@ def probe_notes(records: Sequence[ProbeResult], models: Sequence[str]) -> list[s
     fallbacks = sum(1 for r in records if r.cached == 0 and (r.native_tokens_cached or 0) > 0)
     if fallbacks:
         notes.append(_fallback_note(fallbacks))
+    cached_cold = _cached_cold_note(records, warm=warm)
+    if cached_cold:
+        notes.append(cached_cold)
     if len(models) > 1:
         notes.append(f"responses named more than one model: {', '.join(models)}")
     return notes
@@ -78,11 +83,17 @@ def _failure_reason(record: ProbeResult) -> str:
 
     A gateway answers `200` and puts the upstream failure in the body often enough that the
     status alone would say `failed (HTTP 200)`, which reads as a success and a failure at
-    once; a 2xx that still carried an error payload is named for what it was instead.
+    once; a 2xx that still carried an error payload is named for what it was instead. The
+    error body's own `error_type` (OpenRouter) or `type` (Anthropic) is appended when there
+    is one: `HTTP 502` alone says the provider was down, but `HTTP 502, provider_unavailable`
+    says the model refused, which is what a reader acts on differently.
     """
+    kind = error_type(record.error)
     if _OK_MIN <= record.status < _OK_MAX:
-        return "provider error"
-    return f"HTTP {record.status}" if record.status > 0 else "connection error"
+        base = "provider error"
+    else:
+        base = f"HTTP {record.status}" if record.status > 0 else "connection error"
+    return f"{base}, {kind}" if kind else base
 
 
 def _error_reason_line(role: str, reason: str, count: int) -> str:
@@ -96,6 +107,30 @@ def _fallback_note(fallbacks: int) -> str:
     return (
         f"did not report the cached share for {fallbacks} {plural}; using OpenRouter's own "
         "billing record instead."
+    )
+
+
+def _cached_cold_note(records: Sequence[ProbeResult], *, warm: bool) -> str | None:
+    """A cold write that reports cached tokens is not supposed to happen: the nonce made it a
+    new prompt, so a reader has to be told rather than left to notice a suspiciously high
+    `cached %`. `None` under `--warm`, where a cold write is expected to hit -- that is the
+    cache the run asked to measure as found, not a surprise.
+    """
+    if warm:
+        return None
+    colds = [r for r in records if r.role == "cold" and is_served(r)]
+    if not colds:
+        return None
+    hit = [r for r in colds if r.cached > 0]
+    if not hit:
+        return None
+    worst = max(hit, key=lambda r: r.cached)
+    word = "cold write" if len(colds) == 1 else "cold writes"
+    made = "it a new prompt" if len(hit) == 1 else "them new prompts"
+    return (
+        f"{len(hit)} of {len(colds)} {word} reported cached tokens (the largest "
+        f"{worst.cached:,} of {worst.prompt_total:,}) although the nonce made {made}. "
+        "The provider's cache is not a strict prefix cache, or its count is not what it says."
     )
 
 

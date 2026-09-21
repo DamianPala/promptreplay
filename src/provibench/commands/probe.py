@@ -270,6 +270,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
             unpinned_gateway=spec.kind == "openrouter" and not spec.providers,
             trace_prompt_tokens=trace_prompt_tokens,
             listing=listing,
+            warm=options.warm,
         )
         for spec in checked.specs
     ]

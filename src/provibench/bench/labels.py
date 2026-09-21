@@ -32,7 +32,6 @@ __all__ = [
     "rendered",
     "size_label",
     "text_table",
-    "uncovered_width",
 ]
 
 
@@ -57,12 +56,14 @@ def column_labels(labels: Sequence[str], *, label_width: int) -> tuple[str | Non
 
     A `target:model` that at least two rows share moves into the caption, so those rows
     show their provider tails (`@novita`, `@gmicloud`) while a row of another model keeps
-    its own name. The caption may name several shared prefixes; when nothing is shared
-    there is no caption and every row keeps its whole label. A shortened set that repeats
-    is thrown away: two rows reading the same string name neither of them.
+    its own name. A single row does the same when its own label does not fit `label_width`:
+    a one-endpoint table still reads `@sail-research/fp8` rather than an elided full label.
+    The caption may name several shared prefixes; when nothing is shared there is no caption
+    and every row keeps its whole label. A shortened set that repeats is thrown away: two
+    rows reading the same string name neither of them.
     """
     heads = [_head(label) for label in labels]
-    shared = _shared_heads(labels)
+    shared = _shared_heads(labels, label_width=label_width)
     column = [
         _short_label(label, head, shared, label_width)
         for label, head in zip(labels, heads, strict=True)
@@ -72,19 +73,6 @@ def column_labels(labels: Sequence[str], *, label_width: int) -> tuple[str | Non
         column = [elide(label, label_width) for label in labels]
     caption = "endpoints: " + ", ".join(f"{head}@<provider>" for head in shared) if shared else None
     return caption, column
-
-
-def uncovered_width(labels: Sequence[str], *, cap: int) -> int:
-    """The width the widest row the caption cannot shorten needs, capped at `cap`.
-
-    Those rows are the ones a table exists to compare against: a native endpoint's
-    `target:model` sits next to a column of gateway `@tags`, and cut in the middle it reads
-    as one more of them — the caption names the other model, so the row that is not covered
-    is exactly the one whose name has to survive whole.
-    """
-    shared = set(_shared_heads(labels))
-    widths = [len(label) for label in labels if _head(label) not in shared]
-    return min(cap, max(widths, default=0))
 
 
 def elide(cell: str, width: int, *, keep_end: bool = True) -> str:
@@ -134,10 +122,24 @@ def _head(label: str) -> str:
     return head if at else label
 
 
-def _shared_heads(labels: Sequence[str]) -> list[str]:
-    """The `target:model` heads at least two rows share: those move into the caption."""
+def _shared_heads(labels: Sequence[str], *, label_width: int | None = None) -> list[str]:
+    """The `target:model` heads that move into the caption: shared by at least two rows, or,
+    when there is exactly one row and `label_width` is given, that row's own head if the
+    whole label does not fit it. `label_width=None` (the default, used where no row's own
+    width is at hand) never folds a lone row, which is what `column_labels` opts into and
+    every other caller keeps.
+    """
     heads = [_head(label) for label in labels]
-    return sorted({head for head in heads if head and heads.count(head) > 1})
+    shared = sorted({head for head in heads if head and heads.count(head) > 1})
+    if shared or label_width is None or len(labels) != 1:
+        return shared
+    [label], [head] = labels, heads
+    # `head == label` means the label has no `@provider` to split off (a native endpoint):
+    # folding it would name a caption's `@<provider>` next to a row that repeats the whole
+    # label anyway, which explains nothing a plain elided row does not already say.
+    if not head or head == label or len(label) <= label_width:
+        return []
+    return [head]
 
 
 def _short_label(label: str, head: str, shared: Sequence[str], width: int) -> str:

@@ -102,6 +102,10 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
   recorded trace would bill in prompt tokens, per endpoint, at its measured effective price
 - `config init [--force]`: copies the packaged `targets.toml` to its effective user path, so
   `config show`'s `packaged` source has a file the user can actually edit
+- A caveat when a cold write reports cached tokens despite the nonce making it a new prompt:
+  `N of M cold writes reported cached tokens (the largest ... of ...)`, printed under the
+  table and listed in the HTML page's Caveats; silent under `--warm`, where a cold write
+  hitting the cache is the thing being measured
 
 ### Changed
 
@@ -152,6 +156,16 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
   `--no-throughput`
 - The packaged trace is addressed as `sample-trace` (was `sample`), so `inspect sample-trace`
   no longer reads like a subcommand
+- The probe nonce now carries the endpoint as well as the rung
+  (`probe_nonce(run_hex, rung, endpoint)`), so two OpenRouter tags of one provider probed in
+  the same run no longer read back each other's cache writes
+- A failed request's note carries the error body's `error_type` next to its status
+  (`HTTP 502, provider_unavailable`), or `provider error, <error_type>` for a 2xx response
+  that still carried an error payload
+- The endpoint column's floor width is 32 (was 16), so a provider tag like
+  `@sail-research/fp8` prints whole instead of clipped
+- A single endpoint's own `target:model` prefix folds into the caption when its whole label
+  does not fit the column, which until now only happened when two rows shared the prefix
 
 ### Fixed
 

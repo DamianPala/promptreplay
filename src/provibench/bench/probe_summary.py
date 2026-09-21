@@ -241,6 +241,7 @@ def summarize_probe(
     unpinned_gateway: bool = False,
     trace_prompt_tokens: int | None = None,
     listing: Mapping[str, Prices] | None = None,
+    warm: bool = False,
 ) -> ProbeSummary:
     """Pool a spec's rungs: hit rate over every served warm read, and the price it implies.
 
@@ -250,6 +251,8 @@ def summarize_probe(
     endpoint listing, passed through to `choose_prices`, which prefers it over fitting a
     served provider's rate from its billed records. `trace_prompt_tokens`, when known, turns
     the effective price into `session_prompt_usd`, the number a session like the trace bills.
+    `warm` silences the cached-cold caveat: under `--warm` a cold write hitting the cache is
+    the thing the run asked to measure, not a surprise.
     """
     rungs = [summarize_rung(label, rung, _rung_records(records, rung)) for rung in _rungs(records)]
     served = [record for record in records if record.role == "warm" and is_served(record)]
@@ -272,7 +275,7 @@ def summarize_probe(
     billed_usd = _billed_total(records)
     output_tokens, reads = output_token_stats(records)
     rate_limited = rate_limited_count(records)
-    all_notes = [*notes, *probe_notes(records, models)]
+    all_notes = [*notes, *probe_notes(records, models, warm=warm)]
     all_notes.extend(
         note
         for note in (

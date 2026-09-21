@@ -101,7 +101,7 @@ Provider pins apply to OpenRouter targets.
 1. A rung is a recorded turn `k`; the defaults are the smallest, middle, and largest turns that have a following turn.
 2. The cold request sends turn `k` once and writes the provider's prefix cache.
    Each repeat request sends turn `k+1`, whose prompt starts with the same bytes.
-3. Each rung gets a nonce in the first system block, so a cold request cannot inherit a cache from an earlier run or another rung.
+3. Each rung and endpoint gets a nonce in the first system block, so a cold request cannot inherit a cache from an earlier run, another rung, or another endpoint of the same run.
    `--warm` drops the nonce and measures the cache as found.
 4. One streamed generation per rung measures time to first token, tokens per second, and a short output fingerprint.
    `--no-throughput` skips it.

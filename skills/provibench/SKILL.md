@@ -89,7 +89,7 @@ provibench probe TRACE ENDPOINT --budget USD --yes --json
 
 The defaults probe the smallest, middle and largest turn with `--repeats 6,2,2` reads.
 Pass `--rungs` to check a particular prompt size, `--repeats` for more reads, and `--ttl 60,300` to re-read the first rung's cache after that many seconds.
-Each rung carries a fresh nonce, so nothing from earlier traffic counts as a hit.
+Each rung and endpoint carries a fresh nonce, so nothing from earlier traffic or another endpoint of the same run counts as a hit.
 `--warm` drops the nonce and measures the cache as it exists now.
 Several endpoints in one command are probed in one run.
 

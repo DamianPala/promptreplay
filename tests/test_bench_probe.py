@@ -36,7 +36,7 @@ from provibench.bench.probe_summary import (
     summarize_probe,
     summarize_rung,
 )
-from provibench.bench.probe_tables import probe_labels, probe_markdown, render_probe
+from provibench.bench.probe_tables import probe_blocks, probe_labels, probe_markdown, render_probe
 from provibench.bench.rungs import (
     broadcast_repeats,
     parse_int_list,
@@ -307,7 +307,17 @@ def test_require_stampable_names_the_turn_and_the_way_out() -> None:
 
 def test_nonces_derive_from_the_run_hex() -> None:
     assert run_nonce("abc123") == "provibench-run:abc123"
-    assert probe_nonce("abc123", 13) == "provibench-probe:abc123:13"
+    assert probe_nonce("abc123", 13, "fake:a") == "provibench-probe:abc123:13:fake:a"
+
+
+def test_probe_nonce_differs_by_endpoint_not_just_by_rung() -> None:
+    # two OpenRouter tags of one provider probed in the same run must never send the same
+    # bytes, or the second one's "cold" write reads back the first one's cache
+    a = probe_nonce("abc123", 1, "or:model@sail-research/us")
+    b = probe_nonce("abc123", 1, "or:model@sail-research/fp8")
+    assert a != b
+    assert a == probe_nonce("abc123", 1, "or:model@sail-research/us")  # same endpoint, same
+    assert a.startswith("provibench-probe:abc123:1:")
 
 
 # --- rung selection -----------------------------------------------------------
@@ -392,7 +402,7 @@ def test_probe_options_resolved_rejects_an_impossible_rung() -> None:
 # --- the run ------------------------------------------------------------------
 
 
-def test_run_probe_sends_cold_then_warm_with_one_nonce_per_rung(
+def test_run_probe_sends_cold_then_warm_with_one_nonce_per_rung_and_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bodies: list[dict[str, Any]] = []
@@ -418,14 +428,55 @@ def test_run_probe_sends_cold_then_warm_with_one_nonce_per_rung(
         ("fake:a", 3, "cold", 0),
         ("fake:a", 3, "warm", 1),
     ]
-    by_rung: dict[int, set[str]] = {}
+    nonces: list[str] = []
+    by_rung_and_label: dict[tuple[int, str], set[str]] = {}
     for body in bodies:
         nonce = body["system"][0]["text"].splitlines()[0]
-        by_rung.setdefault(int(nonce.rsplit(":", 1)[1]), set()).add(nonce)
-    assert set(by_rung) == {1, 3}
-    assert all(len(nonces) == 1 for nonces in by_rung.values())  # one nonce per rung
-    assert by_rung[1] != by_rung[3]  # rung 3 cannot read rung 1's write
-    assert all(nonce.startswith(f"provibench-probe:{run.run_hex}:") for nonce in by_rung[1])
+        nonces.append(nonce)
+        rung, label = int(nonce.split(":")[2]), nonce.split(":", 3)[3]
+        by_rung_and_label.setdefault((rung, label), set()).add(nonce)
+    assert set(by_rung_and_label) == {
+        (1, "fake:a"),
+        (3, "fake:a"),
+        (1, "fake:b"),
+        (3, "fake:b"),
+    }
+    # one nonce per rung and endpoint: every request of one rung of one endpoint agrees
+    assert all(len(group) == 1 for group in by_rung_and_label.values())
+    [rung1_a], [rung3_a], [rung1_b] = (
+        by_rung_and_label[1, "fake:a"],
+        by_rung_and_label[3, "fake:a"],
+        by_rung_and_label[1, "fake:b"],
+    )
+    assert rung1_a != rung3_a  # rung 3 cannot read rung 1's write
+    assert rung1_a != rung1_b  # "fake:b" cannot read what "fake:a" wrote at the same rung
+    assert all(nonce.startswith(f"provibench-probe:{run.run_hex}:") for nonce in nonces)
+
+
+def test_run_probe_gives_two_endpoints_of_one_run_and_rung_different_nonces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two OpenRouter tags of one provider, probed one after another in the same run, must
+    never send the same bytes: the second tag's "cold" write would otherwise be a full cache
+    hit of the first tag's write, and the report would print it as unrealistically cheap."""
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return _ok()
+
+    us = _spec("model-a", providers=["sail-research/us"])
+    fp8 = _spec("model-a", providers=["sail-research/fp8"])
+    _run_probe(
+        monkeypatch,
+        [us, fp8],
+        _trace(),
+        ProbeOptions(rungs=[1], repeats=[1], gap_s=0.0, throughput=False),
+        handler,
+    )
+    first_nonce = bodies[0]["system"][0]["text"].splitlines()[0]
+    second_nonce = bodies[2]["system"][0]["text"].splitlines()[0]  # the other spec's cold write
+    assert first_nonce != second_nonce
 
 
 def test_run_probe_skips_a_rung_whose_cold_request_failed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1295,11 +1346,64 @@ def test_column_labels_elide_a_long_label_keeping_its_provider() -> None:
     assert labels == ["@novita", "@gmicloud"]
     assert all(len(label) <= 40 for label in labels)
 
-    lone = _column_labels([_summary("openrouter:a-very-long-target-name/and-a-long-model@novita")])[
-        1
+    # A lone row too long for the width folds its head into the caption instead of eliding:
+    # either way the `@provider` that names the row survives, and nothing is cut.
+    head = "openrouter:a-very-long-target-name/and-a-long-model"
+    lone_caption, lone = _column_labels([_summary(f"{head}@novita")])
+    assert lone_caption == f"endpoints: {head}@<provider>"
+    assert lone == ["@novita"]
+
+
+def test_column_labels_folds_a_lone_row_too_long_for_the_width() -> None:
+    caption, labels = column_labels(
+        ["openrouter:z-ai/glm-5.3-flash@sail-research/fp8"], label_width=32
+    )
+    assert caption == "endpoints: openrouter:z-ai/glm-5.3-flash@<provider>"
+    assert labels == ["@sail-research/fp8"]
+
+
+def test_column_labels_leaves_a_lone_row_alone_when_it_fits_or_has_no_provider() -> None:
+    """The two cases the lone-row fold must not take: a label that already fits keeps its
+    whole name, and a native label has no `@provider` tail to leave behind in the column."""
+    assert column_labels(["or:model@novita"], label_width=32) == (None, ["or:model@novita"])
+    caption, labels = column_labels(
+        ["deepseek:deepseek-chat-v3.1-baseline-may-2026"], label_width=32
+    )
+    assert caption is None
+    assert labels == ["deepseek:…v3.1-baseline-may-2026"]
+
+
+def test_column_labels_does_not_fold_two_differently_headed_rows_even_when_long() -> None:
+    """Two or more rows keep today's rule: a head moves into the caption only when at least
+    two rows share it, even when each row's own label does not fit the width alone."""
+    caption, labels = column_labels(
+        [
+            "openrouter:z-ai/glm-5.3-flash@sail-research/fp8",
+            "openrouter:another-model/name@another-provider/tag",
+        ],
+        label_width=32,
+    )
+    assert caption is None
+    assert len(set(labels)) == 2
+
+
+def test_label_floor_of_32_keeps_provider_tags_whole_in_probe_blocks() -> None:
+    summaries = [
+        _summary("openrouter:z-ai/glm-5.3-flash@sail-research/us"),
+        _summary("openrouter:z-ai/glm-5.3-flash@sail-research/fp8"),
     ]
-    assert len(lone[0]) <= 40
-    assert lone[0].endswith("@novita")  # the part that names the row survives the cut
+    blocks = probe_blocks(summaries)
+    labels = [row[0] for row in blocks.endpoint.rows]
+    assert labels == ["@sail-research/us", "@sail-research/fp8"]
+
+
+def test_probe_blocks_folds_a_single_endpoints_head_when_too_long_for_the_floor() -> None:
+    """A one-endpoint probe still gets its `target:model` folded into the caption when its
+    own label does not fit -- previously only a shared head across two rows moved up."""
+    summaries = [_summary("openrouter:z-ai/glm-5.3-flash@sail-research/fp8")]
+    blocks = probe_blocks(summaries)
+    assert blocks.caption == "endpoints: openrouter:z-ai/glm-5.3-flash@<provider>"
+    assert [row[0] for row in blocks.endpoint.rows] == ["@sail-research/fp8"]
 
 
 def test_render_probe_uses_the_same_labels_in_both_tables() -> None:
@@ -1387,8 +1491,9 @@ def test_session_footer_lines_is_empty_without_a_trace_prompt_token_total() -> N
 def test_render_probe_fits_120_columns_with_every_cell_populated() -> None:
     """The columns between the label and drift never truncate a value, and the table stays
     inside the relaxed plan. Both the label (O2) and the drift column (item 8) are allowed to
-    push a whole table past 120 columns on purpose, so the budget is 120 plus the widest a
-    label may win (`_LABEL_WIN`); past that the plan has stopped meaning anything."""
+    push a whole table past 120 columns on purpose, so the budget is 120 plus the label floor
+    (`_LABEL_FLOOR`), the widest a label can add once the spare width falls under it; past
+    that the plan has stopped meaning anything."""
     summaries = [
         _summary(
             "deepseek:deepseek-v4.1-flash",
@@ -1412,7 +1517,7 @@ def test_render_probe_fits_120_columns_with_every_cell_populated() -> None:
             drift="provider,model,tokens+123%,fingerprint",
         ),
     ]
-    budget = 120 + 24  # `probe_tables._MAX_TABLE` plus `_LABEL_WIN`, the widest a label wins
+    budget = 120 + 32  # `probe_tables._MAX_TABLE` plus `_LABEL_FLOOR`, the widest a label adds
     blocks = render_probe(summaries).split("\n\n")
     spec_block, rung_block = blocks[-2], blocks[-1]
     for line in spec_block.splitlines():
@@ -1689,8 +1794,13 @@ def test_a_label_the_caption_does_not_cover_keeps_its_target_head() -> None:
     _, labels = _column_labels(summaries, label_width=17)
     assert labels[2] == "deepseek:…at-v3.1"  # the head whole, the model's tail for the rest
 
+    # A name long enough to still need eliding at the label floor of 32: short enough to fit
+    # under it, like `deepseek-chat-v3.1` above, would render whole and prove nothing here.
+    long_summaries = [*summaries[:2], _summary("deepseek:deepseek-chat-v3.1-baseline-may-2026")]
     endpoint_block = next(
-        block for block in render_probe(summaries).split("\n\n") if block.startswith("endpoint ")
+        block
+        for block in render_probe(long_summaries).split("\n\n")
+        if block.startswith("endpoint ")
     )
     native = next(line for line in endpoint_block.splitlines() if line.startswith("deepseek"))
     assert native.startswith("deepseek:") and "…" in native

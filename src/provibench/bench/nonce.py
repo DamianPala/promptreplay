@@ -5,9 +5,10 @@ otherwise read back whatever an earlier run â€” or the operator's live session â
 behind. Stamping a fresh nonce gives every run its own cache namespace: a cold request is
 cold because nobody has ever sent those bytes, not because we hoped the cache expired.
 
-A probe run uses one nonce per rung (`provibench-probe:<run hex>:<rung>`), so rung 30 does
-not read back what rung 1 wrote; a full replay uses one nonce for the whole run, so turn 2
-reads what turn 1 wrote, which is the effect being measured.
+A probe run uses one nonce per rung and endpoint (`provibench-probe:<run hex>:<rung>:<endpoint>`),
+so rung 30 does not read back what rung 1 wrote and one endpoint never reads back what
+another endpoint wrote; a full replay uses one nonce for the whole run, so turn 2 reads what
+turn 1 wrote, which is the effect being measured.
 """
 
 from __future__ import annotations
@@ -31,9 +32,15 @@ def run_nonce(run_hex: str) -> str:
     return f"{RUN_PREFIX}{run_hex}"
 
 
-def probe_nonce(run_hex: str, rung: int) -> str:
-    """The nonce for one probe rung, identical across every spec of the run."""
-    return f"{PROBE_PREFIX}{run_hex}:{rung}"
+def probe_nonce(run_hex: str, rung: int, endpoint: str) -> str:
+    """The nonce for one probe rung of one endpoint.
+
+    `endpoint` is the spec label (`target:model@provider`) as `ProbeContext`/`probe.py` know
+    it: plain ASCII with `:`/`@`/`/`, so it needs no encoding. Two OpenRouter tags of one
+    provider probed in the same run are otherwise indistinguishable requests sent one after
+    another, and the second one's "cold" write would be a full cache hit of the first.
+    """
+    return f"{PROBE_PREFIX}{run_hex}:{rung}:{endpoint}"
 
 
 def has_system_text(body: dict[str, Any]) -> bool:

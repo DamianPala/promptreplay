@@ -225,6 +225,36 @@ def failing_probe_document() -> Document:
     }
 
 
+def cached_cold_probe_document() -> Document:
+    """One endpoint whose cold write reports cached tokens although the nonce made it a new
+    prompt: exercises the cached-cold caveat, both the per-endpoint note and the page's
+    Caveats list."""
+    records = [
+        probe_record(cached=15_040, prompt_total=19_542),
+        probe_record(role="warm", attempt=1, cached=19_542, prompt_total=19_542, seq=2),
+    ]
+    summary = summarize_probe("or:model@novita", [ProbeResult.model_validate(r) for r in records])
+    return {
+        "run_dir": "/runs/t/20260101-000000",
+        "trace": "t",
+        "conversation": "c1",
+        "created": "20260101-000000",
+        "run_hex": None,
+        "protocol": "probe",
+        "options": {
+            "rungs": [1],
+            "repeats": [1],
+            "gap_s": 1.0,
+            "warm": False,
+            "throughput": False,
+            "ttl_s": None,
+        },
+        "summaries": [probe_summary_to_document(summary)],
+        "output_file": None,
+        "changed": False,
+    }
+
+
 def _bars(svg: str) -> int:
     return len(re.findall(r'<path class="bar ', svg))
 
@@ -790,6 +820,110 @@ def test_a_failed_warm_read_gets_an_error_reason_note() -> None:
     `errors` count is never left unexplained next to the tables."""
     html = render_html(failing_probe_document())
     assert "1 warm read failed (HTTP 502)" in html
+
+
+def test_a_failure_reason_carries_the_error_bodys_error_type() -> None:
+    """`HTTP 502` alone says the provider was down; the error body's own `error_type` says the
+    model refused, which is what a reader acts on differently."""
+    records = [
+        probe_record(prompt_total=1_000),
+        probe_record(role="warm", attempt=1, cached=1_000, prompt_total=1_000, seq=2),
+        probe_record(
+            role="warm",
+            attempt=2,
+            status=502,
+            error='{"error_type": "provider_unavailable"}',
+            seq=3,
+        ),
+    ]
+    summary = summarize_probe(
+        "or:model@novita", [ProbeResult.model_validate(record) for record in records]
+    )
+    assert "1 warm read failed (HTTP 502, provider_unavailable)" in summary.notes
+
+
+def test_a_failure_reason_with_a_non_json_body_stays_bare() -> None:
+    records = [
+        probe_record(prompt_total=1_000),
+        probe_record(role="warm", attempt=1, cached=1_000, prompt_total=1_000, seq=2),
+        probe_record(role="warm", attempt=2, status=502, error="bad gateway", seq=3),
+    ]
+    summary = summarize_probe(
+        "or:model@novita", [ProbeResult.model_validate(record) for record in records]
+    )
+    assert "1 warm read failed (HTTP 502)" in summary.notes
+
+
+def test_cached_cold_note_names_the_largest_offender() -> None:
+    records = [
+        probe_record(cached=15_040, prompt_total=19_542),
+        probe_record(role="warm", attempt=1, cached=19_542, prompt_total=19_542, seq=2),
+    ]
+    summary = summarize_probe("or:model@novita", [ProbeResult.model_validate(r) for r in records])
+    assert (
+        "1 of 1 cold write reported cached tokens (the largest 15,040 of 19,542) although "
+        "the nonce made it a new prompt. The provider's cache is not a strict prefix cache, "
+        "or its count is not what it says." in summary.notes
+    )
+
+
+def test_cached_cold_note_reads_plural_when_more_than_one_cold_write_hit() -> None:
+    """The live shape: several rungs, each one's cold write reporting a cached share."""
+    records = [
+        probe_record(cached=15_040, prompt_total=19_542),
+        probe_record(role="warm", attempt=1, cached=19_542, prompt_total=19_542, seq=2),
+        probe_record(rung=2, cached=9_000, prompt_total=12_000, seq=3),
+        probe_record(rung=2, role="warm", attempt=1, cached=12_000, prompt_total=12_000, seq=4),
+    ]
+    summary = summarize_probe("or:model@novita", [ProbeResult.model_validate(r) for r in records])
+    assert any(
+        note.startswith(
+            "2 of 2 cold writes reported cached tokens (the largest 15,040 of 19,542) "
+            "although the nonce made them new prompts."
+        )
+        for note in summary.notes
+    )
+
+
+def test_cached_cold_note_is_silent_under_warm() -> None:
+    records = [
+        probe_record(cached=15_040, prompt_total=19_542),
+        probe_record(role="warm", attempt=1, cached=19_542, prompt_total=19_542, seq=2),
+    ]
+    summary = summarize_probe(
+        "or:model@novita", [ProbeResult.model_validate(r) for r in records], warm=True
+    )
+    assert not any("reported cached tokens" in note for note in summary.notes)
+
+
+def test_cached_cold_note_is_silent_when_every_cold_write_is_actually_cold() -> None:
+    records = [
+        probe_record(cached=0, prompt_total=19_542),
+        probe_record(role="warm", attempt=1, cached=19_542, prompt_total=19_542, seq=2),
+    ]
+    summary = summarize_probe("or:model@novita", [ProbeResult.model_validate(r) for r in records])
+    assert not any("reported cached tokens" in note for note in summary.notes)
+
+
+def test_cached_cold_caveat_appears_in_the_html_pages_caveats_list() -> None:
+    html = render_html(cached_cold_probe_document())
+    caveats = html[html.index('<section class="caveats">') :]
+    assert (
+        "1 of 1 cold write reported cached tokens (the largest 15,040 of 19,542) although "
+        "the nonce made it a new prompt" in caveats
+    )
+
+
+def test_a_2xx_error_types_reads_provider_error_and_its_kind() -> None:
+    records = [
+        probe_record(prompt_total=1_000),
+        probe_record(role="warm", attempt=1, cached=1_000, prompt_total=1_000, seq=2),
+        probe_record(role="stream", attempt=0, seq=3, error='{"type": "overloaded_error"}'),
+    ]
+    summary = summarize_probe(
+        "or:model@novita", [ProbeResult.model_validate(record) for record in records]
+    )
+    assert "1 throughput request failed (provider error, overloaded_error)" in summary.notes
 
 
 def test_burst_caveat_merges_endpoints_that_share_the_same_burst_turn() -> None:

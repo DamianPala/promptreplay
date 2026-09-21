@@ -209,6 +209,7 @@ def _probe_report(run_dir: Path) -> Document:
             unpinned_gateway=ref.kind == "openrouter" and not ref.providers,
             trace_prompt_tokens=meta.trace_prompt_tokens,
             listing=meta.listing_prices,
+            warm=meta.options.warm,
         )
         for ref in meta.specs
     ]

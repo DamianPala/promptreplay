@@ -268,10 +268,14 @@ def test_render_estimate_shortens_the_spec_column_like_the_probe_tables() -> Non
     assert "…" not in text  # nothing had to be cut
 
 
-def test_render_estimate_elides_a_lone_long_label_keeping_its_provider() -> None:
-    text = render_estimate([_priced(f"openrouter:{'deepseek/' + 'x' * 60}@novita")])
-    assert "…" in text
-    assert "@novita" in text  # the part that names the row survives the cut
+def test_render_estimate_folds_a_lone_long_labels_head_into_the_caption() -> None:
+    """A single too-long row now folds its `target:model` into the caption too, the same way
+    a shared head does for two or more rows -- no elision needed once the head is gone."""
+    head = f"openrouter:{'deepseek/' + 'x' * 60}"
+    text = render_estimate([_priced(f"{head}@novita")])
+    assert text.splitlines()[0] == f"endpoints: {head}@<provider>"
+    assert "@novita" in text
+    assert "…" not in text  # short enough to survive whole once the head folds away
 
 
 def test_render_estimate_prints_the_upper_bound_under_the_check() -> None:
