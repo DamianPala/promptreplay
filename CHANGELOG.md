@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-09-20
+## [0.2.0] - 2026-09-21
 
 The first published version. Everything below is relative to the unpublished `0.1.0`
 scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
