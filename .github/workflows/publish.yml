@@ -1,0 +1,50 @@
+name: Publish
+
+# Publishes to PyPI through Trusted Publishing (OIDC): no token is stored anywhere.
+# PyPI trusts this repository's `publish.yml` running in the `pypi` environment; the
+# job asks GitHub for a short-lived identity token and exchanges it for an upload right.
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Check the tag names the package version
+        if: github.ref_type == 'tag'
+        run: |
+          version="$(uv version --short)"
+          if [ "$version" != "${{ github.ref_name }}" ]; then
+            echo "tag ${{ github.ref_name }} does not match pyproject version $version"
+            exit 1
+          fi
+
+      - name: Build
+        run: uv build
+
+      - name: Smoke-test the wheel in a clean environment
+        run: |
+          uv run --isolated --no-project --python 3.12 --with dist/*.whl \
+            promptreplay --version
+          uv run --isolated --no-project --python 3.12 --with dist/*.whl \
+            promptreplay inspect sample-trace > /dev/null
+
+      - name: Publish
+        run: uv publish --trusted-publishing always
