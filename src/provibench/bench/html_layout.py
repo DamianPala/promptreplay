@@ -25,6 +25,7 @@ __all__ = [
     "notes",
     "relative_run",
     "table_section",
+    "theme_switch",
 ]
 
 _STAMP = re.compile(r"^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$")
@@ -70,16 +71,23 @@ def table_section(
     cell_titles: Mapping[tuple[int, int], str] | None = None,
     cell_extra: Mapping[tuple[int, int], str] | None = None,
     group_row: str | None = None,
+    key_column: str | None = None,
 ) -> str:
     """One headed table, with an optional caption between the heading and the table itself.
 
     `title=None` skips the `<h3>`: the per-turn table sits inside a `<details>` whose own
-    `<summary>` is already its heading.
+    `<summary>` is already its heading. `key_column` names the column the table is sorted
+    by; its header and cells carry `class="key"` so the stylesheet can pick it out.
     """
     heading = f"<h3>{escape(title)}</h3>" if title else ""
     cap = f'<p class="caption">{caption_html}</p>' if caption_html else ""
     body = _table(
-        block, help=help, cell_titles=cell_titles, cell_extra=cell_extra, group_row=group_row
+        block,
+        help=help,
+        cell_titles=cell_titles,
+        cell_extra=cell_extra,
+        group_row=group_row,
+        key_column=key_column,
     )
     return f'<section class="table">{heading}{cap}{body}</section>'
 
@@ -91,17 +99,20 @@ def _table(
     cell_titles: Mapping[tuple[int, int], str] | None = None,
     cell_extra: Mapping[tuple[int, int], str] | None = None,
     group_row: str | None = None,
+    key_column: str | None = None,
 ) -> str:
     """A scroll container holding one table: the page never scrolls sideways, the table does."""
     help = help or {}
     cell_titles = cell_titles or {}
     cell_extra = cell_extra or {}
+    key_index = block.columns.index(key_column) if key_column in block.columns else None
     head = "".join(
-        f'<th scope="col"{_title_attr(help.get(column))}>{escape(column)}</th>'
-        for column in block.columns
+        f'<th scope="col"{_key_attr(index == key_index)}{_title_attr(help.get(column))}>'
+        f"{escape(column)}</th>"
+        for index, column in enumerate(block.columns)
     )
     rows = "".join(
-        _row(index, row, cell_titles, cell_extra) for index, row in enumerate(block.rows)
+        _row(index, row, cell_titles, cell_extra, key_index) for index, row in enumerate(block.rows)
     )
     thead = f"{group_row or ''}<tr>{head}</tr>"
     return f'<div class="scroll"><table><thead>{thead}</thead><tbody>{rows}</tbody></table></div>'
@@ -112,17 +123,39 @@ def _row(
     row: Sequence[str],
     cell_titles: Mapping[tuple[int, int], str],
     cell_extra: Mapping[tuple[int, int], str],
+    key_index: int | None = None,
 ) -> str:
     cells: list[str] = []
     for column_index, cell in enumerate(row):
+        key = _key_attr(column_index == key_index)
         title = _title_attr(cell_titles.get((row_index, column_index)))
         extra = cell_extra.get((row_index, column_index), "")
-        cells.append(f"<td{title}>{escape(cell)}{extra}</td>")
+        cells.append(f"<td{key}{title}>{escape(cell)}{extra}</td>")
     return "<tr>" + "".join(cells) + "</tr>"
+
+
+def _key_attr(is_key: bool) -> str:
+    return ' class="key"' if is_key else ""
 
 
 def _title_attr(text: str | None) -> str:
     return f' title="{escape(text, quote=True)}"' if text else ""
+
+
+def theme_switch() -> str:
+    """Auto / light / dark as three radio buttons the stylesheet reads with `:has()`.
+
+    The page ships no script, so the choice lives in the radios themselves: `auto` (checked
+    on open) leaves the palette to the system preference, the other two override it for
+    this view. Nothing is remembered between opens, which is the price of staying static.
+    """
+    choices = (("auto", "Auto", " checked"), ("light", "Light", ""), ("dark", "Dark", ""))
+    labels = "".join(
+        f'<label><input type="radio" name="theme" id="theme-{value}"{checked}>'
+        f"<span>{word}</span></label>"
+        for value, word, checked in choices
+    )
+    return f'<fieldset class="theme"><legend>Theme</legend>{labels}</fieldset>'
 
 
 def legend(labels: Sequence[str]) -> str:

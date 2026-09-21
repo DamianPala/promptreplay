@@ -36,6 +36,7 @@ from provibench.bench.html_layout import (
     notes,
     relative_run,
     table_section,
+    theme_switch,
 )
 from provibench.bench.html_style import CSS
 from provibench.bench.html_svg import Point, grouped_bars, horizontal_bars, line_chart
@@ -84,6 +85,7 @@ def render_html(document: Document) -> str:
             "</head>",
             "<body>",
             '<main class="page">',
+            theme_switch(),
             _head(document),
             *sections,
             "</main>",
@@ -213,6 +215,7 @@ def _probe_sections(document: Document) -> list[str]:
             help=endpoint_help(summaries, trace_prompt_tokens),
             cell_extra=cell_extra,
             group_row=group_header_row(endpoint_block.columns),
+            key_column="eff $/M",
         )
     )
 

@@ -304,7 +304,20 @@ def test_price_columns_stay_in_in_cache_eff_order_with_this_trace_right_after_ef
     )
     row = endpoint_table[endpoint_table.index("<td>@novita</td>") :]
     # in $/M, cache $/M, eff $/M, this trace $ -- in that order, right after each other
-    assert re.search(r"<td>0\.300</td><td>0\.030</td><td>0\.041</td><td>\$0\.0021</td>", row)
+    assert re.search(
+        r'<td>0\.300</td><td>0\.030</td><td class="key">0\.041</td><td>\$0\.0021</td>', row
+    )
+
+
+def test_the_sort_column_is_marked_in_the_endpoint_table_only() -> None:
+    """The table sorts by `eff $/M` and the caption says so, but a reader scans the numbers
+    before the words: the column's header and every cell carry `class="key"` so the
+    stylesheet can tint it. The per-turn table has no verdict column and stays unmarked."""
+    html = render_html(probe_document())
+    endpoint_table, rung_table = html.split('<div class="scroll">')[1:3]
+    assert re.search(r'<th scope="col" class="key" title="[^"]*">eff \$/M</th>', endpoint_table)
+    assert endpoint_table.count('<td class="key">') == 3  # one per endpoint row
+    assert 'class="key"' not in rung_table
 
 
 def test_endpoint_table_has_a_group_header_row_over_cache_price_and_speed() -> None:
@@ -549,6 +562,24 @@ def test_dark_mode_is_a_media_query_over_the_same_slots() -> None:
     assert "--series-3: #1baf7a" in light and "--series-3: #199e70" in dark
 
 
+def test_theme_switch_is_three_radios_the_stylesheet_reads_without_a_script() -> None:
+    """Auto / light / dark at the top of the page: `auto` is checked on open and leaves the
+    palette to the system preference, `light` opts out of the dark media query, `dark`
+    applies the dark slots outright. All of it is CSS `:has()` over the radios, so the page
+    still ships no script."""
+    html = render_html(probe_document())
+    switch = html[html.index('<fieldset class="theme">') : html.index("</fieldset>")]
+    assert html.index("</fieldset>") < html.index("<h1>")  # the switch sits above the title
+    assert '<input type="radio" name="theme" id="theme-auto" checked>' in switch
+    assert '<input type="radio" name="theme" id="theme-light">' in switch
+    assert '<input type="radio" name="theme" id="theme-dark">' in switch
+    assert switch.count("<label>") == 3
+    assert ":root:not(:has(#theme-light:checked)) {" in html
+    assert ":root:has(#theme-dark:checked) {" in html
+    assert html.count("--surface: #1a1a19") == 2  # the dark slots, once per rule
+    assert "<script" not in html
+
+
 # --- the probe charts ---------------------------------------------------------
 
 
@@ -635,7 +666,7 @@ def test_price_chart_has_a_caption_and_no_legend_of_its_own() -> None:
 def test_prices_show_three_decimals_in_the_endpoint_table() -> None:
     html = render_html(probe_document())
     endpoint_table = html.split('<div class="scroll">')[1]
-    assert "<td>0.041</td>" in endpoint_table  # eff $/M, not 0.0 or 0.04
+    assert '<td class="key">0.041</td>' in endpoint_table  # eff $/M, not 0.0 or 0.04
     assert "<td>0.300</td>" in endpoint_table  # in $/M
     assert "<td>0.030</td>" in endpoint_table  # cache $/M
 

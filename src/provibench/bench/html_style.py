@@ -10,29 +10,7 @@ says so rather than inventing a ninth hue. The dark column is the same eight hue
 for the dark surface, not a second palette.
 """
 
-CSS = """\
-\
-:root {
-  color-scheme: light;
-  --plane: #f9f9f7;
-  --surface: #fcfcfb;
-  --ink: #0b0b0b;
-  --ink-2: #52514e;
-  --muted: #74716a;
-  --grid: #e1e0d9;
-  --axis: #c3c2b7;
-  --rule: rgba(11, 11, 11, 0.10);
-  --series-1: #2a78d6;
-  --series-2: #eb6834;
-  --series-3: #1baf7a;
-  --series-4: #eda100;
-  --series-5: #e87ba4;
-  --series-6: #008300;
-  --series-7: #4a3aa7;
-  --series-8: #e34948;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
+_DARK = """\
     color-scheme: dark;
     --plane: #0d0d0d;
     --surface: #1a1a19;
@@ -42,6 +20,7 @@ CSS = """\
     --grid: #2c2c2a;
     --axis: #383835;
     --rule: rgba(255, 255, 255, 0.10);
+    --key: rgba(57, 135, 229, 0.18);
     --series-1: #3987e5;
     --series-2: #d95926;
     --series-3: #199e70;
@@ -50,8 +29,42 @@ CSS = """\
     --series-6: #008300;
     --series-7: #9085e9;
     --series-8: #e66767;
-  }
-}
+"""
+"""The dark values, written once and placed twice below: under the system preference unless
+the reader picked light, and whenever the reader picked dark. The page carries no script,
+so the theme switch is three radio buttons the stylesheet reads through `:has()`."""
+
+_TOKENS = f"""\
+\
+:root {{
+  color-scheme: light;
+  --plane: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #74716a;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --rule: rgba(11, 11, 11, 0.10);
+  --key: rgba(42, 120, 214, 0.09);
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+}}
+@media (prefers-color-scheme: dark) {{
+  :root:not(:has(#theme-light:checked)) {{
+{_DARK}  }}
+}}
+:root:has(#theme-dark:checked) {{
+{_DARK}}}
+"""
+
+_SHEET = """\
 * { box-sizing: border-box; }
 body {
   margin: 0;
@@ -64,6 +77,28 @@ body {
 .head .sub { margin: 0; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .head .where { margin: 4px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .head .method { margin: 8px 0 0; color: var(--ink-2); font-size: 13px; }
+/* The theme switch: three radios drawn as one small segmented control at the top right,
+   the checked one in full ink on the rule tint. `auto` leaves the choice to the system. */
+fieldset.theme {
+  float: right;
+  position: relative;
+  display: flex;
+  gap: 2px;
+  margin: 2px 0 0 16px;
+  padding: 2px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.theme legend {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
+}
+.theme label { position: relative; cursor: pointer; }
+.theme input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.theme span { display: inline-block; padding: 2px 8px; border-radius: 4px; }
+.theme input:checked + span { color: var(--ink); background: var(--rule); }
+.theme input:focus-visible + span { outline: 2px solid var(--series-1); outline-offset: 1px; }
 .answer { margin: 20px 0 4px; font-size: 16px; }
 section { margin-top: 28px; }
 h2 { margin: 0 0 10px; font-size: 15px; }
@@ -111,6 +146,11 @@ thead th { border-bottom: 1px solid var(--rule); color: var(--ink-2); font-weigh
 thead th[title] { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
 .caption .hint { color: var(--muted); }
 .caption .term { text-decoration: underline dotted; text-underline-offset: 3px; }
+/* The column the table is sorted by (`eff $/M`, the verdict) is tinted top to bottom, header
+   in full ink and values in bold, so the eye lands on it before reading the caption. */
+th.key, td.key { background: var(--key); }
+thead th.key { color: var(--ink); }
+td.key { font-weight: 600; }
 tbody tr + tr td { border-top: 1px solid var(--rule); }
 /* The group header row above the endpoint table (cache / price / speed): a thin rule
    between groups, not around every cell, so the grouping reads as three bands. */
@@ -179,3 +219,5 @@ svg.chart {
   .chart-scroll svg.chart { min-width: 640px; }
 }
 """
+
+CSS = _TOKENS + _SHEET
