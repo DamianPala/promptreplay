@@ -84,3 +84,8 @@ venv = ".venv"
 addopts = "--strict-markers --strict-config -q"
 testpaths = ["tests"]
 filterwarnings = ["error"]
+
+[tool.uv]
+# Pinned so `uv lock` resolves the same set everywhere; a user-level `exclude-newer`
+# alone is not recorded consistently and made CI's `uv sync --locked` re-resolve.
+exclude-newer = "2026-09-21T00:00:00Z"

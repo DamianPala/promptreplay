@@ -3,8 +3,7 @@ revision = 3
 requires-python = ">=3.12"
 
 [options]
-exclude-newer = "2026-09-14T09:35:39.744110997Z"
-exclude-newer-span = "P1W"
+exclude-newer = "2026-09-21T00:00:00Z"
 
 [[package]]
 name = "annotated-types"
