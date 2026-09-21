@@ -155,7 +155,7 @@ def dump_document(document: dict[str, Any]) -> str:
 
 
 def append_entry(path: Path, entry: TraceEntry) -> None:
-    with path.open("a", encoding="utf-8") as fh:
+    with path.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write(dump_document(entry.model_dump(exclude_none=True, mode="json")) + "\n")
 
 
@@ -171,12 +171,14 @@ def write_trace_text(path: Path, text: str) -> None:
     """Write a trace; a `.gz` path is compressed with a fixed header, so bytes repeat.
 
     `gzip.compress(mtime=0)` leaves the timestamp out of the header: without it the same
-    input and options would produce different bytes on every run.
+    input and options would produce different bytes on every run. `newline="\n"` keeps a
+    trace LF-terminated on Windows too, so `scrub`'s `bytes_out` is the file's size there
+    as well and a trace written on one platform reads byte-for-byte on another.
     """
     if path.suffix == ".gz":
         path.write_bytes(gzip.compress(text.encode("utf-8"), mtime=0))
         return
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def parse_trace_text(text: str) -> list[dict[str, Any]]:

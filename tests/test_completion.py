@@ -35,7 +35,9 @@ def test_install_writes_the_tool_owned_path_and_reports_changed(cli: Cli) -> Non
     second = cli.run("completion", "fish", "--install", "--json").document
     assert second["changed"] is False
     human = cli.run("completion", "zsh", "--install", tty=True, env={"TERM": "dumb"})
-    assert "site-functions/_promptreplay" in human.stdout and "fpath" in human.stdout
+    zsh_path = cli.home / ".local" / "share" / "zsh" / "site-functions" / "_promptreplay"
+    assert str(zsh_path) in human.stdout and "fpath" in human.stdout
+    assert zsh_path.is_file()
     xdg = cli.run(
         "completion", "bash", "--install", "--json", env={"XDG_DATA_HOME": str(cli.root / "data")}
     ).document

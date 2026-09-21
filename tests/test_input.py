@@ -62,10 +62,11 @@ def test_config_byte_bound_rejects_before_command_execution(cli: Cli, selector: 
     path.parent.mkdir(parents=True, exist_ok=True)
     args: tuple[str, ...] = ("--config", str(path)) if selector == "flag" else ()
     env = {"PROMPTREPLAY_CONFIG": str(path)} if selector == "environment" else None
-    path.write_text(_config_of_size(65_536), encoding="utf-8")
+    # `newline="\n"`: the bound is in bytes, and Windows would otherwise add one per line.
+    path.write_text(_config_of_size(65_536), encoding="utf-8", newline="\n")
     assert cli.run("config", "show", *args, env=env).code == 0
 
-    path.write_text(_config_of_size(65_537), encoding="utf-8")
+    path.write_text(_config_of_size(65_537), encoding="utf-8", newline="\n")
     rejected = cli.run("config", "show", *args, env=env)
 
     assert rejected.code == 2 and rejected.error["kind"] == "invalid_input"

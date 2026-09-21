@@ -22,7 +22,8 @@ def test_show_lists_every_setting_with_defaults(cli: Cli) -> None:
     assert settings["config_path"] == {"value": None, "source": "default"}
     # No file at the default path yet, so `show` names the packaged one `config init` copies.
     assert settings["targets_path"]["source"] == "packaged"
-    assert str(settings["targets_path"]["value"]).endswith("promptreplay/data/targets.toml")
+    packaged = Path(str(settings["targets_path"]["value"]))
+    assert packaged.parts[-3:] == ("promptreplay", "data", "targets.toml")
     assert settings["traces_dir"] == {"value": str(cli.root / "traces"), "source": "default"}
     assert settings["runs_dir"] == {"value": str(cli.root / "runs"), "source": "default"}
 
@@ -33,11 +34,12 @@ def test_precedence_flag_over_env_over_file_over_default(cli: Cli, tmp_path: Pat
     config.write_text(
         'traces_dir = "data/traces"\nruns_dir = "data/runs"\ntargets_path = "targets.toml"\n'
     )
+    env_traces = tmp_path / "env-traces"
     settings = _settings(
-        cli, "--config", str(config), env={"PROMPTREPLAY_TRACES_DIR": "/tmp/env-traces"}
+        cli, "--config", str(config), env={"PROMPTREPLAY_TRACES_DIR": str(env_traces)}
     )
     assert settings["config_path"] == {"value": str(config), "source": "flag"}
-    assert settings["traces_dir"] == {"value": "/tmp/env-traces", "source": "env"}
+    assert settings["traces_dir"] == {"value": str(env_traces), "source": "env"}
     assert settings["runs_dir"] == {
         "value": str(config.parent / "data/runs"),
         "source": "config",

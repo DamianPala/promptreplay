@@ -226,6 +226,10 @@ def run_process(
     """
     command = [sys.executable, "-m", "promptreplay", *args]
     environment = {"PATH": os.environ["PATH"], **env}
+    if sys.platform == "win32":
+        # asyncio's Windows loop imports `_overlapped`, which initialises Winsock from
+        # SYSTEMROOT; without it the child dies with WinError 10106 before reaching main.
+        environment.setdefault("SYSTEMROOT", os.environ["SYSTEMROOT"])
     if hold_stdin:
         return _run_holding_stdin(command, env=environment, timeout=timeout)
     completed = subprocess.run(

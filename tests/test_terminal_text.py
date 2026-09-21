@@ -1,6 +1,9 @@
 """O3d: terminal control characters in human output are visible text, never active controls."""
 
+import sys
 from pathlib import Path
+
+import pytest
 
 from promptreplay.core.color import ColorMode
 from promptreplay.core.completion import render_completion
@@ -110,6 +113,9 @@ def test_generic_table_has_no_leading_or_trailing_blank_line() -> None:
     assert lines[-1] == "More items available. Continue with --cursor c1"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows refuses control characters in a file name"
+)
 def test_config_diagnostics_and_completion_location_escape_without_changing_json(cli: Cli) -> None:
     config = cli.root / f"config{OSC}.toml"
     config.write_text("")

@@ -200,6 +200,9 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
 
 ### Fixed
 
+- Traces are written LF-terminated on Windows too (`record`'s appends and `scrub`'s
+  output), so a trace reads byte-for-byte across platforms and `scrub`'s `bytes_out` is
+  the file's size everywhere
 - Providers that buffer a whole generation and flush it right after the first token no
   longer report meaningless tokens-per-second; the rung is noted as burst delivery and its
   `tok/s` is left empty
