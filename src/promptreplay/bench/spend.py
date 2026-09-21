@@ -15,11 +15,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from promptreplay.bench.estimate import SpecPrices
-from promptreplay.bench.probe_models import ProbeResult, is_served
-from promptreplay.core.documents import Document, as_document
+from promptreplay.bench.probe_models import READ_ROLES, ProbeResult, is_served
+from promptreplay.core.documents import Document, as_document, as_list
 
 __all__ = [
     "dash_money",
+    "output_cost",
+    "output_over_budget_usd",
     "precheck_spend",
     "precheck_worst_case",
     "record_cost",
@@ -31,6 +33,8 @@ __all__ = [
     "usage_cost",
     "worst_case_usd",
 ]
+
+_IGNORED_LIMIT_PREFIX = "ignored the one-token limit"
 
 
 def record_cost(record: ProbeResult, prices: SpecPrices | None) -> float | None:
@@ -71,6 +75,26 @@ def spec_spend(
     if billed_usd is not None:
         return billed_usd
     return usage_cost(records, prices)
+
+
+def output_cost(records: Sequence[ProbeResult], prices: SpecPrices | None) -> float | None:
+    """Every served read's output tokens, billed at `prices`' output rate, or `None` without one.
+
+    A `max_tokens: 1` read is meant to cost nothing worth naming in output tokens; a provider
+    that ignores the limit bills the surplus on top of `spec_spend`, which this is not part
+    of -- it is the number `output_tokens_note` and `output_over_budget_usd` turn into the
+    reader-facing dollar clause.
+
+    `READ_ROLES` only: the throughput request asks for `STREAM_MAX_TOKENS` on purpose and the
+    estimate already prices it, so folding it in here would overstate the surplus and
+    contradict the token count `probe_reads.output_token_stats` puts in the same sentence.
+    """
+    if prices is None:
+        return None
+    reads = [record for record in records if record.role in READ_ROLES and is_served(record)]
+    if not reads:
+        return None
+    return sum(record.usage.output_tokens for record in reads) * prices.prices.output * 1e-6
 
 
 def precheck_spend(
@@ -171,5 +195,30 @@ def run_cost_sentence(document: Document) -> str | None:
     worst = document.get("worst_case_usd")
     sentence += "."
     if isinstance(worst, int | float):
-        sentence += f" The estimate before running, assuming no cache hit, was {dash_money(worst)}."
+        clause = f"The estimate before running, assuming no cache hit, was {dash_money(worst)}"
+        over_budget = output_over_budget_usd(document)
+        if over_budget:
+            clause += (
+                f"; {dash_money(over_budget)} of the bill is output the cache probes "
+                "were told not to produce"
+            )
+        sentence += f" {clause}."
     return sentence
+
+
+def output_over_budget_usd(document: Document) -> float | None:
+    """The sum of every summary's `output_usd` whose notes flag it ignoring `max_tokens: 1`.
+
+    Both `commands.probe_spend.spend_lines` (the closing table line) and `run_cost_sentence`
+    (the HTML caveat) read this off the same document, so the two numbers cannot disagree.
+    A summary without that note still carries an `output_usd` -- the output its reads were
+    always going to bill -- which is not what this line is about.
+    """
+    summaries = [d for d in map(as_document, as_list(document.get("summaries")) or []) if d]
+    amounts: list[float | None] = []
+    for summary in summaries:
+        notes = as_list(summary.get("notes")) or []
+        if any(str(note).startswith(_IGNORED_LIMIT_PREFIX) for note in notes):
+            value = summary.get("output_usd")
+            amounts.append(value if isinstance(value, int | float) else None)
+    return total_spend(amounts)

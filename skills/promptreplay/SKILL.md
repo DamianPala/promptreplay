@@ -28,7 +28,7 @@ A run and the later `report` that reads it resolve `runs_dir` independently, so 
 
 `promptreplay inspect sample-trace` shows the packaged trace, 30 turns of a real Claude Code session.
 `promptreplay endpoints MODEL` lists the model's OpenRouter endpoints with quantization, prices and recent health, without a trace and without spending.
-`promptreplay schema` prints the whole contract, and `promptreplay schema sweep` the fields of the sweep document.
+`promptreplay schema` prints the whole contract, and `promptreplay schema COMMAND` the exact output fields of any command, so read it before guessing a field name.
 
 ## Cost and consent
 
@@ -38,6 +38,7 @@ Read it first.
 Then run with `--budget USD --yes`: `--budget` refuses a run whose estimate exceeds it, and `--yes` skips only the prompt.
 Use `--yes` after you or your user have read the estimate, not as blanket consent.
 A `--top N` sweep also prints an upper bound: a candidate the availability check drops frees its slot for the next ranked one, so the run can grow past the plain estimate, and `--budget` is compared with the plain estimate.
+A provider that ignores `max_tokens: 1` bills output tokens on top of that estimate, which prices prompt tokens only; `--budget` cannot bound this, and the closing spend line names the amount as `output beyond the one-token limit: $Z` when it happens.
 
 ## Recipe 1: pick the N best endpoints for a model and measure them
 
@@ -111,9 +112,9 @@ promptreplay history MODEL --since 30d
 promptreplay compare previous latest
 ```
 
-`history` lists one row per run and endpoint with `hit_rate`, `eff_per_m_prompt`, `ttft_ms`, `gen_tok_s`, `errors`, `spend_usd` and the listed prices the run recorded.
+`history` lists one row per run and endpoint with `hit_rate`, `eff_per_m_prompt`, `ttft_ms`, `gen_tok_s`, `errors`, `spend_usd` and the listed prices the run recorded; `--json` rows also carry `first_hit_rate` and `cached_fraction`, the cold-start counterparts of `hit_rate`.
 `--trace` narrows it to one trace.
 `compare` pairs the endpoints both runs measured and gives each metric as `a`, `b` and `delta` (B minus A).
 `previous` and `latest` are the two newest runs of the trace the newest run belongs to.
-Endpoints pair by label, so a tag renamed between runs, `@novita` one week and `@novita/fp8` the next, lands in `only_in_a` or `only_in_b` instead of a delta.
+Endpoints pair by label; a tag renamed between runs (`@novita` → `@novita/fp8`, which OpenRouter does within hours, not weeks) is paired by provider name when that leaves one candidate on each side, and named under the table (`paired_with` in JSON); otherwise it lands in `only_in_a` or `only_in_b`.
 Runs of different traces or protocols are refused without `--force`.

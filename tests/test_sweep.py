@@ -1878,7 +1878,7 @@ def test_sweep_partial_failure_reaches_stdout_as_json(
     assert outcome.error["kind"] == "operation_failed"
     context = as_document(outcome.error.get("context"))
     assert context is not None
-    assert set(context) == {"run_dir", "run_hex"}
+    assert set(context) == {"run_dir", "run_hex", "failed", "skipped"}
     doc = outcome.document
     assert doc["partial"] is True
     assert doc["sweep"] is not None

@@ -24,7 +24,8 @@ from typing import Any, cast
 import httpx
 from pydantic import BaseModel
 
-_MODELS_URL = "https://openrouter.ai/api/v1/models"
+from promptreplay.bench.openrouter import MODELS_URL
+
 _CACHE_HIT_URL = "https://openrouter.ai/api/frontend/v1/stats/cache-hit-rate-comparison"
 _EFFECTIVE_PRICING_URL = "https://openrouter.ai/api/frontend/v1/stats/effective-pricing"
 _TIMEOUT_S = 10.0
@@ -192,7 +193,7 @@ async def fetch_reported_average(
     that the comparison is unavailable and moves on.
     """
     try:
-        models_resp = await client.get(_MODELS_URL, timeout=_TIMEOUT_S)
+        models_resp = await client.get(MODELS_URL, timeout=_TIMEOUT_S)
         models_resp.raise_for_status()
         permaslug = canonical_slug(models_resp.json(), model)
         if permaslug is None:

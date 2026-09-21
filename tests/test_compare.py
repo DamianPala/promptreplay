@@ -6,7 +6,11 @@ listings with, so the two commands are tested on one shape of data.
 
 from __future__ import annotations
 
-from promptreplay.core.documents import as_document
+from pathlib import Path
+
+from promptreplay.bench.run_delta import compare_runs
+from promptreplay.bench.run_history import RunNumbers, RunRow
+from promptreplay.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 from tests.test_history import (
     date_at,
@@ -70,6 +74,103 @@ def test_compare_json_pairs_the_metrics_and_names_unpaired_specs(
     assert document["only_in_a"] == ["or:model@relace"]
     assert document["only_in_b"] == ["or:model@gmicloud"]
     assert as_document(rows[0]["gen_tok_s"]) == {"a": 40.0, "b": 40.0, "delta": 0.0}
+
+
+def test_compare_pairs_a_renamed_tag_by_provider_name(cli: Cli, bench_paths: BenchPaths) -> None:
+    """OpenRouter renames a tag within hours (`gmicloud` -> `gmicloud/fp8`); the label pass
+    leaves both sides unpaired, so the provider-name fallback should pick them up."""
+    write_probe_fixture(bench_paths.runs_dir, "sample", stamp_at(1.0), [spec("gmicloud")])
+    write_probe_fixture(bench_paths.runs_dir, "sample", stamp_at(0.5), [spec("gmicloud/fp8")])
+    document = cli.run("compare", "previous", "latest", "--json", env=bench_paths.env).document
+    assert document["only_in_a"] == []
+    assert document["only_in_b"] == []
+    [row] = rows_of(document)
+    assert row["endpoint"] == "or:model@gmicloud"
+    assert row["paired_with"] == "or:model@gmicloud/fp8"
+    hit = as_document(row["hit_rate"]) or {}
+    assert hit["a"] == hit["b"] == 1.0
+
+    text = cli.run("compare", "previous", "latest", tty_stdout=True, env=bench_paths.env).stdout
+    assert (
+        "@gmicloud in A is paired with @gmicloud/fp8 in B: same provider, the tag was "
+        "renamed between the runs." in text
+    )
+
+
+def test_compare_leaves_two_endpoints_of_one_provider_unpaired(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    """Two unpaired rows sharing a provider name on one side is ambiguous: neither pairs."""
+    write_probe_fixture(
+        bench_paths.runs_dir,
+        "sample",
+        stamp_at(1.0),
+        [spec("gmicloud/a"), spec("gmicloud/b")],
+    )
+    write_probe_fixture(bench_paths.runs_dir, "sample", stamp_at(0.5), [spec("gmicloud/fp8")])
+    document = cli.run("compare", "previous", "latest", "--json", env=bench_paths.env).document
+    assert rows_of(document) == []
+    only_in_a = sorted(str(entry) for entry in as_list(document["only_in_a"]) or [])
+    assert only_in_a == ["or:model@gmicloud/a", "or:model@gmicloud/b"]
+    assert document["only_in_b"] == ["or:model@gmicloud/fp8"]
+
+
+def test_compare_never_overrides_a_label_pair_with_the_provider_fallback(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    """A spec present under the same label in both runs pairs by label even when a same-
+    provider row elsewhere in the run could also match it by the fallback rule."""
+    write_probe_fixture(
+        bench_paths.runs_dir,
+        "sample",
+        stamp_at(1.0),
+        [spec("gmicloud"), spec("gmicloud/other")],
+    )
+    write_probe_fixture(bench_paths.runs_dir, "sample", stamp_at(0.5), [spec("gmicloud")])
+    document = cli.run("compare", "previous", "latest", "--json", env=bench_paths.env).document
+    [row] = rows_of(document)
+    assert row["endpoint"] == "or:model@gmicloud"
+    assert row["paired_with"] is None  # label pair, not a rename
+    assert document["only_in_a"] == ["or:model@gmicloud/other"]
+    assert document["only_in_b"] == []
+
+
+def _row(spec_label: str, *, model: str, provider: str) -> RunRow:
+    return RunRow(
+        trace="sample",
+        created="20260101-000000",
+        run_dir=Path("run"),
+        protocol="probe",
+        spec=spec_label,
+        target="or",
+        model=model,
+        provider=provider,
+        hit_rate=1.0,
+    )
+
+
+def test_compare_never_pairs_two_models_by_provider_name() -> None:
+    """`compare` refuses a different trace or protocol, not a different model, so two runs
+    of one trace can measure different models. The provider fallback must not pair those and
+    call it a rename: only the tag is what OpenRouter renames."""
+    a = RunNumbers(
+        run_dir=Path("a"),
+        trace="sample",
+        created="20260101-000000",
+        protocol="probe",
+        rows=[_row("or:model-a@gmicloud", model="model-a", provider="gmicloud")],
+    )
+    b = RunNumbers(
+        run_dir=Path("b"),
+        trace="sample",
+        created="20260102-000000",
+        protocol="probe",
+        rows=[_row("or:model-b@gmicloud/fp8", model="model-b", provider="gmicloud/fp8")],
+    )
+    comparison = compare_runs(a, b)
+    assert comparison.rows == []
+    assert comparison.only_in_a == ["or:model-a@gmicloud"]
+    assert comparison.only_in_b == ["or:model-b@gmicloud/fp8"]
 
 
 def test_compare_refuses_two_traces_until_forced(cli: Cli, bench_paths: BenchPaths) -> None:

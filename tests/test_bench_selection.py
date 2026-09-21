@@ -550,7 +550,27 @@ def test_selection_line_merges_endpoints_that_share_one_drop_reason() -> None:
     line = selection_line(sweep)
     # item 16: the drop sentence names the endpoint the way the table above it does (`@tag`),
     # not the bare provider tag.
-    assert "@a and @b were skipped because OpenRouter reported it as degraded." in line
+    # agent-test finding 6b: two endpoints sharing a reason take "them", not "it".
+    assert "@a and @b were skipped because OpenRouter reported them as degraded." in line
+
+
+def test_selection_line_uses_a_plural_pronoun_for_a_shared_quantization_drop() -> None:
+    """Agent-test finding 6b: "their quantization", not "its quantization", once 2+
+    endpoints are grouped under the same drop reason."""
+    sweep = SweepInfo(
+        model=_MODEL,
+        target="or",
+        quantization=["fp8", "unknown"],
+        dropped=[
+            SelectionDrop.for_spec(pinned_spec(_GATEWAY, _MODEL, "a/fp4"), "quantization fp4"),
+            SelectionDrop.for_spec(pinned_spec(_GATEWAY, _MODEL, "b/fp4"), "quantization fp4"),
+        ],
+    )
+    line = selection_line(sweep)
+    assert (
+        "@a/fp4 and @b/fp4 were skipped because their quantization (fp4) was not among "
+        "fp8, unknown." in line
+    )
 
 
 def test_not_probed_lines_keeps_a_precheck_drop_reason_as_is() -> None:

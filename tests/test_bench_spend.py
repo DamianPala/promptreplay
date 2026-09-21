@@ -7,8 +7,11 @@ import pytest
 from promptreplay.bench.estimate import SpecPrices
 from promptreplay.bench.probe_models import ProbeResult
 from promptreplay.bench.spend import (
+    output_cost,
+    output_over_budget_usd,
     precheck_spend,
     record_cost,
+    run_cost_sentence,
     spec_spend,
     total_spend,
     usage_cost,
@@ -96,3 +99,76 @@ def test_worst_case_usd_prices_every_prompt_token_at_the_input_rate() -> None:
 def test_worst_case_usd_is_none_without_a_listed_price_or_a_served_record() -> None:
     assert worst_case_usd([_record()], None) is None
     assert worst_case_usd([_record(status=500, error="boom")], _prices()) is None
+
+
+def test_output_cost_prices_every_served_read_at_the_output_rate() -> None:
+    """Item 5: a provider that ignores `max_tokens: 1` bills the surplus, on top of
+    `spec_spend`, at the endpoint's own listed output rate."""
+    records = [
+        _record(usage={"output_tokens": 200}),
+        _record(usage={"output_tokens": 150}),
+        _record(status=500, error="boom", usage={"output_tokens": 999}),  # not served, not billed
+    ]
+    assert output_cost(records, _prices()) == pytest.approx((200 + 150) * 2.0 * 1e-6)
+
+
+def test_output_cost_leaves_out_the_throughput_request() -> None:
+    """The streamed request asks for `STREAM_MAX_TOKENS` on purpose and the estimate already
+    prices it, so it is not output anyone was told not to produce; pricing it here would
+    contradict the token count `output_token_stats` puts in the same sentence."""
+    records = [
+        _record(usage={"output_tokens": 200}),
+        _record(role="stream", usage={"output_tokens": 256}),
+    ]
+    assert output_cost(records, _prices()) == pytest.approx(200 * 2.0 * 1e-6)
+
+
+def test_output_cost_is_none_without_a_listed_price_or_a_served_record() -> None:
+    assert output_cost([_record()], None) is None
+    assert output_cost([_record(status=500, error="boom")], _prices()) is None
+    assert output_cost([_record(role="stream", usage={"output_tokens": 256})], _prices()) is None
+
+
+def _summary(output_usd: float | None, *, over_budget: bool) -> dict[str, object]:
+    note = "ignored the one-token limit on the cache probes and generated 1,234 tokens."
+    return {"output_usd": output_usd, "notes": [note] if over_budget else ["priced as served"]}
+
+
+def test_output_over_budget_usd_sums_only_the_flagged_summaries() -> None:
+    document: dict[str, object] = {
+        "summaries": [
+            _summary(0.4, over_budget=True),
+            _summary(0.1, over_budget=False),  # priced normally, no one-token-limit note
+        ]
+    }
+    assert output_over_budget_usd(document) == pytest.approx(0.4)
+
+
+def test_output_over_budget_usd_is_none_when_nothing_was_flagged() -> None:
+    assert output_over_budget_usd({"summaries": [_summary(0.1, over_budget=False)]}) is None
+    assert output_over_budget_usd({"summaries": []}) is None
+
+
+def test_run_cost_sentence_names_the_output_over_budget_clause() -> None:
+    document: dict[str, object] = {
+        "spend_usd": 0.6,
+        "worst_case_usd": 0.2,
+        "summaries": [_summary(0.4, over_budget=True)],
+    }
+    assert run_cost_sentence(document) == (
+        "This run cost $0.6000 in API spend. The estimate before running, assuming no cache "
+        "hit, was $0.2000; $0.4000 of the bill is output the cache probes were told not to "
+        "produce."
+    )
+
+
+def test_run_cost_sentence_omits_the_output_clause_when_nothing_overshot() -> None:
+    document: dict[str, object] = {
+        "spend_usd": 0.6,
+        "worst_case_usd": 0.2,
+        "summaries": [_summary(0.1, over_budget=False)],
+    }
+    assert run_cost_sentence(document) == (
+        "This run cost $0.6000 in API spend. The estimate before running, assuming no cache "
+        "hit, was $0.2000."
+    )

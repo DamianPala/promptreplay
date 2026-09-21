@@ -15,7 +15,8 @@ from collections.abc import Sequence
 from html import escape
 
 from promptreplay.bench.labels import size_label
-from promptreplay.bench.probe_summary import ProbeSummary, RungSummary
+from promptreplay.bench.probe_rung_summary import RungSummary
+from promptreplay.bench.probe_summary import ProbeSummary
 from promptreplay.bench.probe_tables import TableBlock
 
 __all__ = [

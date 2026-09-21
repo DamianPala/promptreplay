@@ -344,6 +344,50 @@ def test_the_closing_spend_line_prints_exactly_once_in_human_mode(
     assert "spent $" in outcome.stdout  # the last line of the rendered tables, not stderr
 
 
+def test_spend_lines_names_output_beyond_the_one_token_limit(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 5: a provider that ignores `max_tokens: 1` can push the bill well past the
+    worst-case estimate, which only ever prices prompt tokens; the closing line names the
+    dollar figure a `--budget` the user respected still could not have bounded."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+
+    def reply(index: int) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "model": "model-a",
+                "usage": {
+                    "input_tokens": 100 if index == 0 else 10,
+                    "cache_read_input_tokens": 0 if index == 0 else 90,
+                    "output_tokens": 1 if index == 0 else 500,
+                },
+            },
+        )
+
+    _install(monkeypatch, _transport(reply))
+    outcome = cli.run(
+        "probe",
+        "t",
+        "fake:model-a",
+        "--rungs",
+        "1",
+        "--repeats",
+        "2",
+        "--gap",
+        "0",
+        "--no-throughput",
+        "--yes",
+        env={**bench_paths.env, **_ENV},
+        tty_stdout=True,
+    )
+    assert outcome.code == 0, outcome.stderr
+    # two warm reads x 500 output tokens x $2.00/M listed output price
+    assert "output beyond the one-token limit: $0.0020" in outcome.stdout
+
+
 def test_probe_and_report_print_the_same_worst_case_for_the_same_run(
     cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -744,8 +788,12 @@ def test_probe_exits_one_when_a_request_failed_and_keeps_the_run(
     )
     assert outcome.code == 1
     assert outcome.error["kind"] == "operation_failed"
-    assert "1 request(s) failed" in str(outcome.error["message"])
+    assert "1 request failed (fake:model-a)" in str(outcome.error["message"])
     assert "report" in str(outcome.error["hint"])
+    context = as_document(outcome.error.get("context"))
+    assert context is not None
+    assert context["failed"] == {"fake:model-a": 1}
+    assert context["skipped"] == {}
 
     run_dirs = sorted((bench_paths.runs_dir / "t").iterdir())
     assert len(run_dirs) == 1  # the run is on disk even though the command failed
@@ -753,6 +801,52 @@ def test_probe_exits_one_when_a_request_failed_and_keeps_the_run(
     records = (run_dirs[0] / "fake-model-a.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(records) == 2
     assert "boom" in records[1]  # the failed warm read is persisted, error and all
+
+
+def test_probe_partial_message_names_each_endpoint_and_its_own_count(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two failing endpoints: the message and the context name each one by its short label
+    and its own count, worst offender first, instead of a bare total (fix)."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    calls: dict[str, int] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        key = str(body.get("model"))
+        seen = calls.get(key, 0)
+        calls[key] = seen + 1
+        if key == "model-a" and seen > 0:  # cold ok, both warm reads fail: 2 failed, not skipped
+            return httpx.Response(500, json={"error": {"message": "boom"}})
+        if key == "model-b":  # cold fails: 1 failed, its rung skipped, no warm read follows
+            return httpx.Response(500, json={"error": {"message": "boom"}})
+        return _ok()
+
+    _install(monkeypatch, _transport(lambda index: _ok(), handler=handler))
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "fake:model-a",
+        "fake:model-b",
+        "--rungs",
+        "1",
+        "--repeats",
+        "2",
+        "--gap",
+        "0",
+        "--no-throughput",
+        "--yes",
+    )
+    assert outcome.code == 1
+    message = str(outcome.error["message"])
+    assert "3 requests failed (fake:model-a 2, fake:model-b 1)" in message
+    assert "1 rung skipped (fake:model-b)" in message
+    context = as_document(outcome.error.get("context"))
+    assert context is not None
+    assert context["failed"] == {"fake:model-a": 2, "fake:model-b": 1}
+    assert context["skipped"] == {"fake:model-b": 1}
 
 
 def test_probe_partial_failure_still_prints_the_tables_in_human_mode(
@@ -817,7 +911,9 @@ def test_probe_partial_failure_gives_json_callers_the_summaries(
     assert outcome.error["kind"] == "operation_failed"
     context = as_document(outcome.error.get("context"))
     assert context is not None, "the error must carry the run's location"
-    assert set(context) == {"run_dir", "run_hex"}
+    assert set(context) == {"run_dir", "run_hex", "failed", "skipped"}
+    assert context["failed"] == {"fake:model-a": 1}
+    assert context["skipped"] == {}
     assert Path(str(context["run_dir"])).is_dir()
     doc = outcome.document
     assert doc["partial"] is True
@@ -849,7 +945,7 @@ def test_probe_exits_one_when_a_rung_is_skipped_by_a_failed_cold_write(
         "--yes",
     )
     assert outcome.code == 1
-    assert "1 rung(s) skipped" in str(outcome.error["message"])
+    assert "1 rung skipped (fake:model-a)" in str(outcome.error["message"])
 
 
 def test_probe_warm_sends_no_nonce(
@@ -1350,10 +1446,12 @@ def test_probe_reports_a_failed_stream_without_skipping_the_rung(
     )
     # the streamed request failed, so the command exits non-zero, but the rung is measured
     assert outcome.code == 1
-    assert "1 request(s) failed" in str(outcome.error["message"])
+    assert "1 request failed (fake:model-a)" in str(outcome.error["message"])
     context = as_document(outcome.error.get("context"))
     assert context is not None
-    assert set(context) == {"run_dir", "run_hex"}
+    assert set(context) == {"run_dir", "run_hex", "failed", "skipped"}
+    assert context["failed"] == {"fake:model-a": 1}
+    assert context["skipped"] == {}
     doc = outcome.document
     assert doc["partial"] is True
     [summary] = [d for d in map(as_document, as_list(doc["summaries"]) or []) if d]
@@ -1612,10 +1710,12 @@ def test_probe_does_not_hang_on_a_stream_that_stalls(
         "--yes",
     )
     assert outcome.code == 1  # the stalled stream is reported, the rest of the run stands
-    assert "1 request(s) failed" in str(outcome.error["message"])
+    assert "1 request failed (fake:model-a)" in str(outcome.error["message"])
     context = as_document(outcome.error.get("context"))
     assert context is not None
-    assert set(context) == {"run_dir", "run_hex"}
+    assert set(context) == {"run_dir", "run_hex", "failed", "skipped"}
+    assert context["failed"] == {"fake:model-a": 1}
+    assert context["skipped"] == {}
     doc = outcome.document
     assert doc["partial"] is True
     [summary] = [d for d in map(as_document, as_list(doc["summaries"]) or []) if d]

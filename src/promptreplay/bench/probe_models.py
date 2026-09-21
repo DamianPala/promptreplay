@@ -21,6 +21,12 @@ type Role = Literal["cold", "warm", "stream", "ttl", "precheck"]
 """What a probe request is for: the write, a warm read, the throughput request, a TTL read,
 or an availability pre-check -- never part of a spec's own records, persisted separately."""
 
+READ_ROLES: tuple[Role, ...] = ("cold", "warm", "ttl")
+"""The roles sent with `max_tokens: 1`; the throughput request asks for `STREAM_MAX_TOKENS`
+and is not one of them. Lives here, next to `Role`, because both `bench.probe_reads` (the
+token count) and `bench.spend` (the same tokens in dollars) have to draw the line in the
+same place, and `probe_reads` imports `spend`, so neither can own it."""
+
 _DEFAULT_REPEATS = [6, 2, 2]
 _TWOXX_MIN = 200
 _TWOXX_MAX = 300

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import click
 
@@ -34,6 +34,8 @@ from promptreplay.core.spec import CommandSpec, Effects
 from promptreplay.core.terminal_text import escape_terminal_text
 
 if TYPE_CHECKING:
+    import httpx
+
     from promptreplay.bench.openrouter import Endpoint
 
 _FETCH_TIMEOUT_S = 30.0
@@ -168,10 +170,6 @@ def endpoints(ctx: click.Context, model: str, sort: str) -> Document:
     api_key = _default_api_key(invocation)
     try:
         fetched = asyncio.run(_fetch(model, api_key=api_key))
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == _NOT_FOUND:
-            raise NotFound(f"OpenRouter lists no model with slug {model!r}") from exc
-        raise OperationFailed(f"Fetching endpoints for {model!r} failed: {exc}") from exc
     except httpx.HTTPError as exc:
         raise OperationFailed(f"Fetching endpoints for {model!r} failed: {exc}") from exc
     ordered = sorted(fetched, key=_SORT_KEYS[sort])
@@ -184,12 +182,86 @@ async def _fetch(model: str, *, api_key: str | None) -> list[Endpoint]:
     from promptreplay.bench.openrouter import fetch_endpoints
 
     async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT_S) as client:
-        # The unkeyed call stays a two-argument one, the same convention
-        # `bench.estimate.fetch_endpoint_index` uses, so a test double with the plain
-        # `(client, model)` signature keeps working when no key is configured.
-        if api_key is None:
-            return await fetch_endpoints(client, model)
-        return await fetch_endpoints(client, model, api_key=api_key)
+        try:
+            # The unkeyed call stays a two-argument one, the same convention
+            # `bench.estimate.fetch_endpoint_index` uses, so a test double with the plain
+            # `(client, model)` signature keeps working when no key is configured.
+            if api_key is None:
+                return await fetch_endpoints(client, model)
+            return await fetch_endpoints(client, model, api_key=api_key)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != _NOT_FOUND:
+                raise
+            hint = await _same_author_hint(client, model)
+            raise NotFound(f"OpenRouter lists no model with slug {model!r}", hint=hint) from exc
+
+
+_SAME_AUTHOR_TIMEOUT_S = 10.0
+_SAME_AUTHOR_LIMIT = 6
+
+
+async def _same_author_hint(client: httpx.AsyncClient, model: str) -> str | None:
+    """Best-effort `Slugs by the same author: ...`, or `None` on any failure.
+
+    A keyless GET to OpenRouter's own model list (`bench.openrouter.MODELS_URL`, the same
+    one `bench.openrouter_stats` reads): no `Authorization` header and no API key sent, a
+    mistyped slug is not reason enough to spend a request on the account's own key. Kept
+    among the same author's other slugs -- the part of `model` before the first `/` -- and
+    ranked by how much of `model` each one shares as a literal prefix, longest first, so a
+    typo close to the real slug (`-flash-typo` off `-flash`) sorts before an unrelated
+    sibling model. Any failure here -- no author in `model`, the request failing, or a
+    payload shaped unexpectedly -- falls back to no hint rather than a second error on top
+    of the 404.
+    """
+    import httpx
+
+    from promptreplay.bench.openrouter import MODELS_URL
+
+    author, sep, _ = model.partition("/")
+    if not sep:
+        return None
+    try:
+        resp = await client.get(MODELS_URL, timeout=_SAME_AUTHOR_TIMEOUT_S)
+        resp.raise_for_status()
+        ids = _slugs_of(resp.json())
+    except (httpx.HTTPError, ValueError):
+        return None
+    candidates = sorted(
+        (i for i in ids if i.startswith(f"{author}/")),
+        key=lambda slug: -_common_prefix_len(slug, model),
+    )[:_SAME_AUTHOR_LIMIT]
+    if not candidates:
+        return None
+    return f"Slugs by the same author: {', '.join(candidates)}"
+
+
+def _slugs_of(payload: object) -> list[str]:
+    """Every `id` in an OpenRouter models payload, or `ValueError` on any other shape.
+
+    The caller turns that `ValueError` into no hint at all, so a payload that is not the
+    documented `{"data": [...]}` object fails here rather than somewhere further down.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("models payload: not an object")
+    data = cast("dict[str, Any]", payload).get("data")
+    if not isinstance(data, list):
+        raise ValueError("models payload: missing 'data'")
+    slugs: list[str] = []
+    for raw in cast("list[Any]", data):
+        if isinstance(raw, dict):
+            slug = cast("dict[str, Any]", raw).get("id")
+            if isinstance(slug, str):
+                slugs.append(slug)
+    return slugs
+
+
+def _common_prefix_len(a: str, b: str) -> int:
+    count = 0
+    for x, y in zip(a, b, strict=False):
+        if x != y:
+            break
+        count += 1
+    return count
 
 
 def _default_api_key(invocation: Invocation) -> str | None:

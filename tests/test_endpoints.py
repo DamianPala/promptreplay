@@ -120,6 +120,92 @@ def test_endpoints_not_found_for_an_unknown_slug(cli: Cli, monkeypatch: pytest.M
     assert "mozilla" not in outcome.stderr
 
 
+def test_endpoints_not_found_hints_same_author_slugs(
+    cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 404 gets a hint naming the same author's other slugs, ranked by how much of the
+    requested slug each one shares as a prefix, longest first, capped at 6 (agent-test
+    finding 6a)."""
+    models_payload = {
+        "data": [
+            {"id": "deepseek/deepseek-v4.1-flash"},
+            {"id": "deepseek/deepseek-v4.1-terminus"},
+            {"id": "deepseek/deepseek-v4.1-base"},
+            {"id": "deepseek/deepseek-v4.1-mini"},
+            {"id": "deepseek/deepseek-v4.1-nano"},
+            {"id": "deepseek/deepseek-v4.1"},
+            {"id": "deepseek/deepseek-v3"},
+            {"id": "openai/gpt-5"},
+        ]
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/models":
+            assert "authorization" not in request.headers
+            return httpx.Response(200, json=models_payload)
+        return httpx.Response(404, text="not found")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+    outcome = cli.run("endpoints", "deepseek/deepseek-v4.1-flash-typo")
+    assert outcome.code == 1
+    assert outcome.error["kind"] == "not_found"
+    assert outcome.error["hint"] == (
+        "Slugs by the same author: deepseek/deepseek-v4.1-flash, "
+        "deepseek/deepseek-v4.1-terminus, deepseek/deepseek-v4.1-base, "
+        "deepseek/deepseek-v4.1-mini, deepseek/deepseek-v4.1-nano, "
+        "deepseek/deepseek-v4.1"
+    )
+
+
+def test_endpoints_not_found_has_no_hint_without_an_author_in_the_slug(
+    cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slug with no `/` has no author to look up, so the hint is skipped without a request
+    to the models list."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path != "/api/v1/models"
+        return httpx.Response(404, text="not found")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+    outcome = cli.run("endpoints", "no-such-slug")
+    assert outcome.code == 1
+    assert "hint" not in outcome.error
+
+
+def test_endpoints_not_found_has_no_hint_when_the_models_list_also_fails(
+    cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The models-list lookup is best-effort: any failure there falls back to the plain
+    not_found instead of a second error on top of it."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="not found")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+    outcome = cli.run("endpoints", "deepseek/deepseek-v4.1-flash-typo")
+    assert outcome.code == 1
+    assert "hint" not in outcome.error
+
+
+def test_endpoints_not_found_has_no_hint_for_a_models_payload_that_is_not_an_object(
+    cli: Cli, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 200 whose body is a bare list, not `{"data": [...]}`, is still a failed lookup: the
+    404 comes back without a hint rather than as an unhandled error on top of it."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/models":
+            return httpx.Response(200, json=["deepseek/deepseek-v4.1"])
+        return httpx.Response(404, text="not found")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+    outcome = cli.run("endpoints", "deepseek/deepseek-v4.1-flash-typo")
+    assert outcome.code == 1
+    assert outcome.error["kind"] == "not_found"
+    assert "hint" not in outcome.error
+
+
 def test_endpoints_sends_the_default_gateway_key_when_set(
     cli: Cli, monkeypatch: pytest.MonkeyPatch
 ) -> None:

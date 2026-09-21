@@ -37,6 +37,7 @@ _HISTORY_COLUMNS = (
     "protocol",
     "endpoint",
     "hit %",
+    "1st hit %",
     "eff $/M",
     "TTFT ms",
     "tok/s",
@@ -77,7 +78,14 @@ def history_text(document: Document) -> str:
 def compare_text(document: Document) -> str:
     """What the two runs are, the delta per metric, then the listed prices and the unpaired."""
     rows = _rows(document, "rows")
-    caption, labels = _labels([str(row.get("endpoint")) for row in rows])
+    renamed = [
+        (str(row.get("endpoint")), str(row.get("paired_with")))
+        for row in rows
+        if row.get("paired_with") is not None
+    ]
+    caption, labels = _labels(
+        [str(row.get("endpoint")) for row in rows] + [pair_b for _, pair_b in renamed]
+    )
     lines = [
         f"A: {_run_line(document.get('run_a'))}",
         f"B: {_run_line(document.get('run_b'))}",
@@ -92,6 +100,9 @@ def compare_text(document: Document) -> str:
         # The absence is said out loud: the listed price is the one number a comparison
         # cannot recompute, and a reader is owed the reason it is missing.
         lines.extend(["", _NO_SNAPSHOT])
+    if renamed:
+        lines.append("")
+        lines.extend(_renamed_line(pair_a, pair_b, labels) for pair_a, pair_b in renamed)
     for key, label in (("only_in_a", "only in A"), ("only_in_b", "only in B")):
         endpoints = [str(endpoint) for endpoint in as_list(document.get(key)) or []]
         if endpoints:
@@ -141,6 +152,7 @@ def _history_cells(row: Document, labels: dict[str, str]) -> list[str]:
         str(row.get("protocol")),
         _label(row, labels),
         _number(row.get("hit_rate"), _PCT_DIGITS, scale=100.0),
+        _number(row.get("first_hit_rate"), _PCT_DIGITS, scale=100.0),
         _number(row.get("eff_per_m_prompt"), _USD_DIGITS),
         _number(row.get("ttft_ms"), _MS_DIGITS),
         _number(row.get("gen_tok_s"), _TOK_S_DIGITS),
@@ -197,6 +209,13 @@ def _series_line(
 def _label(row: Document, labels: dict[str, str]) -> str:
     endpoint = str(row.get("endpoint"))
     return labels.get(endpoint, endpoint)
+
+
+def _renamed_line(endpoint_a: str, endpoint_b: str, labels: dict[str, str]) -> str:
+    """One provider-name fallback pair, named the way the table above it names its rows."""
+    a = labels.get(endpoint_a, endpoint_a)
+    b = labels.get(endpoint_b, endpoint_b)
+    return f"{a} in A is paired with {b} in B: same provider, the tag was renamed between the runs."
 
 
 def _metric(value: object, digits: int, *, percent: bool = False) -> str:

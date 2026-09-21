@@ -69,20 +69,30 @@ def fail_on_partial(
     or not, so an agent never has to unwrap it from `error.context`; a terminal instead gets
     the two tables on stderr before the error, which stays this command's own record and
     names only the run rather than repeating the document.
+
+    The message names which endpoint failed or was skipped, in the short form the tables
+    already use, instead of a bare count: a run of several endpoints answers "which one"
+    without a trip to `report`, and a single-endpoint run still names it for consistency.
     """
     from promptreplay.bench.probe import is_failed
+    from promptreplay.bench.probe_tables import probe_labels
     from promptreplay.core.output import write_document
 
-    failed = sum(1 for records in run.records.values() for record in records if is_failed(record))
-    skipped = sum(summary.skipped for summary in summaries)
-    document["partial"] = bool(failed or skipped)
-    if not failed and not skipped:
+    failed_by_label = {
+        label: count
+        for label, records in run.records.items()
+        if (count := sum(1 for record in records if is_failed(record)))
+    }
+    skipped_by_label = {summary.label: summary.skipped for summary in summaries if summary.skipped}
+    document["partial"] = bool(failed_by_label or skipped_by_label)
+    if not failed_by_label and not skipped_by_label:
         return
+    short_labels = dict(zip((s.label for s in summaries), probe_labels(summaries), strict=True))
     parts: list[str] = []
-    if failed:
-        parts.append(f"{failed} request(s) failed")
-    if skipped:
-        parts.append(f"{skipped} rung(s) skipped")
+    if failed_by_label:
+        parts.append(_clause(failed_by_label, "request", "requests", "failed", short_labels))
+    if skipped_by_label:
+        parts.append(_clause(skipped_by_label, "rung", "rungs", "skipped", short_labels))
     if invocation.machine_readable:
         write_document(invocation.streams.stdout, document)
     else:
@@ -92,10 +102,35 @@ def fail_on_partial(
         raise OperationFailed(
             f"The probe finished with {' and '.join(parts)}",
             hint=f"The run is saved; inspect it with promptreplay report {run_dir}",
-            context={"run_dir": str(run_dir), "run_hex": run.run_hex},
+            context={
+                "run_dir": str(run_dir),
+                "run_hex": run.run_hex,
+                "failed": dict(failed_by_label),
+                "skipped": dict(skipped_by_label),
+            },
         )
 
     invocation.on_success.append(hook)
+
+
+def _clause(
+    counts: dict[str, int],
+    singular: str,
+    plural: str,
+    verb: str,
+    short_labels: dict[str, str],
+) -> str:
+    """`N noun(s) verb (label)`, or `(label n, label n, ...)` -- worst offender first -- past
+    one endpoint. A single endpoint's own count is not repeated in the parenthetical: its
+    total already says how many."""
+    total = sum(counts.values())
+    noun = singular if total == 1 else plural
+    ordered = sorted(counts.items(), key=lambda item: -item[1])
+    if len(ordered) == 1:
+        detail = short_labels.get(ordered[0][0], ordered[0][0])
+    else:
+        detail = ", ".join(f"{short_labels.get(label, label)} {n}" for label, n in ordered)
+    return f"{total} {noun} {verb} ({detail})"
 
 
 def progress_line(record: ProbeResult) -> str:

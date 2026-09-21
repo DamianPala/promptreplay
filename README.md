@@ -206,12 +206,13 @@ promptreplay history MODEL
 promptreplay compare previous latest
 ```
 
-`history` reads runs offline and shows, per run and endpoint, the date, trace, protocol, hit rate, effective price, TTFT, throughput, errors, what the endpoint spent, and the listed price that run recorded, plus a hit-rate sparkline.
+`history` reads runs offline and shows, per run and endpoint, the date, trace, protocol, hit rate, first-read (cold-start) hit rate, effective price, TTFT, throughput, errors, what the endpoint spent, and the listed price that run recorded, plus a hit-rate sparkline.
+`--json` rows also carry `cached_fraction`, which the table leaves out because it is already wide.
 `spend $` is recomputed from the run's own records, so an older run gets one too, and `-` means the run recorded no price to compute it from.
 With no model, `history` lists every model in the runs directory.
 
 `compare RUN_A RUN_B` accepts a run directory, a trace name, `latest`, or `previous`, and prints A to B metrics for endpoints measured in both runs plus listed-price changes.
-Endpoints pair by label, so an OpenRouter tag renamed between runs, such as `@novita` then `@novita/fp8`, lands in `only in A` or `only in B` instead of in a delta.
+Endpoints pair by label; an OpenRouter tag renamed between runs, such as `@novita` then `@novita/fp8`, is paired by provider name instead when that leaves exactly one candidate on each side, and named under the table, otherwise it lands in `only in A` or `only in B`.
 Runs with different traces or protocols are refused unless `--force`, because probe repeat-read rates and full-replay per-turn totals are different measurements.
 
 Each run keeps an endpoint snapshot with the pinned provider, quantization, context length, one-day uptime, and status, along with the prices and their source at measurement time.

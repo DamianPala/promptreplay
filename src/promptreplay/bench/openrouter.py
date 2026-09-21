@@ -13,6 +13,9 @@ from promptreplay.bench.targets import Prices
 
 _NORMALIZE = re.compile(r"[^a-z0-9]")
 
+MODELS_URL = "https://openrouter.ai/api/v1/models"
+"""The documented model list; shared with `bench.openrouter_stats` (`canonical_slug`) and
+`commands.endpoints` (the same-author hint on a 404), so the string lives in one place."""
 _ENDPOINTS_URL = "https://openrouter.ai/api/v1/models/{model}/endpoints"
 _GENERATION_URL = "https://openrouter.ai/api/v1/generation"
 _ZDR_URL = "https://openrouter.ai/api/v1/endpoints/zdr"

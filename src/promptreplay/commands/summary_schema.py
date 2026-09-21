@@ -126,6 +126,7 @@ PROBE_SUMMARY = _all(
         "spend_usd": nullable_number(),
         "session_prompt_usd": nullable_number(),
         "output_tokens": integer(),
+        "output_usd": nullable_number(),
         "providers_seen": array(_PROVIDER_COUNT),
         "served": string(),
         "model_seen": nullable_string(),
@@ -251,6 +252,7 @@ def probe_summary_to_document(summary: ProbeSummary) -> Document:
         "spend_usd": summary.spend_usd,
         "session_prompt_usd": summary.session_prompt_usd,
         "output_tokens": summary.output_tokens,
+        "output_usd": summary.output_usd,
         "providers_seen": [
             {"provider": name, "count": count}
             for name, count in sorted(summary.providers_seen.items())

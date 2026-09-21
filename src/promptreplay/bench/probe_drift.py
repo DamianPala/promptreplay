@@ -16,7 +16,8 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from promptreplay.bench.openrouter import normalize_provider
-from promptreplay.bench.probe_summary import ProbeSummary, RungSummary
+from promptreplay.bench.probe_rung_summary import RungSummary
+from promptreplay.bench.probe_summary import ProbeSummary
 
 DRIFT_TOKENS_PCT = 1.0
 """A prompt-size difference smaller than this is tokenizer noise, not drift."""

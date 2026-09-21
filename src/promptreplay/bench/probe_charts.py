@@ -12,7 +12,8 @@ from collections.abc import Sequence
 
 from promptreplay.bench.html_svg import MAX_SERIES, Bar, BarGroup, BarRow
 from promptreplay.bench.labels import size_label
-from promptreplay.bench.probe_summary import ProbeSummary, RungSummary
+from promptreplay.bench.probe_rung_summary import RungSummary
+from promptreplay.bench.probe_summary import ProbeSummary
 
 _PRICE_SOURCE_WORDS: dict[str, str] = {
     "targets": "native price list",

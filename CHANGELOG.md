@@ -86,6 +86,12 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
   and `--yes` alongside it is accepted and ignored
 - `1st hit %` column: hit rate pooled over only each rung's first warm read, the only one an
   agent loop performs, next to the pooled `hit %` that flatters it
+- `history` rows carry `1st hit %` next to `hit %` in the table, and `first_hit_rate`/
+  `cached_fraction` in `--json`, so a cold-start gap is visible without opening `report`
+- `compare` pairs a renamed OpenRouter tag by provider name when the label pairing leaves
+  exactly one unpaired row on each side (`gmicloud` → `gmicloud/fp8`, which OpenRouter does
+  within hours), instead of showing it as an unrelated endpoint in each run; `paired_with`
+  on `rows`/`listed` and one line under the table name the pair
 - Every probe and sweep persists the swept model's listed endpoint prices as `listing_prices`
   in `run.json`; an unpinned OpenRouter endpoint is repriced by what actually served it, from that
   listing where the run has one (one provider takes its listed rate as is, several combine by
@@ -99,6 +105,11 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
   the closing line of the rendered tables, and `history` gets a `spend $` column
 - `output_tokens` per endpoint, and a note when a read returned more than its `max_tokens: 1`
   budget (GMICloud and native DeepSeek both do)
+- `output_usd` per endpoint: those output tokens billed at the listed output price; the note
+  names the dollar figure next to the token count, and the run's `spent $X (worst case $Y)`
+  line and the HTML cost caveat both gain an `output beyond the one-token limit: $Z` clause
+  when it happens, since the worst-case estimate only ever prices prompt tokens and
+  `--budget` cannot bound this
 - The availability pre-check's own requests persist to `precheck.jsonl`, kept out of every
   endpoint's own records; `probe`/`report` print `pre-check: N requests, $X`
 - `rate_limited` next to `errors`: how many of an endpoint's requests came back HTTP 429, with a
@@ -228,6 +239,16 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
   `N.N M prompt tokens` at or above it, instead of a small trace rounding to `0.0 M`
 - `sweep`'s `candidates:` table and its `endpoints:` estimate table are separated by one
   blank line instead of running straight into each other
+- The partial-run error names which endpoint failed or was skipped, and its own count
+  (`7 requests failed (@baseten/fp8 5, @novita 2)`), instead of a bare total that made a
+  caller open the report to learn whether one endpoint or several were at fault; the
+  error's `context` gains `failed`/`skipped` maps of endpoint to count next to `run_dir`
+- `endpoints`' `not_found` on a bad slug hints the same author's closest other slugs, ranked
+  by how much of the requested slug each one shares as a prefix, from one keyless GET to
+  OpenRouter's own model list; best-effort, so a slug with no author or a failed lookup falls
+  back to the plain error
+- `sweep`'s drop-reason sentence uses "their" for a reason shared by several endpoints
+  instead of "its", which read as a typo grouping more than one endpoint under one clause
 
 [Unreleased]: https://github.com/DamianPala/promptreplay/compare/0.2.0...main
 [0.2.0]: https://github.com/DamianPala/promptreplay/releases/tag/0.2.0

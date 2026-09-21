@@ -13,7 +13,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from promptreplay.bench.labels import column_labels, named, text_table
-from promptreplay.bench.probe_summary import ProbeSummary, RungSummary, TtlRead
+from promptreplay.bench.probe_rung_summary import RungSummary, TtlRead
+from promptreplay.bench.probe_summary import ProbeSummary
 from promptreplay.bench.summary import cache_mode_note, cache_mode_sentence
 
 _HIT_FULL = 0.98

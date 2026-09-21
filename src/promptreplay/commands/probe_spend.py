@@ -51,12 +51,14 @@ _ONE_MILLION = 1_000_000
 
 
 def spend_lines(document: Document) -> list[str]:
-    """`pre-check: N requests, $X` then `spent $X (worst case $Y)`, when the run knows them.
+    """`pre-check: N requests, $X` then `spent $X (worst case $Y)`, when the run knows them,
+    then `output beyond the one-token limit: $Z` when a provider ignored `max_tokens: 1`.
 
-    Both a `probe` result and a `report` of one carry the same `spend_usd`/`precheck` fields,
-    so this is the one place either renders them.
+    Both a `probe` result and a `report` of one carry the same `spend_usd`/`precheck`/
+    `summaries` fields, so this is the one place either renders them.
     """
     from promptreplay.bench.spend import dash_money as _dash_money
+    from promptreplay.bench.spend import output_over_budget_usd
 
     lines: list[str] = []
     precheck = as_document(document.get("precheck"))
@@ -67,6 +69,9 @@ def spend_lines(document: Document) -> list[str]:
     if isinstance(spend, int | float):
         worst = _dash_money(document.get("worst_case_usd"))
         lines.append(f"spent {_dash_money(spend)} (worst case {worst})")
+        over_budget = output_over_budget_usd(document)
+        if over_budget:
+            lines.append(f"output beyond the one-token limit: {_dash_money(over_budget)}")
     return lines
 
 

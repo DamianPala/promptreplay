@@ -23,6 +23,12 @@ def test_readme_commands_and_flags_match_introspection() -> None:
     _assert_commands_match_introspection(root, _command_lines(README))
 
 
+def test_skill_mentions_schema_works_for_every_command() -> None:
+    text = SKILL.read_text(encoding="utf-8")
+    assert "schema COMMAND" in text
+    assert "any command" in text
+
+
 def _assert_commands_match_introspection(root: Group, lines: list[str]) -> None:
     commands = dict(listed_commands(root))
     shared_flags = {_long_name(option) for option in global_flags(root)}

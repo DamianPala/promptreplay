@@ -5,7 +5,9 @@ prompt the first one just wrote, so pooling every repeat the way `ProbeSummary.h
 does flatters every provider's cache. This module pools only the first reads the same way,
 and separately counts the output tokens a `max_tokens: 1` read was never supposed to produce
 and the requests a run's own pace turned into a 429 -- both folded into `ProbeSummary` next
-to it. A leaf module: it does not import `probe_summary`, so `probe_summary` can import it.
+to it. It does not import `probe_summary`, so `probe_summary` can import it; `bench.spend`
+is the one exception, for the dollar figure in `output_tokens_note`, and does not import
+back.
 """
 
 from __future__ import annotations
@@ -13,14 +15,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from statistics import fmean
 
-from promptreplay.bench.probe_models import ProbeResult, is_served
+from promptreplay.bench.probe_models import READ_ROLES, ProbeResult, is_served
+from promptreplay.bench.spend import dash_money
 
 __all__ = ["first_read_stats", "output_token_stats", "output_tokens_note", "rate_limited_count"]
 
 _MAX_TOKENS_PER_READ = 1
 _HTTP_TOO_MANY_REQUESTS = 429
-_READ_ROLES = ("cold", "warm", "ttl")
-"""Requests sent with `max_tokens: 1`; the streamed throughput request is not one of them."""
 
 
 def first_read_stats(
@@ -39,22 +40,30 @@ def first_read_stats(
 
 def output_token_stats(records: Sequence[ProbeResult]) -> tuple[int, int]:
     """`(output_tokens, reads)`: total output tokens and how many one-token reads served them."""
-    reads = [record for record in records if record.role in _READ_ROLES and is_served(record)]
+    reads = [record for record in records if record.role in READ_ROLES and is_served(record)]
     return sum(record.usage.output_tokens for record in reads), len(reads)
 
 
-def output_tokens_note(output_tokens: int, reads: int) -> str | None:
+def output_tokens_note(
+    output_tokens: int, reads: int, *, output_usd: float | None = None
+) -> str | None:
     """The note when reads returned more than their `max_tokens: 1` budget, else `None`.
 
     Every renderer already prefixes a note with its endpoint's own label (the text report's
     `label: note`, the HTML page's bold short label), so the sentence itself names what
-    happened and what it costs without repeating who did it.
+    happened and what it costs without repeating who did it. `output_usd` -- the same tokens
+    priced at the endpoint's listed output rate (`bench.spend.output_cost`) -- adds the dollar
+    figure a reader actually budgets against; without a listed price the note still names the
+    token count alone.
     """
     if reads == 0 or output_tokens <= reads * _MAX_TOKENS_PER_READ:
         return None
+    clause = f"generated {output_tokens:,} tokens"
+    if output_usd is not None:
+        clause += f", about {dash_money(output_usd)} at its listed output price"
     return (
-        f"ignored the one-token limit on the cache probes and generated {output_tokens:,} "
-        "tokens. That raised this run's cost, not the prices above."
+        f"ignored the one-token limit on the cache probes and {clause}. "
+        "That raised this run's cost, not the prices above."
     )
 
 

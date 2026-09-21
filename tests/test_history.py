@@ -278,6 +278,8 @@ def test_history_json_carries_the_rows_and_the_series(cli: Cli, bench_paths: Ben
         if row["endpoint"] == "or:model@novita" and row["created"] == stamp_at(1)
     ]
     assert newest["hit_rate"] == 1.0
+    assert newest["first_hit_rate"] == 1.0
+    assert newest["cached_fraction"] == 1.0
     # eff $/M is read straight off summarize_probe: pooled h=1.0, every warm read hit fully
     assert newest["eff_per_m_prompt"] == pytest.approx((1 - 1.0) * 0.24 + 1.0 * 0.03)
     assert newest["listed_input"] == 0.24
@@ -396,8 +398,32 @@ def test_history_keeps_a_full_replay_with_dashes_for_what_it_has_not_measured(
     [row] = rows_of(document)
     assert row["protocol"] == "full"
     assert row["hit_rate"] == 0.5
+    assert row["first_hit_rate"] is None and row["cached_fraction"] is None
     assert row["ttft_ms"] is None and row["gen_tok_s"] is None
     assert row["listed_input"] is None and row["listed_source"] == "n/a"
+
+
+def test_history_first_hit_rate_can_differ_from_the_pooled_hit_rate(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    """A rung that misses its first read and hits later: `hit_rate` and `first_hit_rate` part
+    ways, which is the cold-start gap the tester could not see before this field existed."""
+    write_probe_fixture(
+        bench_paths.runs_dir, "sample", stamp_at(1.0), [spec("relace", cached=(0, 100))]
+    )
+    document = cli.run("history", "--json", env=bench_paths.env).document
+    [row] = rows_of(document)
+    assert row["hit_rate"] == 0.5
+    assert row["first_hit_rate"] == 0.0
+
+    text = cli.run("history", tty_stdout=True, env=bench_paths.env).stdout
+    header = next(line for line in text.splitlines() if line.startswith("date"))
+    columns = [c.strip() for c in header.split(" | ")]
+    assert columns.index("1st hit %") == columns.index("hit %") + 1
+    body = next(line for line in text.splitlines() if "@relace" in line)
+    cells = [c.strip() for c in body.split(" | ")]
+    assert cells[columns.index("hit %")] == "50.0"
+    assert cells[columns.index("1st hit %")] == "0.0"
 
 
 def test_an_old_run_without_the_snapshot_shows_no_listed_price(

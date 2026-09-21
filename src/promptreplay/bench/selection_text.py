@@ -116,14 +116,18 @@ def _drop_sentences(
     dropped: Iterable[SelectionDrop], floor: float, quantization: Sequence[str] = ()
 ) -> list[str]:
     """`{label} was skipped because {reason}.`, endpoints sharing a reason joined into one
-    sentence, named the way the table above it does (`_short_drop_label`)."""
-    groups: dict[str, list[str]] = {}
+    sentence, named the way the table above it does (`_short_drop_label`).
+
+    Grouped by `_reason_words(..., plural=False)`: the pronoun does not change which drops
+    share a reason, only how the final sentence reads once the group's real size is known.
+    """
+    groups: dict[str, list[SelectionDrop]] = {}
     for drop in dropped:
-        groups.setdefault(_reason_words(drop, floor, quantization), []).append(
-            _short_drop_label(drop)
-        )
+        groups.setdefault(_reason_words(drop, floor, quantization), []).append(drop)
     sentences: list[str] = []
-    for reason, labels in groups.items():
+    for drops in groups.values():
+        labels = [_short_drop_label(drop) for drop in drops]
+        reason = _reason_words(drops[0], floor, quantization, plural=len(drops) > 1)
         verb = "was skipped" if len(labels) == 1 else "were skipped"
         sentences.append(f"{join_and(labels)} {verb} because {reason}.")
     return sentences
@@ -134,7 +138,9 @@ def _short_drop_label(drop: SelectionDrop) -> str:
     return f"@{drop.tag}" if "@" in drop.endpoint else drop.endpoint
 
 
-def _reason_words(drop: SelectionDrop, floor: float, quantization: Sequence[str] = ()) -> str:
+def _reason_words(
+    drop: SelectionDrop, floor: float, quantization: Sequence[str] = (), *, plural: bool = False
+) -> str:
     """A drop's own code (`status -2`, `uptime 1d 77.90 %`, `quantization fp4`) in the
     reader's words.
 
@@ -147,19 +153,29 @@ def _reason_words(drop: SelectionDrop, floor: float, quantization: Sequence[str]
     an OpenRouter rule, and a reader who set `--min-uptime` to something else needs to see
     which floor this run actually used. A quantization drop names the wanted values the same
     way, since `--quantization` is this run's own choice too.
+
+    `plural` picks the pronoun and verb ("their"/"they" over "its"/"it") once `_drop_sentences`
+    knows how many endpoints actually share this reason -- "their quantization" reads right
+    for two endpoints dropped on the same value, "its quantization" for one.
     """
     if drop.checked:
         return drop.reason
     if drop.reason.startswith("status "):
-        return "OpenRouter reported it as degraded"
+        return f"OpenRouter reported {'them' if plural else 'it'} as degraded"
     if drop.reason.startswith("uptime 1d "):
         pct = drop.reason.removeprefix("uptime 1d ").strip()
-        return f"its one-day uptime ({pct}) was below the {floor:g} % floor"
+        pronoun = "their" if plural else "its"
+        return f"{pronoun} one-day uptime ({pct}) was below the {floor:g} % floor"
     if drop.reason == "not ZDR":
-        return "it is not a zero-data-retention endpoint"
+        return (
+            "they are not zero-data-retention endpoints"
+            if plural
+            else "it is not a zero-data-retention endpoint"
+        )
     if drop.reason.startswith("quantization "):
         value = drop.reason.removeprefix("quantization ").strip()
-        return f"its quantization ({value}) was not among {', '.join(quantization)}"
+        pronoun = "their" if plural else "its"
+        return f"{pronoun} quantization ({value}) was not among {', '.join(quantization)}"
     return drop.reason
 
 

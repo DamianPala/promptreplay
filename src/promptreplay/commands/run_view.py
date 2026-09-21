@@ -49,6 +49,8 @@ _RUN_ROW = _all(
         "model": string(),
         "provider": string(),
         "hit_rate": nullable_number(),
+        "first_hit_rate": nullable_number(),
+        "cached_fraction": nullable_number(),
         "eff_per_m_prompt": nullable_number(),
         "ttft_ms": nullable_number(),
         "gen_tok_s": nullable_number(),
@@ -85,13 +87,21 @@ _METRIC = _all({"a": nullable_number(), "b": nullable_number(), "delta": nullabl
 _SPEC_DELTA = _all(
     {
         "endpoint": string(),
+        "paired_with": nullable_string(),
         "hit_rate": _METRIC,
         "eff_per_m_prompt": _METRIC,
         "ttft_ms": _METRIC,
         "gen_tok_s": _METRIC,
     }
 )
-_PRICE_DELTA = _all({"endpoint": string(), "price_in": _METRIC, "price_cache_read": _METRIC})
+_PRICE_DELTA = _all(
+    {
+        "endpoint": string(),
+        "paired_with": nullable_string(),
+        "price_in": _METRIC,
+        "price_cache_read": _METRIC,
+    }
+)
 COMPARE_OUTPUT = _all(
     {
         "run_a": obj(_RUN_REF, required=list(_RUN_REF)),
@@ -128,6 +138,7 @@ def compare_document(comparison: Comparison) -> Document:
         "rows": [
             {
                 "endpoint": row.spec,
+                "paired_with": row.paired_with,
                 "hit_rate": metric_document(row.hit_rate),
                 "eff_per_m_prompt": metric_document(row.eff_per_m_prompt),
                 "ttft_ms": metric_document(row.ttft_ms),
@@ -138,6 +149,7 @@ def compare_document(comparison: Comparison) -> Document:
         "listed": [
             {
                 "endpoint": row.spec,
+                "paired_with": row.paired_with,
                 "price_in": metric_document(row.price_in),
                 "price_cache_read": metric_document(row.price_cache_read),
             }
@@ -180,6 +192,8 @@ def row_document(row: RunRow) -> Document:
         "model": row.model,
         "provider": row.provider,
         "hit_rate": row.hit_rate,
+        "first_hit_rate": row.first_hit_rate,
+        "cached_fraction": row.cached_fraction,
         "eff_per_m_prompt": row.eff_per_m_prompt,
         "ttft_ms": row.ttft_ms,
         "gen_tok_s": row.gen_tok_s,

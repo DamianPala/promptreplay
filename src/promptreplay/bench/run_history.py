@@ -67,6 +67,12 @@ class RunRow(BaseModel):
     """The pinned tag, or the target's name for a spec that pins nothing."""
     hit_rate: float | None = None
     """Warm reads that found the cache, as a fraction; `None` when none was served."""
+    first_hit_rate: float | None = None
+    """The cold-start hit rate, pooled over only each rung's first warm read; `None` for a
+    full replay, which never computes it."""
+    cached_fraction: float | None = None
+    """How much of the cold prefix a served warm read covered, pooled; `None` for a full
+    replay."""
     eff_per_m_prompt: float | None = None
     ttft_ms: float | None = None
     gen_tok_s: float | None = None
@@ -282,6 +288,8 @@ def _probe_row(
         model=ref.model,
         provider=_provider(ref),
         hit_rate=summary.hit_rate,
+        first_hit_rate=summary.first_hit_rate,
+        cached_fraction=summary.cached_fraction,
         eff_per_m_prompt=summary.eff_per_m_prompt,
         ttft_ms=summary.ttft_ms,
         gen_tok_s=summary.gen_tok_s,

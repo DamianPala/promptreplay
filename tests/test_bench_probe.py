@@ -28,14 +28,9 @@ from promptreplay.bench.probe import (
 )
 from promptreplay.bench.probe_drift import apply_drift
 from promptreplay.bench.probe_models import Role
+from promptreplay.bench.probe_rung_summary import TtlRead, cached_of, summarize_rung
 from promptreplay.bench.probe_stream import BURST_NOTE, StreamResult
-from promptreplay.bench.probe_summary import (
-    ProbeSummary,
-    TtlRead,
-    cached_of,
-    summarize_probe,
-    summarize_rung,
-)
+from promptreplay.bench.probe_summary import ProbeSummary, summarize_probe
 from promptreplay.bench.probe_tables import probe_blocks, probe_labels, probe_markdown, render_probe
 from promptreplay.bench.rungs import (
     broadcast_repeats,
@@ -1936,6 +1931,29 @@ def test_no_output_tokens_note_within_the_max_tokens_1_budget() -> None:
     summary = summarize_probe("fake:model-a", [cold])
     assert summary.output_tokens == 1
     assert not [note for note in summary.notes if "output tokens" in note]
+
+
+def test_output_usd_and_its_dollar_clause_when_a_listed_price_is_known() -> None:
+    """Item 5: a run's own cost can run well past the worst-case estimate, which only ever
+    prices prompt tokens, so the surplus output is named in dollars, not tokens alone."""
+    cold = _record("cold", 0, prompt=100)
+    cold.usage = Usage(output_tokens=200)
+    warm = _record("warm", 1, cached=100)
+    warm.usage = Usage(output_tokens=150)
+    summary = summarize_probe("fake:model-a", [cold, warm], prices=_prices())
+    assert summary.output_usd == pytest.approx(350 * 2.0 * 1e-6)
+    assert (
+        "ignored the one-token limit on the cache probes and generated 350 tokens, about "
+        "$0.0007 at its listed output price. That raised this run's cost, not the prices "
+        "above." in summary.notes
+    )
+
+
+def test_output_usd_is_none_without_a_listed_price() -> None:
+    cold = _record("cold", 0, prompt=100)
+    cold.usage = Usage(output_tokens=1)
+    summary = summarize_probe("fake:model-a", [cold])
+    assert summary.output_usd is None
 
 
 # --- session projection (item 9) -------------------------------------------------
