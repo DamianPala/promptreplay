@@ -7,15 +7,15 @@ from pathlib import Path
 import click
 import pytest
 
-from provibench.app import build_cli
-from provibench.bench.openrouter import Endpoint
-from provibench.bench.probe import ProbeOptions, ProbeResult, ProbeRun
-from provibench.bench.replay import ReplayOptions, ReplayResult, write_run
-from provibench.bench.targets import Prices, RunSpec, Target
-from provibench.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
-from provibench.core.documents import Document, as_document, as_list
-from provibench.core.introspection import command_flags, listed_commands
-from provibench.core.registry import Command
+from promptreplay.app import build_cli
+from promptreplay.bench.openrouter import Endpoint
+from promptreplay.bench.probe import ProbeOptions, ProbeResult, ProbeRun
+from promptreplay.bench.replay import ReplayOptions, ReplayResult, write_run
+from promptreplay.bench.targets import Prices, RunSpec, Target
+from promptreplay.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
+from promptreplay.core.documents import Document, as_document, as_list
+from promptreplay.core.introspection import command_flags, listed_commands
+from promptreplay.core.registry import Command
 from tests.conftest import Cli, install_price_cache
 
 EXPECTED_COMMANDS = {
@@ -274,7 +274,7 @@ def _seed_domain_fixtures(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
     """
     _seed_traces(cli.root / "traces")
 
-    targets_path = cli.home / ".config" / "provibench" / "targets.toml"
+    targets_path = cli.home / ".config" / "promptreplay" / "targets.toml"
     targets_path.parent.mkdir(parents=True, exist_ok=True)
     targets_path.write_text(
         '[targets.t]\nurl = "https://x.test/v1/messages"\napi_key_env = "X_KEY"\n'
@@ -401,10 +401,10 @@ def _seed_domain_fixtures(cli: Cli, monkeypatch: pytest.MonkeyPatch) -> None:
             )
         ]
 
-    monkeypatch.setattr("provibench.bench.proxy.serve", fake_serve)
-    monkeypatch.setattr("provibench.bench.probe.run_probe", fake_run_probe)
-    monkeypatch.setattr("provibench.bench.replay.replay_all", fake_replay_all)
-    monkeypatch.setattr("provibench.bench.openrouter.fetch_endpoints", fake_fetch_endpoints)
+    monkeypatch.setattr("promptreplay.bench.proxy.serve", fake_serve)
+    monkeypatch.setattr("promptreplay.bench.probe.run_probe", fake_run_probe)
+    monkeypatch.setattr("promptreplay.bench.replay.replay_all", fake_replay_all)
+    monkeypatch.setattr("promptreplay.bench.openrouter.fetch_endpoints", fake_fetch_endpoints)
 
 
 def _check_o4(value: object, schema: Document) -> None:
@@ -477,7 +477,7 @@ def test_every_success_matches_its_output_schema_with_json_in_both_positions(
 
 
 def test_schema_needs_no_targets_file(cli: Cli, tmp_path: Path) -> None:
-    outcome = cli.run("schema", env={"PROVIBENCH_TARGETS": str(tmp_path / "nowhere.toml")})
+    outcome = cli.run("schema", env={"PROMPTREPLAY_TARGETS": str(tmp_path / "nowhere.toml")})
     assert outcome.code == 0
     assert json.loads(outcome.stdout)["schema_version"] == "1"
 

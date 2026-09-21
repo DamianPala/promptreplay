@@ -5,11 +5,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-import provibench
+import promptreplay
 
-PACKAGE = Path(provibench.__file__).parent
-FORBIDDEN_FOR_CORE = ("provibench.commands", "provibench.bench", "provibench.app")
-FORBIDDEN_FOR_BENCH = ("provibench.commands", "provibench.app")
+PACKAGE = Path(promptreplay.__file__).parent
+FORBIDDEN_FOR_CORE = ("promptreplay.commands", "promptreplay.bench", "promptreplay.app")
+FORBIDDEN_FOR_BENCH = ("promptreplay.commands", "promptreplay.app")
 
 
 def _imports(path: Path) -> set[str]:
@@ -65,8 +65,8 @@ def test_constructing_the_cli_and_walking_details_stays_lightweight() -> None:
     proof that no command imports `bench` at module level.
     """
     code = (
-        "from provibench.app import build_cli; "
-        "from provibench.core.introspection import listed_commands, build_detail; "
+        "from promptreplay.app import build_cli; "
+        "from promptreplay.core.introspection import listed_commands, build_detail; "
         "import sys; "
         "root = build_cli(); "
         "[build_detail(command, name) for name, command in listed_commands(root)]; "

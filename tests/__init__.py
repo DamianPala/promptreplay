@@ -1,1 +1,1 @@
-"""Tests for provibench."""
+"""Tests for promptreplay."""

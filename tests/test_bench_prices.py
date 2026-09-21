@@ -1,9 +1,9 @@
-"""Tests for provibench.bench.prices: the LiteLLM table, its cache and the resolver.
+"""Tests for promptreplay.bench.prices: the LiteLLM table, its cache and the resolver.
 
 Every test here runs against the trimmed real fixture (`tests/fixtures/litellm-prices.json`)
 or a small synthetic payload, and the fetch boundary is the one the session-wide
 `no_price_network` fixture already made offline; a test that needs a successful fetch
-replaces `provibench.bench.prices.fetch_payload` itself.
+replaces `promptreplay.bench.prices.fetch_payload` itself.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from provibench.bench.enrich import enrich_anthropic
-from provibench.bench.prices import (
+from promptreplay.bench.enrich import enrich_anthropic
+from promptreplay.bench.prices import (
     MAX_AGE_S,
     PriceTable,
     TableUnavailable,
@@ -27,9 +27,9 @@ from provibench.bench.prices import (
     load_table,
     resolve_target,
 )
-from provibench.bench.replay import ReplayResult
-from provibench.bench.targets import Prices, RunSpec, Target
-from provibench.bench.trace import Usage
+from promptreplay.bench.replay import ReplayResult
+from promptreplay.bench.targets import Prices, RunSpec, Target
+from promptreplay.bench.trace import Usage
 from tests.conftest import FIXTURE_TABLE
 
 _PAYLOAD: dict[str, Any] = {
@@ -211,7 +211,7 @@ def test_a_fresh_copy_is_read_without_fetching(
     path = tmp_path / "litellm-prices.json"
     _write_cache(path, _PAYLOAD, age_s=MAX_AGE_S - 1)
     calls: list[int] = []
-    monkeypatch.setattr("provibench.bench.prices.fetch_payload", _never_fetch(calls))
+    monkeypatch.setattr("promptreplay.bench.prices.fetch_payload", _never_fetch(calls))
 
     state = cached_table(path, update=False)
     assert state.fetched is False
@@ -226,7 +226,7 @@ def test_a_stale_copy_is_refetched_and_rewritten(
     path = tmp_path / "litellm-prices.json"
     _write_cache(path, {"old": {"input_cost_per_token": 1.0}}, age_s=MAX_AGE_S + 60)
     calls: list[int] = []
-    monkeypatch.setattr("provibench.bench.prices.fetch_payload", _fetching(_PAYLOAD, calls))
+    monkeypatch.setattr("promptreplay.bench.prices.fetch_payload", _fetching(_PAYLOAD, calls))
 
     state = cached_table(path, update=False)
     assert state.fetched is True
@@ -239,7 +239,7 @@ def test_update_refetches_a_fresh_copy(tmp_path: Path, monkeypatch: pytest.Monke
     path = tmp_path / "litellm-prices.json"
     _write_cache(path, {}, age_s=0.0)
     calls: list[int] = []
-    monkeypatch.setattr("provibench.bench.prices.fetch_payload", _fetching(_PAYLOAD, calls))
+    monkeypatch.setattr("promptreplay.bench.prices.fetch_payload", _fetching(_PAYLOAD, calls))
 
     state = cached_table(path, update=True)
     assert state.fetched is True

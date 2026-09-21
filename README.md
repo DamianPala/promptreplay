@@ -1,8 +1,8 @@
-# provibench
+# promptreplay
 
 Which provider should serve your agent?
 
-provibench answers that by replaying a recorded agent session, byte for byte, against every endpoint that serves the same model.
+promptreplay answers that by replaying a recorded agent session, byte for byte, against every endpoint that serves the same model.
 It compares what each endpoint really charges per prompt token, how much of the prompt its cache serves, and how fast it answers.
 A cache miss pays the input price, a hit pays the cache price, so a listed price says little until the cache is measured.
 Replaying the same bytes is what makes the numbers comparable: re-running the task instead takes a different trajectory through randomness, quantization, and tool-call errors.
@@ -44,16 +44,16 @@ This is one day of measurement, not a standing ranking: routing, quantization, a
 Install from PyPI:
 
 ```sh
-uv tool install provibench
+uv tool install promptreplay
 # or
-pip install provibench
+pip install promptreplay
 ```
 
 From a checkout:
 
 ```sh
 uv sync
-uv run provibench
+uv run promptreplay
 ```
 
 The packaged defaults already configure an OpenRouter target and native DeepSeek.
@@ -64,17 +64,17 @@ export OPENROUTER_API_KEY=...
 export DEEPSEEK_API_KEY=...
 ```
 
-To add a target or change a price, `provibench config init` copies the packaged `targets.toml` into your config directory.
+To add a target or change a price, `promptreplay config init` copies the packaged `targets.toml` into your config directory.
 Its comments show the shape of a target, a model alias, and a price override.
 
 The packaged trace is called `sample-trace`, and it goes wherever a command takes a TRACE:
 
 ```sh
-provibench inspect sample-trace
-provibench sweep sample-trace deepseek/deepseek-v4.1-flash --top 3 --dry-run
-provibench sweep sample-trace deepseek/deepseek-v4.1-flash --top 3 --budget 1.2
-provibench report latest
-provibench report latest --format html --output-file report.html
+promptreplay inspect sample-trace
+promptreplay sweep sample-trace deepseek/deepseek-v4.1-flash --top 3 --dry-run
+promptreplay sweep sample-trace deepseek/deepseek-v4.1-flash --top 3 --budget 1.2
+promptreplay report latest
+promptreplay report latest --format html --output-file report.html
 ```
 
 The sample is the first 30 turns of a real Claude Code session, with prompts growing from 20k to 93k tokens and 1.8 M prompt tokens in total.
@@ -88,7 +88,7 @@ See `--top` under [Sweep](#sweep) for why a `--top` run needs one.
 
 Python 3.12 or newer is required, on Linux, macOS, or Windows.
 [uv](https://docs.astral.sh/uv/) is optional when installing with pip.
-Every command documents its flags: `provibench COMMAND --help`.
+Every command documents its flags: `promptreplay COMMAND --help`.
 
 ## Reference
 
@@ -109,7 +109,7 @@ Provider pins apply to OpenRouter targets.
    A failed cold write skips its rung, and the run still persists and exits non-zero.
 
 ```sh
-provibench probe TRACE ENDPOINTS... --rungs 1,13,30 --repeats 6,2,2 --budget 0.5
+promptreplay probe TRACE ENDPOINTS... --rungs 1,13,30 --repeats 6,2,2 --budget 0.5
 ```
 
 Repeat `ENDPOINTS...` to probe several providers in one run.
@@ -169,7 +169,7 @@ Without `--format`, `report RUN` prints its JSON document on a non-TTY stdout an
 
 `sweep TRACE MODEL` lists OpenRouter endpoints, selects candidates, adds native targets whose aliases map to `MODEL`, probes the selected endpoints, and orders the measured report by effective price.
 Native endpoints are never cut by `--top` and are not filtered by the pre-check.
-`provibench endpoints MODEL` prints the tags.
+`promptreplay endpoints MODEL` prints the tags.
 
 Selection is applied in this order:
 
@@ -196,12 +196,12 @@ The measured effective price and cache rate are the verdict; the listing only ch
 ### Runs over time
 
 Providers change routing, quantization, cache configuration, and prices from week to week.
-Run the same sweep on a schedule from one fixed directory, or with `PROVIBENCH_RUNS_DIR` set, so every run lands in one runs directory.
+Run the same sweep on a schedule from one fixed directory, or with `PROMPTREPLAY_RUNS_DIR` set, so every run lands in one runs directory.
 Then read the runs offline:
 
 ```sh
-provibench history MODEL
-provibench compare previous latest
+promptreplay history MODEL
+promptreplay compare previous latest
 ```
 
 `history` reads runs offline and shows, per run and endpoint, the date, trace, protocol, hit rate, effective price, TTFT, throughput, errors, what the endpoint spent, and the listed price that run recorded, plus a hit-rate sparkline.
@@ -226,17 +226,17 @@ A trace of your own comes from `record`, a proxy in front of the real API that r
 
 ```sh
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
-provibench record --name my-session --upstream https://api.anthropic.com
+promptreplay record --name my-session --upstream https://api.anthropic.com
 ```
 
 ```sh
-provibench replay TRACE --run openrouter:deepseek/deepseek-v4.1-flash@novita --budget 2 --yes
+promptreplay replay TRACE --run openrouter:deepseek/deepseek-v4.1-flash@novita --budget 2 --yes
 ```
 
 ### Prices
 
 Price precedence for native targets is `targets.toml`, then the cached LiteLLM community table, then no price; OpenRouter endpoint prices come from the endpoint snapshot.
-`provibench prices` shows the four prices and their source, and the LiteLLM copy refreshes weekly or with `--update`.
+`promptreplay prices` shows the four prices and their source, and the LiteLLM copy refreshes weekly or with `--update`.
 A missing price remains `n/a`, and a budgeted run refuses an unpriced endpoint.
 
 The community table lists peak rates, and a provider can discount off-peak, so the packaged `targets.toml` explicitly prices native `deepseek-flash` at DeepSeek's off-peak rate.
@@ -247,8 +247,8 @@ A trace contains request bytes verbatim and can include home paths, instruction 
 Scrub before sharing:
 
 ```sh
-provibench scrub sample-trace shared.jsonl.gz
-provibench scrub sample-trace clean.jsonl --turns 20 --replace acme-corp=example --user NAME
+promptreplay scrub sample-trace shared.jsonl.gz
+promptreplay scrub sample-trace clean.jsonl --turns 20 --replace acme-corp=example --user NAME
 ```
 
 `scrub` removes the request's `body.metadata`, rewrites `/home/<name>`, `/Users/<name>`, and encoded Claude Code project paths, and masks API keys, bearer tokens, AWS and GitHub tokens, Slack tokens, and email addresses.
@@ -262,16 +262,16 @@ Nested metadata inside a request body remains, so read the copy before sending i
 
 ### Configuration
 
-Precedence is flag, environment variable, configuration file, then built-in default, and `provibench config show` prints each effective value and its source.
+Precedence is flag, environment variable, configuration file, then built-in default, and `promptreplay config show` prints each effective value and its source.
 In the configuration file, a setting's key is its name.
-The packaged `targets.toml` is a fallback for a fresh install: until one is written to the default `targets_path`, `show` reports it with source `packaged`, and `provibench config init` copies it there so it can be edited (`--force` overwrites an existing file).
+The packaged `targets.toml` is a fallback for a fresh install: until one is written to the default `targets_path`, `show` reports it with source `packaged`, and `promptreplay config init` copies it there so it can be edited (`--force` overwrites an existing file).
 
 | Setting | Flag | Environment | Default |
 |---|---|---|---|
-| `config_path` | `--config`, `-c` | `PROVIBENCH_CONFIG` | `~/.config/provibench/config.toml` |
-| `targets_path` | `--targets` | `PROVIBENCH_TARGETS` | `~/.config/provibench/targets.toml` |
-| `traces_dir` | none | `PROVIBENCH_TRACES_DIR` | `./traces` |
-| `runs_dir` | none | `PROVIBENCH_RUNS_DIR` | `./runs` |
+| `config_path` | `--config`, `-c` | `PROMPTREPLAY_CONFIG` | `~/.config/promptreplay/config.toml` |
+| `targets_path` | `--targets` | `PROMPTREPLAY_TARGETS` | `~/.config/promptreplay/targets.toml` |
+| `traces_dir` | none | `PROMPTREPLAY_TRACES_DIR` | `./traces` |
+| `runs_dir` | none | `PROMPTREPLAY_RUNS_DIR` | `./runs` |
 
 `~/.config` follows `$XDG_CONFIG_HOME` when that is set.
 
@@ -283,8 +283,8 @@ At 80 columns rich elides long names, and a label longer than 24 columns is elid
 
 ### Agents
 
-Agent workflows and recipes, including the `PROVIBENCH_RUNS_DIR` an agent should pin before its first paid run: [`skills/provibench/SKILL.md`](skills/provibench/SKILL.md).
-`provibench schema` prints the machine-readable interface the skill relies on.
+Agent workflows and recipes, including the `PROMPTREPLAY_RUNS_DIR` an agent should pin before its first paid run: [`skills/promptreplay/SKILL.md`](skills/promptreplay/SKILL.md).
+`promptreplay schema` prints the machine-readable interface the skill relies on.
 
 ### Development
 

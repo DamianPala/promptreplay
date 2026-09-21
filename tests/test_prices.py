@@ -16,13 +16,13 @@ from typing import Any
 import httpx
 import pytest
 
-from provibench.bench.trace import (
+from promptreplay.bench.trace import (
     RecordedResponse,
     TraceEntry,
     Usage,
     append_entry,
 )
-from provibench.core.documents import as_document, as_list
+from promptreplay.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli, install_price_cache
 
 _RealAsyncClient = httpx.AsyncClient
@@ -235,8 +235,8 @@ def test_prices_update_fetches_once_and_rewrites_the_cache(
 ) -> None:
     _write_targets(bench_paths.targets_path, override=False)
     calls: list[int] = []
-    monkeypatch.setattr("provibench.bench.prices.fetch_payload", _fetching(_FETCHED, calls))
-    cache = cli.home / ".cache" / "provibench" / "litellm-prices.json"
+    monkeypatch.setattr("promptreplay.bench.prices.fetch_payload", _fetching(_FETCHED, calls))
+    cache = cli.home / ".cache" / "promptreplay" / "litellm-prices.json"
     assert not cache.exists()
 
     outcome = cli.run("prices", "--update", "--json", env=bench_paths.env)
@@ -262,7 +262,7 @@ def test_prices_reads_a_fresh_cache_without_fetching(
     _write_targets(bench_paths.targets_path, override=False)
     install_price_cache(cli)
     calls: list[int] = []
-    monkeypatch.setattr("provibench.bench.prices.fetch_payload", _never_fetch(calls))
+    monkeypatch.setattr("promptreplay.bench.prices.fetch_payload", _never_fetch(calls))
 
     outcome = cli.run("prices", "--json", env=bench_paths.env)
     assert outcome.code == 0, outcome.stderr
@@ -321,7 +321,7 @@ def test_a_native_estimate_prices_from_litellm_without_the_override(
     _write_trace(bench_paths)
     install_price_cache(cli)
     calls: list[int] = []
-    monkeypatch.setattr("provibench.bench.prices.fetch_payload", _never_fetch(calls))
+    monkeypatch.setattr("promptreplay.bench.prices.fetch_payload", _never_fetch(calls))
     monkeypatch.setattr(httpx, "AsyncClient", _client_factory(_ok))
 
     outcome = _replay(cli, bench_paths, "--run", "deepseek:deepseek-flash", "--yes")

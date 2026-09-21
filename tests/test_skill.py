@@ -5,11 +5,11 @@ from pathlib import Path
 
 import click
 
-from provibench.app import build_cli
-from provibench.core.introspection import command_flags, global_flags, listed_commands
-from provibench.core.registry import Group
+from promptreplay.app import build_cli
+from promptreplay.core.introspection import command_flags, global_flags, listed_commands
+from promptreplay.core.registry import Group
 
-SKILL = Path(__file__).parents[1] / "skills/provibench/SKILL.md"
+SKILL = Path(__file__).parents[1] / "skills/promptreplay/SKILL.md"
 README = Path(__file__).parents[1] / "README.md"
 
 
@@ -29,9 +29,9 @@ def _assert_commands_match_introspection(root: Group, lines: list[str]) -> None:
 
     for line in lines:
         tokens = shlex.split(line)
-        command_start = tokens.index("provibench")
+        command_start = tokens.index("promptreplay")
         tokens = tokens[command_start:]
-        assert tokens[0] == "provibench"
+        assert tokens[0] == "promptreplay"
         command_name = " ".join(tokens[1:3])
         command_size = 2 if command_name in commands else 1
         command_name = " ".join(tokens[1 : 1 + command_size])
@@ -50,8 +50,8 @@ def _command_lines(path: Path) -> list[str]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith("```"):
             in_fence = not in_fence
-        elif in_fence and "provibench " in line:
-            lines.append(line[line.index("provibench ") :])
+        elif in_fence and "promptreplay " in line:
+            lines.append(line[line.index("promptreplay ") :])
     return lines
 
 

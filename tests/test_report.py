@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-from provibench.bench.replay import ReplayOptions, ReplayResult, write_run
-from provibench.bench.targets import RunSpec, Target
-from provibench.core.documents import as_document, as_list
+from promptreplay.bench.replay import ReplayOptions, ReplayResult, write_run
+from promptreplay.bench.targets import RunSpec, Target
+from promptreplay.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
 

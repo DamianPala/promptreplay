@@ -1,7 +1,7 @@
 # CLI Design Standard 0.1.0 delta
 
 Audited against the standard text in `cli-design-standard-0.1.0.md`, not the draft that
-generated the original scaffold. The evidence is the runtime parser, `provibench schema`,
+generated the original scaffold. The evidence is the runtime parser, `promptreplay schema`,
 both `--json` positions, command help, error handling, confirmation behavior, `config show`,
 `completion`, the registered command implementations, and the shipped documentation.
 
@@ -9,7 +9,7 @@ The conformance claim remains `0.1.0-draft.7`. Several standard MUST requirement
 open, so changing the claim to `0.1.0` would be false.
 
 There are 127 applicable rows: 78 `ok`, 24 `fixed`, and 25 `open`. The B1 greenfield rule
-means the B3 and B4 brownfield exceptions do not apply to provibench's own command paths,
+means the B3 and B4 brownfield exceptions do not apply to promptreplay's own command paths,
 flags, defaults, or result names. The B2 route, claiming `0.1.0` with `conforming: false` per
 command, was considered and rejected: O6b alone would exclude nine commands, and R1b and R2b
 would exclude the rest, leaving a claim covering `config show` alone. An honest draft claim
@@ -20,7 +20,7 @@ B3 lists retained names and defaults, and B4 covers retained meanings with repla
 |---|---|---|
 | D1 | fixed | README, design docs, schema, help, completion, and the agent skill now describe the same command set; `tests/test_skill.py` checks the skill's fenced commands against the parser. |
 | D2 | ok | Root help, `schema`, and the skill form the three discovery layers. |
-| D3 | fixed | Root help is a standalone catalog and points to `provibench schema` and `--json`; command help is generated from the same parser. |
+| D3 | fixed | Root help is a standalone catalog and points to `promptreplay schema` and `--json`; command help is generated from the same parser. |
 | D3a | fixed | `app.py` epilog now includes the introspection literal, JSON guidance, and the `NO_INPUT` prompt rule. |
 | D3b | fixed | Added help text to the six positional arguments whose empty descriptors suppressed Click's `Positional arguments:` section; every command now describes purpose, usage, arguments, flags, and defaults. |
 | D4 | ok | Names and shared flags use a predictable command tree and consistent meanings. |
@@ -46,14 +46,14 @@ B3 lists retained names and defaults, and B4 covers retained meanings with repla
 | D9a | ok | No result or F3 error currently emits `next`, so no malformed argv breadcrumb is exposed. |
 | D9b | open | The partial-run follow-up stays a `hint`, not the standard `Next:` label; unchanged by the O5a fix, which only moved the run's own data (the result document) from `error.context` to stdout and left `context` naming just the run's location. Recommendation: render the same breadcrumb when D9 is implemented. |
 | D9c | ok | Results without a natural continuation omit `next`. |
-| D10 | fixed | `skills/provibench/SKILL.md` adds domain context and points agents to `schema` instead of copying the command catalog. |
+| D10 | fixed | `skills/promptreplay/SKILL.md` adds domain context and points agents to `schema` instead of copying the command catalog. |
 | I1 | fixed | All accepted arguments and flags are generated into descriptors, and a schema test now rejects any empty descriptor name, description, or type. |
 | I1a | fixed | Added descriptions to the six positional arguments; descriptor names, descriptions, types, required/default values, choices, aliases, repeatability, and stdin markers match parser metadata. |
 | I1b | ok | Click boolean flags do not consume the following positional token. |
 | I1c | ok | Required values omit defaults; built-in defaults are typed; runtime-resolved paths are described rather than emitted as parser defaults. |
 | I1d | ok | Descriptions state duration syntax, path/config resolution, bounds, and global/command relationships where needed. |
 | I2 | ok | Configuration is declared once and resolved deterministically. |
-| I2a | ok | README and help document config files, target files, declared `PROVIBENCH_*` variables, API-key environment names in `targets.toml`, and `NO_INPUT`. |
+| I2a | ok | README and help document config files, target files, declared `PROMPTREPLAY_*` variables, API-key environment names in `targets.toml`, and `NO_INPUT`. |
 | I2b | ok | Resolution is flag, environment, configuration file, then built-in default, and the order is documented. |
 | I2c | ok | `config show` returns every resolved setting and source; path values are resolved and secrets are masked. |
 | I3 | open | Trace documents are accepted through a path only (a `--replace OLD=NEW` literal is short text, not a document; see I7a for its buffering). Recommendation: add the `-` form for document-sized inputs without changing existing forms. |
@@ -148,7 +148,7 @@ B3 lists retained names and defaults, and B4 covers retained meanings with repla
 
 ## Not applicable
 
-These clauses have no current subject in provibench, so they have no delta row: `I3b` (no
+These clauses have no current subject in promptreplay, so they have no delta row: `I3b` (no
 command currently accepts stdin), `I5b`, `I5c`, and `I5d` (no editor, external approval, or
 pager workflow), `I7b` (no command declares a path root), `R2c` (the `managed` extension is not
 claimed), `R3e` (no command has declared a wide mutation that would take `--expect-targets`),

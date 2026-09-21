@@ -1,9 +1,9 @@
-"""Tests for provibench.bench.pricing."""
+"""Tests for promptreplay.bench.pricing."""
 
 from __future__ import annotations
 
-from provibench.bench.pricing import CostBreakdown, compute_cost
-from provibench.bench.targets import Prices
+from promptreplay.bench.pricing import CostBreakdown, compute_cost
+from promptreplay.bench.targets import Prices
 
 
 def test_compute_cost_basic() -> None:

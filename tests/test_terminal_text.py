@@ -2,15 +2,15 @@
 
 from pathlib import Path
 
-from provibench.core.color import ColorMode
-from provibench.core.completion import render_completion
-from provibench.core.config_command import render_settings
-from provibench.core.confirm import require_confirmation
-from provibench.core.context import Invocation, Process, Streams
-from provibench.core.documents import as_document
-from provibench.core.output import write_plain_line
-from provibench.core.render import render_document
-from provibench.core.terminal_text import escape_terminal_text
+from promptreplay.core.color import ColorMode
+from promptreplay.core.completion import render_completion
+from promptreplay.core.config_command import render_settings
+from promptreplay.core.confirm import require_confirmation
+from promptreplay.core.context import Invocation, Process, Streams
+from promptreplay.core.documents import as_document
+from promptreplay.core.output import write_plain_line
+from promptreplay.core.render import render_document
+from promptreplay.core.terminal_text import escape_terminal_text
 from tests.conftest import Cli, FakeClock, FakeStream
 
 OSC = "\x1b]52;c;clipboard\x07"
@@ -24,7 +24,7 @@ def make_invocation(
     stdout = FakeStream(tty=True)
     stderr = FakeStream(tty=True)
     invocation = Invocation(
-        program="provibench",
+        program="promptreplay",
         process=Process(
             streams=Streams(stdin=FakeStream(stdin, tty=True), stdout=stdout, stderr=stderr),
             env={"TERM": "xterm"},
@@ -71,7 +71,7 @@ def test_generic_and_plain_renderers_escape_values_keys_next_and_cursor() -> Non
         invocation,
         {
             f"field{CSI}": f"value{OSC}",
-            "next": ["provibench", "replay", f"trace{CSI}"],
+            "next": ["promptreplay", "replay", f"trace{CSI}"],
         },
     )
     render_document(

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from provibench.bench.openrouter_stats import canonical_slug, reported_average
+from promptreplay.bench.openrouter_stats import canonical_slug, reported_average
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

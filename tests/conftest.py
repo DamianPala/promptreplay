@@ -13,9 +13,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from provibench.app import main
-from provibench.core.context import Process, Streams
-from provibench.core.documents import Document, as_document
+from promptreplay.app import main
+from promptreplay.core.context import Process, Streams
+from promptreplay.core.documents import Document, as_document
 
 FIXTURE_TABLE = Path(__file__).parent / "fixtures" / "litellm-prices.json"
 """A trimmed real capture of LiteLLM's `model_prices_and_context_window.json`."""
@@ -28,13 +28,13 @@ def no_price_network(monkeypatch: pytest.MonkeyPatch) -> None:
     The failure is the offline case the cache policy is built for, so a test that never
     installs a copy exercises the `n/a` path. A test that wants real prices calls
     `install_price_cache` (the fixture table as the cached copy) or replaces
-    `provibench.bench.prices.fetch_payload` with its own fetcher.
+    `promptreplay.bench.prices.fetch_payload` with its own fetcher.
     """
 
     async def offline(client: httpx.AsyncClient) -> dict[str, object]:
         raise httpx.ConnectError("no network in tests", request=client.build_request("GET", "x"))
 
-    monkeypatch.setattr("provibench.bench.prices.fetch_payload", offline)
+    monkeypatch.setattr("promptreplay.bench.prices.fetch_payload", offline)
 
 
 @pytest.fixture(autouse=True)
@@ -42,7 +42,7 @@ def no_reported_average_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test reaches OpenRouter's reported-average feed; the fetch boundary returns `None`.
 
     That is the same outcome a real fetch failure produces, so a test that never replaces
-    `provibench.bench.openrouter_stats.fetch_reported_average` exercises the "unavailable"
+    `promptreplay.bench.openrouter_stats.fetch_reported_average` exercises the "unavailable"
     path. A test that wants a figure replaces that name with its own fetcher.
     """
 
@@ -50,7 +50,7 @@ def no_reported_average_network(monkeypatch: pytest.MonkeyPatch) -> None:
         del client, model, day
         return None
 
-    monkeypatch.setattr("provibench.bench.openrouter_stats.fetch_reported_average", offline)
+    monkeypatch.setattr("promptreplay.bench.openrouter_stats.fetch_reported_average", offline)
 
 
 class FakeClock:
@@ -113,7 +113,7 @@ class Outcome:
 
 
 class Cli:
-    """Runs `provibench` in-process with a temporary home and working directory."""
+    """Runs `promptreplay` in-process with a temporary home and working directory."""
 
     def __init__(self, root: Path, clock: FakeClock) -> None:
         self.root = root
@@ -170,7 +170,7 @@ def install_price_cache(cli: Cli, *, age_s: float = 0.0) -> Path:
     Age is an mtime, which is what the freshness rule reads: a copy stamped a week and a
     day back is refetched even though it was written a moment ago.
     """
-    path = cli.home / ".cache" / "provibench" / "litellm-prices.json"
+    path = cli.home / ".cache" / "promptreplay" / "litellm-prices.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(FIXTURE_TABLE.read_text(encoding="utf-8"), encoding="utf-8")
     stamp = time.time() - age_s
@@ -184,7 +184,7 @@ class BenchPaths:
 
     `record`/`inspect`/`replay`/`report` all resolve their storage through the
     `traces_dir`/`runs_dir`/`targets_path` settings; pointing those at a scratch area
-    via `PROVIBENCH_*` env vars (rather than relying on `Cli`'s cwd/home defaults) keeps
+    via `PROMPTREPLAY_*` env vars (rather than relying on `Cli`'s cwd/home defaults) keeps
     bench-command tests independent of the generic config precedence tests.
     """
 
@@ -202,9 +202,9 @@ def bench_paths(tmp_path: Path) -> BenchPaths:
     traces_dir.mkdir(parents=True)
     runs_dir.mkdir(parents=True)
     env = {
-        "PROVIBENCH_TRACES_DIR": str(traces_dir),
-        "PROVIBENCH_RUNS_DIR": str(runs_dir),
-        "PROVIBENCH_TARGETS": str(targets_path),
+        "PROMPTREPLAY_TRACES_DIR": str(traces_dir),
+        "PROMPTREPLAY_RUNS_DIR": str(runs_dir),
+        "PROMPTREPLAY_TARGETS": str(targets_path),
     }
     return BenchPaths(traces_dir, runs_dir, targets_path, env)
 
@@ -224,7 +224,7 @@ def run_process(
     that does not returns as usual. Its output is drained only after the child
     exits, so use it for commands that stay well under the pipe buffer.
     """
-    command = [sys.executable, "-m", "provibench", *args]
+    command = [sys.executable, "-m", "promptreplay", *args]
     environment = {"PATH": os.environ["PATH"], **env}
     if hold_stdin:
         return _run_holding_stdin(command, env=environment, timeout=timeout)

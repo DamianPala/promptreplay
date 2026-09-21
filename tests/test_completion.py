@@ -5,9 +5,9 @@ from tests.conftest import Cli
 
 def test_scripts_for_every_shell(cli: Cli) -> None:
     for shell, marker in (
-        ("bash", "_PROVIBENCH_COMPLETE"),
-        ("zsh", "#compdef provibench"),
-        ("fish", "provibench"),
+        ("bash", "_PROMPTREPLAY_COMPLETE"),
+        ("zsh", "#compdef promptreplay"),
+        ("fish", "promptreplay"),
     ):
         outcome = cli.run("completion", shell)
         assert outcome.code == 0, shell
@@ -15,7 +15,7 @@ def test_scripts_for_every_shell(cli: Cli) -> None:
         assert not outcome.stdout.startswith("{")
     as_json = cli.run("completion", "bash", "--json").document
     assert as_json["shell"] == "bash" and as_json["changed"] is False
-    assert "_PROVIBENCH_COMPLETE" in str(as_json["script"])
+    assert "_PROMPTREPLAY_COMPLETE" in str(as_json["script"])
 
 
 def test_shell_comes_from_the_environment(cli: Cli) -> None:
@@ -29,14 +29,15 @@ def test_shell_comes_from_the_environment(cli: Cli) -> None:
 
 def test_install_writes_the_tool_owned_path_and_reports_changed(cli: Cli) -> None:
     first = cli.run("completion", "fish", "--install", "--json").document
-    path = cli.home / ".config" / "fish" / "completions" / "provibench.fish"
+    path = cli.home / ".config" / "fish" / "completions" / "promptreplay.fish"
     assert first == {"shell": "fish", "path": str(path), "changed": True}
     assert path.read_text() == cli.run("completion", "fish").stdout
     second = cli.run("completion", "fish", "--install", "--json").document
     assert second["changed"] is False
     human = cli.run("completion", "zsh", "--install", tty=True, env={"TERM": "dumb"})
-    assert "site-functions/_provibench" in human.stdout and "fpath" in human.stdout
+    assert "site-functions/_promptreplay" in human.stdout and "fpath" in human.stdout
     xdg = cli.run(
         "completion", "bash", "--install", "--json", env={"XDG_DATA_HOME": str(cli.root / "data")}
     ).document
-    assert xdg["path"] == str(cli.root / "data" / "bash-completion" / "completions" / "provibench")
+    expected_path = cli.root / "data" / "bash-completion" / "completions" / "promptreplay"
+    assert xdg["path"] == str(expected_path)

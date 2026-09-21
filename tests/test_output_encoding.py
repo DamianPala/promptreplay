@@ -5,7 +5,7 @@ uses `surrogateescape`, which puts an unpaired surrogate such as U+DCFF into the
 Python `str` for a byte the locale encoding cannot represent. Left alone, that surrogate
 either fails to encode as UTF-8 outright or, on a stream that itself uses
 `surrogateescape`, comes back out as the original invalid byte. Either way, `--json` stdout
-is no longer valid UTF-8. `sanitize_document` (`provibench.core.documents`) replaces it with
+is no longer valid UTF-8. `sanitize_document` (`promptreplay.core.documents`) replaces it with
 U+FFFD at the output boundary; these tests build the same kind of string a decoded path
 would produce, without touching the filesystem, and check the boundary from both ends:
 the raw text must encode as UTF-8, and no string in the parsed document may contain a
@@ -15,11 +15,11 @@ lone surrogate.
 import json
 from typing import cast
 
-from provibench.core.documents import Document, as_document, sanitize_document
+from promptreplay.core.documents import Document, as_document, sanitize_document
 from tests.conftest import Cli
 
-SURROGATE_PATH = "/tmp/provibench-test-x\udcff/targets.toml"
-"""A path string shaped like `os.fsdecode(b"/tmp/provibench-test-x\\xff/targets.toml")`."""
+SURROGATE_PATH = "/tmp/promptreplay-test-x\udcff/targets.toml"
+"""A path string shaped like `os.fsdecode(b"/tmp/promptreplay-test-x\\xff/targets.toml")`."""
 
 
 def _assert_no_lone_surrogate(value: object) -> None:
@@ -42,7 +42,7 @@ def _valid_utf8_document(stdout: str) -> Document:
 
 
 def test_config_show_json_sanitizes_a_surrogate_escaped_targets_path(cli: Cli) -> None:
-    outcome = cli.run("config", "show", "--json", env={"PROVIBENCH_TARGETS": SURROGATE_PATH})
+    outcome = cli.run("config", "show", "--json", env={"PROMPTREPLAY_TARGETS": SURROGATE_PATH})
     assert outcome.code == 0, outcome.stderr
     document = _valid_utf8_document(outcome.stdout)
     _assert_no_lone_surrogate(document)
@@ -54,7 +54,7 @@ def test_config_show_json_sanitizes_a_surrogate_escaped_targets_path(cli: Cli) -
 
 def test_config_show_human_table_also_sanitizes(cli: Cli) -> None:
     outcome = cli.run(
-        "config", "show", tty=True, env={"TERM": "dumb", "PROVIBENCH_TARGETS": SURROGATE_PATH}
+        "config", "show", tty=True, env={"TERM": "dumb", "PROMPTREPLAY_TARGETS": SURROGATE_PATH}
     )
     assert outcome.code == 0, outcome.stderr
     assert outcome.stdout.encode("utf-8")  # must not raise
@@ -118,7 +118,7 @@ def test_ndjson_stream_records_stay_one_compact_line_regardless_of_tty() -> None
     """
     import io
 
-    from provibench.core.output import write_document
+    from promptreplay.core.output import write_document
 
     class _TtyStream(io.StringIO):
         def isatty(self) -> bool:

@@ -1,0 +1,24 @@
+[targets.openrouter]
+url = "https://openrouter.ai/api/v1/messages"
+api_key_env = "OPENROUTER_API_KEY"
+kind = "openrouter"            # enables provider pinning and /generation billing lookup
+
+[targets.deepseek]
+url = "https://api.deepseek.com/anthropic/v1/messages"
+api_key_env = "DEEPSEEK_API_KEY"
+kind = "anthropic"
+litellm_provider = "deepseek"   # the namespace LiteLLM prices this provider's models under
+
+# Which OpenRouter slug each of this target's own models is: `sweep TRACE <slug>` adds an
+# endpoint for every target that aliases the slug. Without an entry a native target is only
+# reachable by naming it in an endpoint by hand.
+[targets.deepseek.aliases]
+"deepseek/deepseek-v4.1-flash" = "deepseek-flash"
+
+# USD per 1M tokens. An override: it wins over the LiteLLM table (`promptreplay prices`), and
+# exists because LiteLLM lists peak rates while DeepSeek halves them off-peak (2026-09).
+[targets.deepseek.prices."deepseek-flash"]
+input = 0.15
+cache_read = 0.003
+cache_write = 0.15
+output = 0.60

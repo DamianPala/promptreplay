@@ -15,10 +15,10 @@ from typing import Any, Literal
 import httpx
 import pytest
 
-from provibench.bench.estimate import SpecPrices
-from provibench.bench.labels import column_labels
-from provibench.bench.nonce import inject_nonce, probe_nonce, require_stampable, run_nonce
-from provibench.bench.probe import (
+from promptreplay.bench.estimate import SpecPrices
+from promptreplay.bench.labels import column_labels
+from promptreplay.bench.nonce import inject_nonce, probe_nonce, require_stampable, run_nonce
+from promptreplay.bench.probe import (
     ProbeOptions,
     ProbeResult,
     ProbeRun,
@@ -26,28 +26,28 @@ from provibench.bench.probe import (
     is_served,
     run_probe,
 )
-from provibench.bench.probe_drift import apply_drift
-from provibench.bench.probe_models import Role
-from provibench.bench.probe_stream import BURST_NOTE, StreamResult
-from provibench.bench.probe_summary import (
+from promptreplay.bench.probe_drift import apply_drift
+from promptreplay.bench.probe_models import Role
+from promptreplay.bench.probe_stream import BURST_NOTE, StreamResult
+from promptreplay.bench.probe_summary import (
     ProbeSummary,
     TtlRead,
     cached_of,
     summarize_probe,
     summarize_rung,
 )
-from provibench.bench.probe_tables import probe_blocks, probe_labels, probe_markdown, render_probe
-from provibench.bench.rungs import (
+from promptreplay.bench.probe_tables import probe_blocks, probe_labels, probe_markdown, render_probe
+from promptreplay.bench.rungs import (
     broadcast_repeats,
     parse_int_list,
     select_rungs,
     validate_rungs,
 )
-from provibench.bench.sse import ParsedMessage, StreamStats
-from provibench.bench.summary import cache_mode_note, cache_mode_sentence
-from provibench.bench.targets import Prices, RunSpec, Target, parse_run_spec
-from provibench.bench.trace import RecordedResponse, TraceEntry, Usage
-from provibench.commands.probe_spend import session_footer_lines
+from promptreplay.bench.sse import ParsedMessage, StreamStats
+from promptreplay.bench.summary import cache_mode_note, cache_mode_sentence
+from promptreplay.bench.targets import Prices, RunSpec, Target, parse_run_spec
+from promptreplay.bench.trace import RecordedResponse, TraceEntry, Usage
+from promptreplay.commands.probe_spend import session_footer_lines
 
 _RealAsyncClient = httpx.AsyncClient
 _RUN_HEX = "0123456789ab"
@@ -306,8 +306,8 @@ def test_require_stampable_names_the_turn_and_the_way_out() -> None:
 
 
 def test_nonces_derive_from_the_run_hex() -> None:
-    assert run_nonce("abc123") == "provibench-run:abc123"
-    assert probe_nonce("abc123", 13, "fake:a") == "provibench-probe:abc123:13:fake:a"
+    assert run_nonce("abc123") == "promptreplay-run:abc123"
+    assert probe_nonce("abc123", 13, "fake:a") == "promptreplay-probe:abc123:13:fake:a"
 
 
 def test_probe_nonce_differs_by_endpoint_not_just_by_rung() -> None:
@@ -317,7 +317,7 @@ def test_probe_nonce_differs_by_endpoint_not_just_by_rung() -> None:
     b = probe_nonce("abc123", 1, "or:model@sail-research/fp8")
     assert a != b
     assert a == probe_nonce("abc123", 1, "or:model@sail-research/us")  # same endpoint, same
-    assert a.startswith("provibench-probe:abc123:1:")
+    assert a.startswith("promptreplay-probe:abc123:1:")
 
 
 # --- rung selection -----------------------------------------------------------
@@ -450,7 +450,7 @@ def test_run_probe_sends_cold_then_warm_with_one_nonce_per_rung_and_endpoint(
     )
     assert rung1_a != rung3_a  # rung 3 cannot read rung 1's write
     assert rung1_a != rung1_b  # "fake:b" cannot read what "fake:a" wrote at the same rung
-    assert all(nonce.startswith(f"provibench-probe:{run.run_hex}:") for nonce in nonces)
+    assert all(nonce.startswith(f"promptreplay-probe:{run.run_hex}:") for nonce in nonces)
 
 
 def test_run_probe_gives_two_endpoints_of_one_run_and_rung_different_nonces(

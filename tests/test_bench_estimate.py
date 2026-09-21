@@ -6,7 +6,7 @@ from typing import Literal
 
 import pytest
 
-from provibench.bench.estimate import (
+from promptreplay.bench.estimate import (
     PreCheckCost,
     SpecEstimate,
     SpecPrices,
@@ -18,10 +18,10 @@ from provibench.bench.estimate import (
     same_amount,
     spec_prices,
 )
-from provibench.bench.openrouter import Endpoint
-from provibench.bench.probe_models import ProbeOptions
-from provibench.bench.targets import Prices, RunSpec, Target
-from provibench.bench.trace import RecordedResponse, TraceEntry, Usage
+from promptreplay.bench.openrouter import Endpoint
+from promptreplay.bench.probe_models import ProbeOptions
+from promptreplay.bench.targets import Prices, RunSpec, Target
+from promptreplay.bench.trace import RecordedResponse, TraceEntry, Usage
 
 _TABLE = Prices(input=1.0, cache_read=0.1, cache_write=1.0, output=2.0)
 """The table every priced estimate uses; output is twice input, so the split is visible."""

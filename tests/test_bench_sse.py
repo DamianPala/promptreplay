@@ -1,4 +1,4 @@
-"""Tests for provibench.bench.sse: the whole-body parse and the incremental stream read."""
+"""Tests for promptreplay.bench.sse: the whole-body parse and the incremental stream read."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import pytest
 
-from provibench.bench.sse import (
+from promptreplay.bench.sse import (
     StreamStats,
     interpret_event,
     iter_stream_events,

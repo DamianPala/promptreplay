@@ -1,4 +1,4 @@
-"""Tests for provibench.bench.replay: prepare_body, end-to-end replay, persistence."""
+"""Tests for promptreplay.bench.replay: prepare_body, end-to-end replay, persistence."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any, Literal
 import httpx
 import pytest
 
-from provibench.bench.replay import (
+from promptreplay.bench.replay import (
     ReplayOptions,
     ReplayResult,
     load_run,
@@ -18,8 +18,8 @@ from provibench.bench.replay import (
     replay_run,
     write_run,
 )
-from provibench.bench.targets import Prices, RunSpec, Target
-from provibench.bench.trace import TraceEntry, Usage
+from promptreplay.bench.targets import Prices, RunSpec, Target
+from promptreplay.bench.trace import TraceEntry, Usage
 
 
 def _target(

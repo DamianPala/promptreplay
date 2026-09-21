@@ -1,4 +1,4 @@
-"""Tests for provibench.bench.openrouter."""
+"""Tests for promptreplay.bench.openrouter."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import pytest
 
-from provibench.bench.openrouter import (
+from promptreplay.bench.openrouter import (
     Generation,
     fetch_generation,
     normalize_provider,

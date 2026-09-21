@@ -3,10 +3,10 @@
 from importlib import resources
 from pathlib import Path
 
-from provibench.core.documents import as_document
+from promptreplay.core.documents import as_document
 from tests.conftest import Cli
 
-_PACKAGED_TARGETS = resources.files("provibench.data").joinpath("targets.toml").read_text()
+_PACKAGED_TARGETS = resources.files("promptreplay.data").joinpath("targets.toml").read_text()
 
 
 def _settings(cli: Cli, *args: str, **kwargs: object) -> dict[str, dict[str, object]]:
@@ -22,19 +22,19 @@ def test_show_lists_every_setting_with_defaults(cli: Cli) -> None:
     assert settings["config_path"] == {"value": None, "source": "default"}
     # No file at the default path yet, so `show` names the packaged one `config init` copies.
     assert settings["targets_path"]["source"] == "packaged"
-    assert str(settings["targets_path"]["value"]).endswith("provibench/data/targets.toml")
+    assert str(settings["targets_path"]["value"]).endswith("promptreplay/data/targets.toml")
     assert settings["traces_dir"] == {"value": str(cli.root / "traces"), "source": "default"}
     assert settings["runs_dir"] == {"value": str(cli.root / "runs"), "source": "default"}
 
 
 def test_precedence_flag_over_env_over_file_over_default(cli: Cli, tmp_path: Path) -> None:
-    config = tmp_path / "conf" / "provibench.toml"
+    config = tmp_path / "conf" / "promptreplay.toml"
     config.parent.mkdir()
     config.write_text(
         'traces_dir = "data/traces"\nruns_dir = "data/runs"\ntargets_path = "targets.toml"\n'
     )
     settings = _settings(
-        cli, "--config", str(config), env={"PROVIBENCH_TRACES_DIR": "/tmp/env-traces"}
+        cli, "--config", str(config), env={"PROMPTREPLAY_TRACES_DIR": "/tmp/env-traces"}
     )
     assert settings["config_path"] == {"value": str(config), "source": "flag"}
     assert settings["traces_dir"] == {"value": "/tmp/env-traces", "source": "env"}
@@ -51,23 +51,23 @@ def test_precedence_flag_over_env_over_file_over_default(cli: Cli, tmp_path: Pat
 
 
 def test_default_config_file_is_used_when_present(cli: Cli) -> None:
-    config = cli.home / ".config" / "provibench" / "config.toml"
+    config = cli.home / ".config" / "promptreplay" / "config.toml"
     config.parent.mkdir(parents=True)
     config.write_text('traces_dir = "t"\n')
     settings = _settings(cli)
     assert settings["config_path"] == {"value": str(config), "source": "default"}
     assert settings["traces_dir"]["value"] == str(config.parent / "t")
-    xdg = cli.root / "xdg" / "provibench" / "config.toml"
+    xdg = cli.root / "xdg" / "promptreplay" / "config.toml"
     xdg.parent.mkdir(parents=True)
     xdg.write_text('traces_dir = "x"\n')
     settings = _settings(cli, env={"XDG_CONFIG_HOME": str(cli.root / "xdg")})
     assert settings["traces_dir"]["value"] == str(xdg.parent / "x")
-    settings = _settings(cli, env={"PROVIBENCH_CONFIG": str(xdg)})
+    settings = _settings(cli, env={"PROMPTREPLAY_CONFIG": str(xdg)})
     assert settings["config_path"] == {"value": str(xdg), "source": "env"}
 
 
 def test_empty_environment_variable_counts_as_unset(cli: Cli) -> None:
-    settings = _settings(cli, env={"PROVIBENCH_TRACES_DIR": ""})
+    settings = _settings(cli, env={"PROMPTREPLAY_TRACES_DIR": ""})
     assert settings["traces_dir"] == {"value": str(cli.root / "traces"), "source": "default"}
 
 
@@ -101,7 +101,7 @@ def test_show_never_touches_the_filesystem_beyond_the_config_file(cli: Cli, tmp_
 
 
 def test_undeclared_variables_change_nothing(cli: Cli) -> None:
-    settings = _settings(cli, env={"PROVIBENCH_COLOUR": "always", "PROVIBENCH_TARGETSX": "x"})
+    settings = _settings(cli, env={"PROMPTREPLAY_COLOUR": "always", "PROMPTREPLAY_TARGETSX": "x"})
     assert settings["targets_path"]["source"] == "packaged"
 
 
@@ -125,7 +125,7 @@ def test_init_copies_the_packaged_targets_file_and_then_show_reports_it(cli: Cli
     assert outcome.code == 0, outcome.stderr
     path = Path(str(outcome.document["path"]))
     assert outcome.document["changed"] is True
-    assert path == cli.home / ".config" / "provibench" / "targets.toml"
+    assert path == cli.home / ".config" / "promptreplay" / "targets.toml"
     assert path.read_text() == _PACKAGED_TARGETS
 
     settings = _settings(cli)
@@ -135,7 +135,7 @@ def test_init_copies_the_packaged_targets_file_and_then_show_reports_it(cli: Cli
 def test_init_refuses_to_overwrite_without_force(cli: Cli) -> None:
     first = cli.run("config", "init")
     assert first.code == 0
-    path = cli.home / ".config" / "provibench" / "targets.toml"
+    path = cli.home / ".config" / "promptreplay" / "targets.toml"
     path.write_text("# edited by hand\n")
 
     refused = cli.run("config", "init")
@@ -159,4 +159,4 @@ def test_init_respects_an_explicit_targets_path(cli: Cli, tmp_path: Path) -> Non
 def test_init_text_output_is_the_path(cli: Cli) -> None:
     outcome = cli.run("config", "init", tty=True)
     assert outcome.code == 0
-    assert outcome.stdout.strip() == str(cli.home / ".config" / "provibench" / "targets.toml")
+    assert outcome.stdout.strip() == str(cli.home / ".config" / "promptreplay" / "targets.toml")

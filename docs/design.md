@@ -1,4 +1,4 @@
-# provibench design
+# promptreplay design
 
 Record real agent-harness API traffic once, replay it byte-for-byte against LLM providers, compare cache behaviour and cost.
 
@@ -17,7 +17,7 @@ Aggregated per run: cache hit ratio, the per-turn cache curve, cost totals, effe
 ## Layout
 
 ```
-src/provibench/
+src/promptreplay/
   app.py, core/, commands/      CLI Design Standard scaffold (from cli-design/build/starter)
   bench/                        domain library, no CLI imports
     trace.py                    trace file format, conversation grouping
@@ -55,7 +55,7 @@ A trace reads fine gzipped (`.gz` is decompressed transparently); recording alwa
 
 ## Recording
 
-`provibench record --name NAME --upstream https://api.deepseek.com` starts the proxy on `127.0.0.1:8787`.
+`promptreplay record --name NAME --upstream https://api.deepseek.com` starts the proxy on `127.0.0.1:8787`.
 The harness is pointed at it (`ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic`); the proxy forwards path, query and headers unchanged, streams the response back, and appends a `TraceEntry` for every `POST */v1/messages` once the stream ends.
 `accept-encoding` is dropped on the way up so the teed bytes are plain SSE.
 
@@ -64,7 +64,7 @@ Only the `model` field differs, and replay overrides it.
 
 ## Targets and endpoints
 
-`targets.toml` (default path `$XDG_CONFIG_HOME/provibench/targets.toml`, packaged fallback in `data/`):
+`targets.toml` (default path `$XDG_CONFIG_HOME/promptreplay/targets.toml`, packaged fallback in `data/`):
 
 ```toml
 [targets.openrouter]
@@ -90,7 +90,7 @@ output = 0.60
 ```
 
 `aliases` maps an OpenRouter slug to the model this target serves it under, and is how `sweep`
-knows to include a native endpoint: `provibench sweep TRACE deepseek/deepseek-v4.1-flash`
+knows to include a native endpoint: `promptreplay sweep TRACE deepseek/deepseek-v4.1-flash`
 adds an endpoint for every `kind = "anthropic"` target that aliases the
 slug, and nothing for the targets that do not. A native target without an entry is still
 reachable by naming it as an endpoint (`deepseek:deepseek-flash`); the alias is what makes
@@ -106,7 +106,7 @@ deepseek:deepseek-flash
 ```
 
 `@providers` is valid only for `kind = "openrouter"` and becomes `body.provider = {"only": [...], "allow_fallbacks": false}`.
-Provider identifiers are OpenRouter endpoint `tag`s (lowercase slugs); `provibench endpoints <model>` lists them.
+Provider identifiers are OpenRouter endpoint `tag`s (lowercase slugs); `promptreplay endpoints <model>` lists them.
 `label` is the endpoint string; `slug` is the label with anything outside `[A-Za-z0-9._-]` replaced by `-`.
 
 ## Replay
@@ -209,7 +209,7 @@ A run's `precheck.jsonl` (present only when the run planned an availability chec
 
 A partial result (a failed request, a skipped rung, or a failed replay turn) still reaches stdout with `partial: true`; the call then exits non-zero with an `operation_failed` error on stderr whose `context` carries only `run_dir` and `run_hex`, not the document again. `--dry-run` prices the run and stops before the confirmation: nothing is sent, `changed` is `false`, and `requires_confirmation` reports whether the same call without `--dry-run` and without `--yes` would be gated in a non-interactive context, which for these three commands is always true because they always reach a request that spends credit; it does not describe whether this particular call could have prompted. `--yes` is accepted and ignored alongside it.
 
-Settings: `targets_path` (`--targets`, `PROVIBENCH_TARGETS`), `traces_dir` (`PROVIBENCH_TRACES_DIR`, default `./traces`), `runs_dir` (`PROVIBENCH_RUNS_DIR`, default `./runs`). A non-empty `NO_INPUT` disables prompts.
+Settings: `targets_path` (`--targets`, `PROMPTREPLAY_TARGETS`), `traces_dir` (`PROMPTREPLAY_TRACES_DIR`, default `./traces`), `runs_dir` (`PROMPTREPLAY_RUNS_DIR`, default `./runs`). A non-empty `NO_INPUT` disables prompts.
 
 ## Known limits (v1)
 

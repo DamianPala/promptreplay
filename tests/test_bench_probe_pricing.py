@@ -1,7 +1,7 @@
-"""Tests for provibench.bench.probe_pricing: pricing an unpinned spec by what served it.
+"""Tests for promptreplay.bench.probe_pricing: pricing an unpinned spec by what served it.
 
 `tests/fixtures/probe_served_pricing.jsonl` is a trimmed copy of a real run's own jsonl (a
-tester's `provibench probe` of the packaged sample trace against an unpinned OpenRouter
+tester's `promptreplay probe` of the packaged sample trace against an unpinned OpenRouter
 spec) -- ten requests, every one served by GMICloud and carrying OpenRouter's own billed
 `generation.total_cost`. No trace, API key, or private data is in it. That fixture predates
 `listing_prices` (`bench.probe_runs`), so it is also the fallback path's own test: every call
@@ -13,11 +13,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from provibench.bench.estimate import SpecPrices
-from provibench.bench.probe_models import ProbeResult
-from provibench.bench.probe_pricing import choose_prices, served_prices
-from provibench.bench.probe_summary import summarize_probe
-from provibench.bench.targets import Prices
+from promptreplay.bench.estimate import SpecPrices
+from promptreplay.bench.probe_models import ProbeResult
+from promptreplay.bench.probe_pricing import choose_prices, served_prices
+from promptreplay.bench.probe_summary import summarize_probe
+from promptreplay.bench.targets import Prices
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _WORST_CASE_PRICE = 0.155
@@ -226,7 +226,7 @@ def test_a_fit_far_past_the_worst_case_is_rejected_as_noise() -> None:
 
 def _fit_row(*, uncached: int, output: int, cost: float) -> ProbeResult:
     """One served, billed record with an exact token mix an OLS fit needs to solve for."""
-    from provibench.bench.trace import Usage
+    from promptreplay.bench.trace import Usage
 
     return ProbeResult(
         spec_label="or:model",

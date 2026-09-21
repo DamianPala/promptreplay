@@ -13,22 +13,22 @@ from html import escape
 
 import pytest
 
-from provibench.bench.estimate import SpecPrices
-from provibench.bench.html_report import render_html
-from provibench.bench.html_svg import MAX_SERIES, BarRow, horizontal_bars
-from provibench.bench.probe_html_help import endpoint_help
-from provibench.bench.probe_html_tables import (
+from promptreplay.bench.estimate import SpecPrices
+from promptreplay.bench.html_report import render_html
+from promptreplay.bench.html_svg import MAX_SERIES, BarRow, horizontal_bars
+from promptreplay.bench.probe_html_help import endpoint_help
+from promptreplay.bench.probe_html_tables import (
     ENDPOINT_CAPTION_HTML,
     HOVER_HINT_HTML,
     endpoint_caption_html,
 )
-from provibench.bench.probe_models import ProbeResult
-from provibench.bench.probe_summary import summarize_probe
-from provibench.bench.replay import ReplayResult
-from provibench.bench.summary import summarize
-from provibench.bench.trace import Usage
-from provibench.commands.summary_view import probe_summary_to_document, summary_to_document
-from provibench.core.documents import Document, as_document, as_list
+from promptreplay.bench.probe_models import ProbeResult
+from promptreplay.bench.probe_summary import summarize_probe
+from promptreplay.bench.replay import ReplayResult
+from promptreplay.bench.summary import summarize
+from promptreplay.bench.trace import Usage
+from promptreplay.commands.summary_view import probe_summary_to_document, summary_to_document
+from promptreplay.core.documents import Document, as_document, as_list
 from tests.test_report import probe_record
 
 _SVG = re.compile(r"<svg\b.*?</svg>", re.S)

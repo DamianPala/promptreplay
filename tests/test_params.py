@@ -3,8 +3,8 @@
 import pytest
 from click import BadParameter
 
-from provibench.core.documents import as_document, as_list
-from provibench.core.params import TIMEOUT
+from promptreplay.core.documents import as_document, as_list
+from promptreplay.core.params import TIMEOUT
 from tests.conftest import Cli
 
 

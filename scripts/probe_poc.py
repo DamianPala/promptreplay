@@ -4,7 +4,7 @@ Instead of replaying a whole conversation, this walks a handful of 1-based turn
 indices ("rungs") of the trace's main conversation. For each rung it sends turn `k`
 once ("cold") and turn `k+1` a few times ("warm"), so the cold request's prompt is a
 cacheable prefix of the warm request. Each rung carries its own nonce
-(`provibench-probe:<run_hex>:<k>`) prepended to the first system block: every cold
+(`promptreplay-probe:<run_hex>:<k>`) prepended to the first system block: every cold
 request is then truly cold, because rung 13 and rung 30 share the same opening bytes
 with rung 1 and would otherwise read back rung 1's cache. A rung whose cold request
 fails is skipped: there is nothing cached to warm, so it does not score.
@@ -38,11 +38,11 @@ from typing import Any, Literal, cast
 import httpx
 from pydantic import BaseModel
 
-import provibench
+import promptreplay
 
 # The private replay helpers are reused deliberately: this PoC rides the same
 # request path as `replay` so its measurements are comparable.
-from provibench.bench.replay import (
+from promptreplay.bench.replay import (
     ReplayOptions,
     ReplayResult,
     _build_headers,  # pyright: ignore[reportPrivateUsage]
@@ -51,12 +51,12 @@ from provibench.bench.replay import (
     _post,  # pyright: ignore[reportPrivateUsage]
     prepare_body,
 )
-from provibench.bench.targets import RunSpec, load_targets, parse_run_spec, resolve_api_key
-from provibench.bench.trace import TraceEntry, load_trace, main_conversation
+from promptreplay.bench.targets import RunSpec, load_targets, parse_run_spec, resolve_api_key
+from promptreplay.bench.trace import TraceEntry, load_trace, main_conversation
 
 type Role = Literal["cold", "warm"]
 
-_NONCE_PREFIX = "provibench-probe:"
+_NONCE_PREFIX = "promptreplay-probe:"
 _TWOXX_MIN = 200
 _TWOXX_MAX = 300
 _RETRY_STATUSES = (429, 503)
@@ -645,7 +645,7 @@ def _stderr_progress(record: RequestRecord) -> None:
 
 def default_targets_path() -> Path:
     """The packaged `targets.toml`; `--targets PATH` overrides it."""
-    return Path(provibench.__file__).resolve().parent / "data" / "targets.toml"
+    return Path(promptreplay.__file__).resolve().parent / "data" / "targets.toml"
 
 
 def _parser() -> argparse.ArgumentParser:

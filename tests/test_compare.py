@@ -6,7 +6,7 @@ listings with, so the two commands are tested on one shape of data.
 
 from __future__ import annotations
 
-from provibench.core.documents import as_document
+from promptreplay.core.documents import as_document
 from tests.conftest import BenchPaths, Cli
 from tests.test_history import (
     date_at,

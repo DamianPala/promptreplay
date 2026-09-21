@@ -1,7 +1,7 @@
 """`record`: proxy lifecycle wiring, existing-trace refusal, and --append.
 
 The recording proxy itself (`bench.proxy.Recorder`) opens real sockets and is out of scope
-for a CLI test; `provibench.bench.proxy.serve` is the network/process boundary the command
+for a CLI test; `promptreplay.bench.proxy.serve` is the network/process boundary the command
 calls, and is faked here to append trace entries the way the proxy would.
 """
 
@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from provibench.bench.trace import TraceEntry, append_entry
-from provibench.core.documents import as_document, as_list
+from promptreplay.bench.trace import TraceEntry, append_entry
+from promptreplay.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
 
@@ -36,7 +36,7 @@ def test_record_timeout_reaches_the_proxy_in_seconds(
         seen.append(kwargs.get("timeout_s"))
         append_entry(trace_path, _entry(1, "c1"))
 
-    monkeypatch.setattr("provibench.bench.proxy.serve", fake_serve)
+    monkeypatch.setattr("promptreplay.bench.proxy.serve", fake_serve)
     base = ["record", "--upstream", "https://up.test"]
     assert cli.run(*base, "--name", "a", "--timeout", "5m", env=bench_paths.env).code == 0
     assert cli.run(*base, "--name", "b", env=bench_paths.env).code == 0
@@ -52,7 +52,7 @@ def test_record_starts_the_proxy_and_summarises_by_conversation(
         append_entry(trace_path, _entry(1, "c1"))
         append_entry(trace_path, _entry(2, "c2"))
 
-    monkeypatch.setattr("provibench.bench.proxy.serve", fake_serve)
+    monkeypatch.setattr("promptreplay.bench.proxy.serve", fake_serve)
     outcome = cli.run(
         "record", "--name", "sess", "--upstream", "https://up.test", env=bench_paths.env
     )
@@ -78,7 +78,7 @@ def test_record_refuses_an_existing_trace_without_append(
         nonlocal called
         called = True
 
-    monkeypatch.setattr("provibench.bench.proxy.serve", fake_serve)
+    monkeypatch.setattr("promptreplay.bench.proxy.serve", fake_serve)
     outcome = cli.run(
         "record", "--name", "sess", "--upstream", "https://up.test", env=bench_paths.env
     )
@@ -97,7 +97,7 @@ def test_record_append_adds_to_an_existing_trace(
     def fake_serve(upstream: str, trace_path: Path, host: str, port: int, **kwargs: object) -> None:
         append_entry(trace_path, _entry(2))
 
-    monkeypatch.setattr("provibench.bench.proxy.serve", fake_serve)
+    monkeypatch.setattr("promptreplay.bench.proxy.serve", fake_serve)
     outcome = cli.run(
         "record",
         "--name",
@@ -118,7 +118,7 @@ def test_record_swallows_keyboard_interrupt_and_reports_what_was_captured(
     def fake_serve(*args: object, **kwargs: object) -> None:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("provibench.bench.proxy.serve", fake_serve)
+    monkeypatch.setattr("promptreplay.bench.proxy.serve", fake_serve)
     outcome = cli.run(
         "record", "--name", "sess", "--upstream", "https://up.test", env=bench_paths.env
     )
@@ -138,7 +138,7 @@ def test_record_progress_messages_go_to_stderr(
     def fake_serve(upstream: str, trace_path: Path, host: str, port: int, **kwargs: object) -> None:
         append_entry(trace_path, _entry(1))
 
-    monkeypatch.setattr("provibench.bench.proxy.serve", fake_serve)
+    monkeypatch.setattr("promptreplay.bench.proxy.serve", fake_serve)
     outcome = cli.run(
         "record",
         "--name",

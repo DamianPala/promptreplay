@@ -1,6 +1,18 @@
 # Naming
 
-Status: open. Decide at the end of 0.2, before the PyPI upload. The name is baked into the env prefix (`PROVIBENCH_*`), the XDG config and cache paths, the entry point, and the package directory, so the rename is one mechanical slice; do it before the first public tag, not after.
+Status: decided 2026-09-21: promptreplay. The name was baked into the env prefix (`PROVIBENCH_*`), the XDG config and cache paths, the entry point, and the package directory, so the rename was one mechanical slice, done before the first public tag.
+
+## Decision (2026-09-21)
+
+Chosen `promptreplay` over hybrids: `promptreplaybench` is three words, and "bench" adds length
+without meaning; `prorebench` is an abbreviation nobody can expand; `replaymeter` and
+`replayprobe` are free and precise, but "replay" of a prompt is the mechanism the tool is about,
+and `promptreplay` says it without naming a metric.
+
+Rechecked that day: PyPI `promptreplay` 404, GitHub has no repository named `promptreplay`,
+`DamianPala/promptreplay` is free. `promptbench`, `rebench`, `reprobe`, `replaycheck`,
+`promptcheck`, `promptmeter`, `replaylab` are taken on PyPI; `replaybench` collides with an
+"AI agent evaluation" repo.
 
 ## Why `provibench` is weak
 

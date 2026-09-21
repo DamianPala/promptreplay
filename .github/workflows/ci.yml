@@ -63,13 +63,13 @@ jobs:
         run: uv build
 
       - name: Check the wheel carries the packaged data
-        run: unzip -l dist/*.whl | grep -E "provibench/data/(sample|targets)"
+        run: unzip -l dist/*.whl | grep -E "promptreplay/data/(sample|targets)"
 
       - name: Smoke-test the wheel in a clean environment
         run: |
           uv run --isolated --no-project --python 3.12 --with dist/*.whl \
-            provibench --help
+            promptreplay --help
           uv run --isolated --no-project --python 3.12 --with dist/*.whl \
-            provibench schema > /dev/null
+            promptreplay schema > /dev/null
           uv run --isolated --no-project --python 3.12 --with dist/*.whl \
-            provibench inspect sample-trace > /dev/null
+            promptreplay inspect sample-trace > /dev/null

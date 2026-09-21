@@ -1,4 +1,4 @@
-"""Tests for provibench.bench.probe_runs: persisting and reading a probe run."""
+"""Tests for promptreplay.bench.probe_runs: persisting and reading a probe run."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from provibench.bench.estimate import SpecPrices
-from provibench.bench.probe_models import ProbeOptions, ProbeResult, ProbeRun
-from provibench.bench.probe_runs import load_probe_run, write_probe_run
-from provibench.bench.probe_summary import summarize_probe
-from provibench.bench.targets import Prices, RunSpec, Target
+from promptreplay.bench.estimate import SpecPrices
+from promptreplay.bench.probe_models import ProbeOptions, ProbeResult, ProbeRun
+from promptreplay.bench.probe_runs import load_probe_run, write_probe_run
+from promptreplay.bench.probe_summary import summarize_probe
+from promptreplay.bench.targets import Prices, RunSpec, Target
 
 
 def _spec(model: str = "model-a") -> RunSpec:

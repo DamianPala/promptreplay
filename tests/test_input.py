@@ -5,9 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from provibench.core.documents import as_document, as_list
-from provibench.core.input import InputTooLarge, InvalidUtf8, read_bounded_file, read_bounded_stream
-from provibench.core.settings import core_settings
+from promptreplay.core.documents import as_document, as_list
+from promptreplay.core.input import (
+    InputTooLarge,
+    InvalidUtf8,
+    read_bounded_file,
+    read_bounded_stream,
+)
+from promptreplay.core.settings import core_settings
 from tests.conftest import Cli
 
 
@@ -52,11 +57,11 @@ def test_config_byte_bound_rejects_before_command_execution(cli: Cli, selector: 
     path = (
         cli.root / "config.toml"
         if selector != "default"
-        else cli.home / ".config/provibench/config.toml"
+        else cli.home / ".config/promptreplay/config.toml"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     args: tuple[str, ...] = ("--config", str(path)) if selector == "flag" else ()
-    env = {"PROVIBENCH_CONFIG": str(path)} if selector == "environment" else None
+    env = {"PROMPTREPLAY_CONFIG": str(path)} if selector == "environment" else None
     path.write_text(_config_of_size(65_536), encoding="utf-8")
     assert cli.run("config", "show", *args, env=env).code == 0
 
@@ -77,7 +82,7 @@ def test_schema_descriptions_disclose_all_bounded_inputs(cli: Cli) -> None:
 
 
 def test_core_setting_descriptions_disclose_their_input_bounds() -> None:
-    descriptions = {setting.name: setting.description for setting in core_settings("provibench")}
+    descriptions = {setting.name: setting.description for setting in core_settings("promptreplay")}
 
     assert "65536 UTF-8 bytes" in descriptions["config_path"]
 

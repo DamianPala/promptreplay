@@ -11,11 +11,11 @@ import json
 
 import pytest
 
-from provibench.bench.estimate import SpecPrices, precheck_cost
-from provibench.bench.openrouter import Endpoint
-from provibench.bench.precheck import unavailable_reason
-from provibench.bench.probe_models import ProbeOptions
-from provibench.bench.selection import (
+from promptreplay.bench.estimate import SpecPrices, precheck_cost
+from promptreplay.bench.openrouter import Endpoint
+from promptreplay.bench.precheck import unavailable_reason
+from promptreplay.bench.probe_models import ProbeOptions
+from promptreplay.bench.selection import (
     UPTIME_FLOOR,
     SelectionCriteria,
     SelectionDrop,
@@ -28,14 +28,14 @@ from provibench.bench.selection import (
     sort_key,
     stability_reason,
 )
-from provibench.bench.selection_text import (
+from promptreplay.bench.selection_text import (
     not_probed_lines,
     render_candidates,
     selection_line,
 )
-from provibench.bench.targets import Prices, RunSpec, Target
-from provibench.bench.trace import RecordedResponse, TraceEntry, Usage
-from provibench.core.errors import InvalidInput
+from promptreplay.bench.targets import Prices, RunSpec, Target
+from promptreplay.bench.trace import RecordedResponse, TraceEntry, Usage
+from promptreplay.core.errors import InvalidInput
 
 _GATEWAY = Target(
     name="or", url="https://openrouter.test/v1/messages", api_key_env="OR_KEY", kind="openrouter"

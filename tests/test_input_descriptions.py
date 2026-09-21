@@ -1,6 +1,6 @@
 """I1e relationships and runtime discovery exposed by schema descriptors."""
 
-from provibench.core.documents import Document, as_document, as_list
+from promptreplay.core.documents import Document, as_document, as_list
 from tests.conftest import Cli
 
 

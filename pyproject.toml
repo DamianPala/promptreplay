@@ -1,5 +1,5 @@
 [project]
-name = "provibench"
+name = "promptreplay"
 version = "0.2.0"
 description = "Record real agent-harness API traffic, replay it byte-for-byte against LLM providers, compare cache behaviour and cost"
 readme = "README.md"
@@ -34,12 +34,12 @@ dependencies = [
 ]
 
 [project.scripts]
-provibench = "provibench.app:run"
+promptreplay = "promptreplay.app:run"
 
 [project.urls]
-Homepage = "https://github.com/DamianPala/provibench"
-Repository = "https://github.com/DamianPala/provibench"
-Changelog = "https://github.com/DamianPala/provibench/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/DamianPala/promptreplay"
+Repository = "https://github.com/DamianPala/promptreplay"
+Changelog = "https://github.com/DamianPala/promptreplay/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
@@ -71,7 +71,7 @@ pylint.max-positional-args = 5
 
 [tool.ruff.lint.isort]
 force-single-line = false
-known-first-party = ["provibench"]
+known-first-party = ["promptreplay"]
 
 [tool.pyright]
 pythonVersion = "3.12"

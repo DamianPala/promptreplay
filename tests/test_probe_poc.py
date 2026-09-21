@@ -12,8 +12,8 @@ from typing import Any, Literal
 import httpx
 import pytest
 
-from provibench.bench.targets import RunSpec, Target
-from provibench.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
+from promptreplay.bench.targets import RunSpec, Target
+from promptreplay.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 probe_poc: Any = importlib.import_module("probe_poc")
 
 _RUN_HEX = "0123456789ab"
-_NONCE = f"provibench-probe:{_RUN_HEX}:1"
+_NONCE = f"promptreplay-probe:{_RUN_HEX}:1"
 _ENTRY_HEADERS = {"anthropic-version": "2023-06-01"}
 
 
@@ -176,7 +176,7 @@ def test_inject_nonce_rejects_a_body_it_cannot_stamp() -> None:
 
 
 def test_rung_nonce_derives_from_the_run_hex() -> None:
-    assert probe_poc.rung_nonce("abc123", 13) == "provibench-probe:abc123:13"
+    assert probe_poc.rung_nonce("abc123", 13) == "promptreplay-probe:abc123:13"
 
 
 # --- rung selection -----------------------------------------------------------
@@ -431,7 +431,7 @@ def test_main_writes_the_json_report_and_exits_zero(
     assert set(payload) == {"run_hex", "trace", "started", "requests", "rungs"}
     assert payload["trace"] == str(trace_path)
     assert len(payload["run_hex"]) == 12
-    nonce = f"provibench-probe:{payload['run_hex']}:1"
+    nonce = f"promptreplay-probe:{payload['run_hex']}:1"
     assert [record["role"] for record in payload["requests"]] == ["cold", "warm", "warm"]
     assert [record["attempt"] for record in payload["requests"]] == [0, 1, 2]
     assert all(record["spec"] == "fake:model-a" for record in payload["requests"])
@@ -684,12 +684,13 @@ def test_run_probe_uses_one_nonce_per_rung_shared_across_specs(
         by_spec[label].append(nonce_of(body))
     assert len(set(by_spec["fake:a"])) == 2  # rung 1 and rung 3 differ
     assert by_spec["fake:a"] == by_spec["fake:b"]  # but every spec agrees per rung
-    assert all(nonce.startswith(f"provibench-probe:{run.run_hex}:") for nonce in by_spec["fake:a"])
+    prefix = f"promptreplay-probe:{run.run_hex}:"
+    assert all(nonce.startswith(prefix) for nonce in by_spec["fake:a"])
     assert [aggregate.nonce for aggregate in run.rungs] == [
-        f"provibench-probe:{run.run_hex}:1",
-        f"provibench-probe:{run.run_hex}:3",
-        f"provibench-probe:{run.run_hex}:1",
-        f"provibench-probe:{run.run_hex}:3",
+        f"promptreplay-probe:{run.run_hex}:1",
+        f"promptreplay-probe:{run.run_hex}:3",
+        f"promptreplay-probe:{run.run_hex}:1",
+        f"promptreplay-probe:{run.run_hex}:3",
     ]
 
 

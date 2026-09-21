@@ -1,12 +1,12 @@
-"""Tests for provibench.bench.summary."""
+"""Tests for promptreplay.bench.summary."""
 
 from __future__ import annotations
 
 import pytest
 
-from provibench.bench.replay import ReplayResult
-from provibench.bench.summary import sparkline, summarize
-from provibench.bench.trace import Usage
+from promptreplay.bench.replay import ReplayResult
+from promptreplay.bench.summary import sparkline, summarize
+from promptreplay.bench.trace import Usage
 
 
 def _result(

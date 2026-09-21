@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 import pytest
 
-from provibench.bench.trace import (
+from promptreplay.bench.trace import (
     RecordedResponse,
     TraceEntry,
     Usage,
@@ -24,7 +24,7 @@ from provibench.bench.trace import (
     read_trace_text,
     write_trace_text,
 )
-from provibench.core.documents import as_document, as_list
+from promptreplay.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
 _RealAsyncClient = httpx.AsyncClient
@@ -357,10 +357,10 @@ def test_replay_stamps_one_run_nonce_into_every_turn_and_records_it(
     nonces = [body["system"][0]["text"].splitlines()[0] for body in bodies]
     assert len(nonces) == 2
     assert len(set(nonces)) == 1  # one nonce per run, so turn 2 can read turn 1's write
-    assert nonces[0].startswith("provibench-run:")
+    assert nonces[0].startswith("promptreplay-run:")
     meta = _meta(_run_dir(outcome))
     assert meta["protocol"] == "full"
-    assert meta["run_hex"] == nonces[0].removeprefix("provibench-run:")
+    assert meta["run_hex"] == nonces[0].removeprefix("promptreplay-run:")
     assert meta["options"]["warm"] is False
     assert bodies[0]["system"][0]["text"].endswith("You are helpful.")
     # the nonce goes into the first block only; the recorded marker block is untouched

@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 
-from provibench.core.documents import Document
+from promptreplay.core.documents import Document
 from tests.conftest import Cli
 
 _D7 = {

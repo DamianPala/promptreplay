@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from provibench.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
-from provibench.core.documents import as_document, as_list
+from promptreplay.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
+from promptreplay.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
 
@@ -112,7 +112,7 @@ def test_inspect_resolves_the_packaged_sample(cli: Cli, bench_paths: BenchPaths)
 
 
 def test_inspect_reads_a_gzipped_trace(cli: Cli, bench_paths: BenchPaths) -> None:
-    from provibench.bench.trace import read_trace_text, write_trace_text
+    from promptreplay.bench.trace import read_trace_text, write_trace_text
 
     plain = bench_paths.traces_dir / "t.jsonl"
     append_entry(plain, _entry(1, "main", "hi"))

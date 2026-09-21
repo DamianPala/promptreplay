@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.12"
 
 [options]
-exclude-newer = "2026-09-13T10:38:27.684163985Z"
+exclude-newer = "2026-09-14T09:35:39.744110997Z"
 exclude-newer-span = "P1W"
 
 [[package]]
@@ -159,7 +159,7 @@ wheels = [
 ]
 
 [[package]]
-name = "provibench"
+name = "promptreplay"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [

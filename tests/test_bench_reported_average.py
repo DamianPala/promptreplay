@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from provibench.bench.openrouter_stats import ReportedAverage, ReportedShare
-from provibench.bench.probe_summary import ProbeSummary
-from provibench.bench.reported_average import (
+from promptreplay.bench.openrouter_stats import ReportedAverage, ReportedShare
+from promptreplay.bench.probe_summary import ProbeSummary
+from promptreplay.bench.reported_average import (
     apply_reported_average,
     pooled_note,
     reported_average_block,

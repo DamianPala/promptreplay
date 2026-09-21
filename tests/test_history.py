@@ -16,18 +16,18 @@ from typing import Any
 
 import pytest
 
-from provibench.bench.estimate import SpecPrices
-from provibench.bench.openrouter import Endpoint
-from provibench.bench.probe_models import ProbeOptions, ProbeResult, ProbeRun, Role
-from provibench.bench.probe_runs import (
+from promptreplay.bench.estimate import SpecPrices
+from promptreplay.bench.openrouter import Endpoint
+from promptreplay.bench.probe_models import ProbeOptions, ProbeResult, ProbeRun, Role
+from promptreplay.bench.probe_runs import (
     EndpointSnapshot,
     endpoint_snapshot,
     load_probe_run,
     write_probe_run,
 )
-from provibench.bench.replay import ReplayOptions, ReplayResult, write_run
-from provibench.bench.targets import Prices, RunSpec, Target
-from provibench.core.documents import as_document, as_list
+from promptreplay.bench.replay import ReplayOptions, ReplayResult, write_run
+from promptreplay.bench.targets import Prices, RunSpec, Target
+from promptreplay.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
 _NOW = 1_800_000_000.0

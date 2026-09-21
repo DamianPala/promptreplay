@@ -1,4 +1,4 @@
-"""Tests for provibench.bench.targets."""
+"""Tests for promptreplay.bench.targets."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Literal
 
 import pytest
 
-from provibench.bench.targets import Target, load_targets, parse_run_spec, resolve_api_key
+from promptreplay.bench.targets import Target, load_targets, parse_run_spec, resolve_api_key
 
 
 def _target(
@@ -144,7 +144,7 @@ def test_the_packaged_targets_alias_the_deepseek_slug() -> None:
     """A fresh install can sweep a slug and get the native endpoint's own row."""
     from importlib import resources
 
-    packaged = resources.files("provibench.data").joinpath("targets.toml")
+    packaged = resources.files("promptreplay.data").joinpath("targets.toml")
     with resources.as_file(packaged) as path:
         targets = load_targets(path)
     assert targets["deepseek"].aliases["deepseek/deepseek-v4.1-flash"] == "deepseek-flash"

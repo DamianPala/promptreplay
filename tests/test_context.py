@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from provibench.core.context import Invocation, Process, Streams
-from provibench.core.output import Format
+from promptreplay.core.context import Invocation, Process, Streams
+from promptreplay.core.output import Format
 from tests.conftest import FakeClock, FakeStream
 
 
@@ -25,7 +25,7 @@ def make_invocation(
         cwd=tmp_path,
         home=tmp_path,
     )
-    return Invocation(program="provibench", process=process, declaration=())
+    return Invocation(program="promptreplay", process=process, declaration=())
 
 
 def test_no_input_and_claimed_stdin_prevent_prompts(tmp_path: Path) -> None:

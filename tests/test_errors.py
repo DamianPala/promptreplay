@@ -59,7 +59,7 @@ def test_error_object_is_the_last_stderr_line_and_never_on_stdout(cli: Cli) -> N
 
 
 def test_precondition_failed_names_force(cli: Cli) -> None:
-    path = cli.home / ".local/share/bash-completion/completions/provibench"
+    path = cli.home / ".local/share/bash-completion/completions/promptreplay"
     path.parent.mkdir(parents=True)
     path.write_text("# something else\n")
     outcome = cli.run("completion", "bash", "--install")

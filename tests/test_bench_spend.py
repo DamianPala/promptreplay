@@ -1,12 +1,12 @@
-"""Tests for provibench.bench.spend: what a probe run spent, billed or priced by hand."""
+"""Tests for promptreplay.bench.spend: what a probe run spent, billed or priced by hand."""
 
 from __future__ import annotations
 
 import pytest
 
-from provibench.bench.estimate import SpecPrices
-from provibench.bench.probe_models import ProbeResult
-from provibench.bench.spend import (
+from promptreplay.bench.estimate import SpecPrices
+from promptreplay.bench.probe_models import ProbeResult
+from promptreplay.bench.spend import (
     precheck_spend,
     record_cost,
     spec_spend,
@@ -14,7 +14,7 @@ from provibench.bench.spend import (
     usage_cost,
     worst_case_usd,
 )
-from provibench.bench.targets import Prices
+from promptreplay.bench.targets import Prices
 
 
 def _prices() -> SpecPrices:

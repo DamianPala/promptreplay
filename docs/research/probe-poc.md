@@ -7,7 +7,7 @@ Question: can the per-provider cache measurement be done on a few real turns ins
 Script: `scripts/probe_poc.py` (standalone, reuses `bench/`). Per run spec, sequentially:
 
 - Rung = a 1-based turn `k` of the main conversation. Cold: send turn `k` once. Warm: send turn `k+1` R times, 1 s apart.
-- Nonce `provibench-probe:<run hex>:<k>` prepended to the first system block, identical across specs, different per rung, so every cold request is truly cold and later rungs do not inherit earlier ones.
+- Nonce `promptreplay-probe:<run hex>:<k>` prepended to the first system block, identical across specs, different per rung, so every cold request is truly cold and later rungs do not inherit earlier ones.
 - `max_tokens: 1`, `stream: false`, provider pinning via `provider.only`.
 - Rungs 1, 13, 30 of `traces/acpc-coverage-raw.jsonl` (prompt 20 k, 50 k, 93 k tokens), repeats 5, 2, 2.
 

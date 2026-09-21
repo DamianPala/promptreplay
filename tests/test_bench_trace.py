@@ -1,4 +1,4 @@
-"""Tests for provibench.bench.trace."""
+"""Tests for promptreplay.bench.trace."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from provibench.bench.trace import (
+from promptreplay.bench.trace import (
     PACKAGED_SAMPLE,
     TraceEntry,
     TraceNotFound,

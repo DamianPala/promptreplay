@@ -79,7 +79,7 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
 - `--force` for scrub's OUT or `--output-file`, which are otherwise refused when the target
   exists; `report --output-file` replaces its file, since a report is derived from the run alone
 - Native prices from LiteLLM's community table, cached under `$XDG_CACHE_HOME` and refetched
-  weekly or on `provibench prices --update`; `targets.toml` `prices` entries override it, and
+  weekly or on `promptreplay prices --update`; `targets.toml` `prices` entries override it, and
   every estimate names its price source (`targets`, `litellm` or `openrouter-endpoint`)
 - `--dry-run` on `probe`, `sweep`, and `replay`: prices the run and stops there, sending
   nothing; the result carries the estimate, the runs directory, and `requires_confirmation`,
@@ -119,6 +119,10 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
 
 ### Changed
 
+- Renamed from `provibench` to `promptreplay` before the first release: the package, the
+  command, the env prefix `PROMPTREPLAY_*`, the config path `~/.config/promptreplay/targets.toml`,
+  the price cache under `~/.cache/promptreplay/`, and the nonce prefixes. Nothing was published
+  under the old name, so nothing reads the old paths.
 - Every user-facing "spec" is now "endpoint": `probe`'s positional argument, table captions
   and columns, JSON fields (`summaries[].rungs[].spec` is now `endpoint`, and likewise across
   probe/sweep/replay/report/history/compare), help text and error messages. The persisted
@@ -225,5 +229,5 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
 - `sweep`'s `candidates:` table and its `endpoints:` estimate table are separated by one
   blank line instead of running straight into each other
 
-[Unreleased]: https://github.com/DamianPala/provibench/compare/0.2.0...main
-[0.2.0]: https://github.com/DamianPala/provibench/releases/tag/0.2.0
+[Unreleased]: https://github.com/DamianPala/promptreplay/compare/0.2.0...main
+[0.2.0]: https://github.com/DamianPala/promptreplay/releases/tag/0.2.0

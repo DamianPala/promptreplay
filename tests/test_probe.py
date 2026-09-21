@@ -16,14 +16,14 @@ from typing import Any
 import httpx
 import pytest
 
-from provibench.bench.trace import (
+from promptreplay.bench.trace import (
     RecordedResponse,
     TraceEntry,
     Usage,
     append_entry,
     write_trace_text,
 )
-from provibench.core.documents import as_document, as_list
+from promptreplay.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
 _RealAsyncClient = httpx.AsyncClient
@@ -923,7 +923,7 @@ def test_probe_stores_the_reported_average_and_prints_no_unavailable_line(
 ) -> None:
     """A fetch that succeeds stores the block in `run.json` and the summary's five fields,
     and the "unavailable" line never prints."""
-    from provibench.bench.openrouter_stats import ReportedAverage, ReportedShare
+    from promptreplay.bench.openrouter_stats import ReportedAverage, ReportedShare
 
     _write_targets(bench_paths.targets_path)
     _probe_trace(bench_paths)
@@ -941,7 +941,7 @@ def test_probe_stores_the_reported_average_and_prints_no_unavailable_line(
             shares={"novita": ReportedShare(share_pct=87.2, endpoints=1, tokens=123)},
         )
 
-    monkeypatch.setattr("provibench.bench.openrouter_stats.fetch_reported_average", fake_fetch)
+    monkeypatch.setattr("promptreplay.bench.openrouter_stats.fetch_reported_average", fake_fetch)
 
     outcome = _probe(
         cli,
@@ -989,7 +989,7 @@ def test_probe_fetches_the_reported_average_for_yesterdays_utc_day(
         seen_days.append(day)
         return None
 
-    monkeypatch.setattr("provibench.bench.openrouter_stats.fetch_reported_average", fake_fetch)
+    monkeypatch.setattr("promptreplay.bench.openrouter_stats.fetch_reported_average", fake_fetch)
 
     outcome = _probe(
         cli,
@@ -1478,7 +1478,7 @@ def test_probe_ttl_counts_from_the_last_warm_read_not_from_the_stream(
         return _ok(cached=90, input_tokens=10)
 
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr("provibench.bench.probe.perf_counter", clock)
+    monkeypatch.setattr("promptreplay.bench.probe.perf_counter", clock)
     _install(monkeypatch, _transport(lambda index: _ok(), handler=handler))
 
     outcome = _probe(
@@ -1647,7 +1647,7 @@ def test_probe_records_the_ttl_offset_it_actually_landed_on(
         return _ok(cached=90, input_tokens=10)
 
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr("provibench.bench.probe.perf_counter", clock)
+    monkeypatch.setattr("promptreplay.bench.probe.perf_counter", clock)
     _install(monkeypatch, _transport(lambda index: _ok(), handler=handler))
     outcome = _probe(
         cli,

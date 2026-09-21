@@ -38,7 +38,7 @@ def test_always_colors_human_output_only(cli: Cli) -> None:
         "config",
         "show",
         "--config",
-        "/nonexistent/provibench.toml",
+        "/nonexistent/promptreplay.toml",
         "--color",
         "always",
         tty_stdout=True,

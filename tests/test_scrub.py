@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from provibench.bench.trace import (
+from promptreplay.bench.trace import (
     RecordedResponse,
     TraceEntry,
     Usage,
@@ -17,7 +17,7 @@ from provibench.bench.trace import (
     read_trace_text,
     write_trace_text,
 )
-from provibench.core.documents import Document, as_document, as_list
+from promptreplay.core.documents import Document, as_document, as_list
 from tests.conftest import BenchPaths, Cli, Outcome
 
 _ANTHROPIC_KEY = "sk-ant-api03-FAKE0000000000000000"

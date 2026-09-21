@@ -18,9 +18,9 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from provibench.bench.selection import SweepInfo
-from provibench.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
-from provibench.core.documents import as_document, as_list
+from promptreplay.bench.selection import SweepInfo
+from promptreplay.bench.trace import RecordedResponse, TraceEntry, Usage, append_entry
+from promptreplay.core.documents import as_document, as_list
 from tests.conftest import BenchPaths, Cli
 
 _RealAsyncClient = httpx.AsyncClient
@@ -277,7 +277,7 @@ class _Provider:
         key = _spec_key(body)
         if self.sent is not None:
             self.sent.append(body)
-        if "provibench-probe:" in request.content.decode():
+        if "promptreplay-probe:" in request.content.decode():
             # a probe request: the first one per spec is its cold write, and a blocked tag
             # fails there the way an excluded endpoint fails a real one
             refused = self._refused(key)
@@ -847,7 +847,7 @@ def test_sweep_row_labels_are_the_run_specs_probe_takes_by_hand(
 ) -> None:
     """A row label is a run spec: it parses back to the endpoint the sweep pinned, slash
     tags included, which is what makes a sweep row copy-pasteable into `probe`."""
-    from provibench.bench.targets import load_targets, parse_run_spec
+    from promptreplay.bench.targets import load_targets, parse_run_spec
 
     _write_targets(bench_paths.targets_path)
     _install(monkeypatch, _transport())

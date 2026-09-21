@@ -18,7 +18,7 @@ def env(tmp_path: Path) -> dict[str, str]:
 def test_help_and_version(env: dict[str, str]) -> None:
     root = run_process(["--help"], env=env)
     assert root.code == 0
-    assert "provibench schema" in root.stdout and "--json" in root.stdout
+    assert "promptreplay schema" in root.stdout and "--json" in root.stdout
     for path in (["config", "show"], ["completion"]):
         assert run_process([*path, "--help"], env=env).code == 0
     version = run_process(["--version"], env=env)

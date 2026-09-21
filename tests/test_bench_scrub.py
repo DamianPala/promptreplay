@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from provibench.bench.scrub import (
+from promptreplay.bench.scrub import (
     PATH_RULE,
     SELECTION_ALL,
     SELECTION_CONVERSATION,
