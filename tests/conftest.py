@@ -230,6 +230,10 @@ def run_process(
         # asyncio's Windows loop imports `_overlapped`, which initialises Winsock from
         # SYSTEMROOT; without it the child dies with WinError 10106 before reaching main.
         environment.setdefault("SYSTEMROOT", os.environ["SYSTEMROOT"])
+        # `Path.home()` reads USERPROFILE on Windows and ignores HOME, so the test's
+        # home directory is handed over under the name the platform looks at.
+        if "HOME" in environment:
+            environment.setdefault("USERPROFILE", environment["HOME"])
     if hold_stdin:
         return _run_holding_stdin(command, env=environment, timeout=timeout)
     completed = subprocess.run(

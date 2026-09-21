@@ -48,8 +48,9 @@ def test_precedence_flag_over_env_over_file_over_default(cli: Cli, tmp_path: Pat
         "value": str(config.parent / "targets.toml"),
         "source": "config",
     }
-    flagged = _settings(cli, "--targets", "/tmp/flagged.toml")
-    assert flagged["targets_path"] == {"value": "/tmp/flagged.toml", "source": "flag"}
+    flagged_targets = tmp_path / "flagged.toml"
+    flagged = _settings(cli, "--targets", str(flagged_targets))
+    assert flagged["targets_path"] == {"value": str(flagged_targets), "source": "flag"}
 
 
 def test_default_config_file_is_used_when_present(cli: Cli) -> None:
