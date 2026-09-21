@@ -41,6 +41,8 @@ This is one day of measurement, not a standing ranking: routing, quantization, a
 
 ## Quickstart
 
+If you are an agent, start with [`skills/promptreplay/SKILL.md`](skills/promptreplay/SKILL.md): the setup, the spend guards (`--dry-run`, `--budget`, `PROMPTREPLAY_RUNS_DIR`) and the JSON fields a run is read by.
+
 Install from PyPI:
 
 ```sh
