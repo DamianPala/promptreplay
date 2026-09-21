@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from html import escape
 
 import pytest
 
@@ -1135,3 +1136,144 @@ def test_every_document_carries_its_own_styles_and_nothing_else(document: Docume
     html = render_html(document)
     assert html.count("<style>") == 1
     assert "@import" not in html and "src=" not in html and "url(" not in html
+
+
+# --- OpenRouter's reported average --------------------------------------------
+
+
+def reported_average_probe_document() -> Document:
+    """One endpoint with a reported figure (`or:model@novita`) and one without
+    (`or:model@gmicloud`, absent from the feed's day row that day)."""
+    novita_prices = SpecPrices.model_validate(
+        {
+            "prices": {"input": 0.3, "cache_read": 0.03, "cache_write": 0.3, "output": 0.6},
+            "source": "openrouter-endpoint",
+            "provider": "novita",
+        }
+    )
+    novita = summarize_probe(
+        "or:model@novita",
+        [
+            ProbeResult.model_validate(r)
+            for r in (
+                probe_record(prompt_total=20_000),
+                probe_record(role="warm", attempt=1, cached=19_000, prompt_total=20_000, seq=2),
+            )
+        ],
+        prices=novita_prices,
+        trace_prompt_tokens=1_800_000,
+    ).model_copy(
+        update={
+            "or_avg_share_pct": 87.2,
+            "or_avg_pooled": False,
+            "or_avg_eff_per_m_prompt": 0.05,
+            "or_avg_session_prompt_usd": 0.09,
+            "vs_or_avg_pct": -12.0,
+        }
+    )
+    gmicloud = summarize_probe(
+        "or:model@gmicloud",
+        [
+            ProbeResult.model_validate(r)
+            for r in (
+                probe_record(
+                    spec_label="or:model@gmicloud", provider="GMICloud", prompt_total=20_000
+                ),
+                probe_record(
+                    spec_label="or:model@gmicloud",
+                    role="warm",
+                    attempt=1,
+                    cached=10_000,
+                    prompt_total=20_000,
+                    seq=2,
+                ),
+            )
+        ],
+    )
+    return {
+        "run_dir": "/runs/t/20260101-000000",
+        "trace": "t",
+        "conversation": "c1",
+        "created": "20260101-000000",
+        "run_hex": "abc123",
+        "protocol": "probe",
+        "options": {
+            "rungs": [1],
+            "repeats": [1],
+            "gap_s": 1.0,
+            "warm": False,
+            "throughput": False,
+            "ttl_s": None,
+        },
+        "summaries": [probe_summary_to_document(novita), probe_summary_to_document(gmicloud)],
+        "trace_prompt_tokens": 1_800_000,
+        "reported_average": {
+            "day": "2026-09-20",
+            "permaslug": "z-ai/glm-5.3-flash-20260826",
+            "fetched_at": "2026-09-21T00:00:00+00:00",
+            "shares": {"novita": {"share_pct": 87.2, "endpoints": 1, "tokens": 123}},
+        },
+        "output_file": None,
+        "changed": False,
+    }
+
+
+def test_reported_average_section_has_the_group_headers_and_the_seven_tooltips() -> None:
+    html = render_html(reported_average_probe_document())
+    assert "Against OpenRouter's reported average" in html
+    for group in ("prompt tokens from cache %", "input $/M", "this trace, input tokens"):
+        assert group in html
+    for tooltip in (
+        "Share of the prompt tokens this run's repeat requests had served from cache",
+        "Share of prompt tokens served from cache across every OpenRouter customer",
+        "Input price per 1M prompt tokens at this run's cache share",
+        "The same arithmetic with OpenRouter's reported share in place of this run's",
+        "The table's this trace $: the recorded session's input tokens at eff $/M.",
+        "The recorded session's input tokens at the OR avg price.",
+        "This run's bill against the OR avg bill on the same endpoint",
+    ):
+        assert escape(tooltip, quote=True) in html
+
+
+def test_reported_average_section_marks_the_run_price_cell_as_key() -> None:
+    html = render_html(reported_average_probe_document())
+    section = html.split("Against OpenRouter's reported average", 1)[1]
+    assert '<td class="key">' in section
+
+
+def test_reported_average_section_absent_without_any_figure() -> None:
+    html = render_html(probe_document())
+    assert "Against OpenRouter's reported average" not in html
+
+
+def test_method_sentence_names_the_reported_average_section() -> None:
+    html = render_html(reported_average_probe_document())
+    assert (
+        escape(
+            "The section below sets this run's cache share against OpenRouter's reported "
+            "average for 2026-09-20."
+        )
+        in html
+    )
+
+
+def test_a_fetch_that_covered_no_endpoint_promises_no_section() -> None:
+    """The fetch succeeded and `run.json` carries its day, but no probed endpoint got a
+    figure: no section, and no sentence or caveat pointing at one."""
+    document = reported_average_probe_document()
+    document["summaries"] = [
+        {**entry, "or_avg_share_pct": None, "or_avg_pooled": False}
+        for item in as_list(document["summaries"]) or []
+        if (entry := as_document(item)) is not None
+    ]
+
+    html = render_html(document)
+
+    assert "Against OpenRouter's reported average" not in html
+    assert "OpenRouter's reported average for 2026-09-20" not in html
+    assert "The OR avg figures come from" not in html
+
+
+def test_caveats_include_the_reported_average_source_sentence() -> None:
+    html = render_html(reported_average_probe_document())
+    assert escape("The OR avg figures come from the feed behind OpenRouter's model page") in html

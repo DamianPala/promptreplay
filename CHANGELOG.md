@@ -111,6 +111,11 @@ scaffold: a proxy recorder, a byte-for-byte full replay and a per-turn table.
   `N of M cold writes reported cached tokens (the largest ... of ...)`, printed under the
   table and listed in the HTML page's Caveats; silent under `--warm`, where a cold write
   hitting the cache is the thing being measured
+- `probe`/`sweep` fetch OpenRouter's own reported cache-hit share for the last complete UTC
+  day, for every pinned OpenRouter endpoint, and price the recorded session at that share
+  too, next to this run's own, in a `vs OpenRouter's reported average` table in the text,
+  Markdown and HTML reports; absent when the model has no pinned endpoint, the fetch fails,
+  or the run predates it
 
 ### Changed
 

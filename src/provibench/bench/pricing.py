@@ -48,3 +48,13 @@ def compute_cost(
         output=output_tokens * prices.output * scale,
         source=source,
     )
+
+
+def effective_price(h: float | None, prices: Prices | None) -> float | None:
+    """USD per 1M prompt tokens at the given hit-weighted `h`: misses at input, hits at cache
+    read. Shared by `probe_summary.summarize_probe` (this run's own `h`) and
+    `reported_average` (OpenRouter's reported share in place of it), so the two never price
+    the same pair of listed rates by two different formulas."""
+    if h is None or prices is None:
+        return None
+    return (1 - h) * prices.input + h * prices.cache_read

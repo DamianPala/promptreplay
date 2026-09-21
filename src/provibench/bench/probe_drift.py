@@ -25,10 +25,14 @@ _FIELD_SEPARATOR = ","
 
 
 class SpecRef(Protocol):
-    """What `apply_drift` needs of a spec: its target's kind, and the providers it pinned."""
+    """What `apply_drift`/`reported_average.apply_reported_average` need of a spec: its
+    target's kind, the model it asked for, and the providers it pinned."""
 
     @property
     def kind(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
 
     @property
     def providers(self) -> list[str]: ...

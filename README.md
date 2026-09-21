@@ -134,6 +134,10 @@ The pooled `eff $/M` stands in for the steady state of a long one, in which ever
 For an unpinned OpenRouter endpoint, `in $/M` is a rate fitted from what the provider that actually served the run billed, not a listed price, and a note under the table says so.
 Pinned and native endpoints keep their listed price.
 
+For a pinned OpenRouter endpoint, the run also fetches OpenRouter's own published cache-hit share for that provider on the last complete UTC day before the run, from the feed behind the model's page rather than its documented API, and prices the recorded session both ways at the same listed prices: once at this run's own share, once at OpenRouter's reported one, in a `vs OpenRouter's reported average` table under the endpoint table.
+A negative `vs OR avg` means this session cached better on that endpoint than OpenRouter's average traffic did that day.
+Because the feed is undocumented, the table is simply absent when the model has no pinned OpenRouter endpoint, the fetch fails, or the run predates this comparison.
+
 Under the endpoint table the run prints a per-turn table, one row per endpoint and rung.
 Four rows from the run above:
 

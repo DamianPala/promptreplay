@@ -336,11 +336,14 @@ def _write_probe_run(
     *,
     created: str = "20260101-000000",
     legacy: bool = False,
+    reported_average: dict[str, object] | None = None,
 ) -> Path:
     """A persisted probe run: `run.json` plus one jsonl per spec.
 
     `legacy` writes the shape a 0.2.0-before-this-slice run has: no TTL, no throughput
-    fields, no `kind` on the spec refs, no `ttl_s` in the options.
+    fields, no `kind` on the spec refs, no `ttl_s` in the options. `reported_average`, when
+    given, is the `reported_average` document `probe` would have stored; omitted, `run.json`
+    carries none, the shape every run written before this slice has.
     """
     run_dir = runs_dir / "t" / created
     run_dir.mkdir(parents=True)
@@ -389,6 +392,8 @@ def _write_probe_run(
             for label in records
         },
     }
+    if reported_average is not None:
+        meta["reported_average"] = reported_average
     (run_dir / "run.json").write_text(json.dumps(meta), encoding="utf-8")
     return run_dir
 
@@ -449,6 +454,99 @@ def test_probe_report_shortens_the_shared_prefix_into_a_caption(
     assert f"@novita: {cold_sentence}" not in out
     # Item 15: a blank line separates the rung table from the notes.
     assert f"\n\n{cold_sentence}" in out
+
+
+_REPORTED_AVERAGE: dict[str, object] = {
+    "day": "2026-09-20",
+    "model": "deepseek/deepseek-v4.1-flash",
+    "permaslug": "deepseek/deepseek-v4.1-flash-20260910",
+    "fetched_at": "2026-09-21T00:00:00+00:00",
+    "shares": {"novita": {"share_pct": 87.2, "endpoints": 1, "tokens": 123}},
+}
+
+
+def test_report_renders_the_reported_average_table_and_json_fields_with_no_network(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    """A `run.json` a sweep stored a `reported_average` in re-renders it -- text and JSON --
+    without fetching anything again: `report` never imports `openrouter_stats`."""
+    run_dir = _write_probe_run(
+        bench_paths.runs_dir,
+        {
+            "or:model@novita": [
+                probe_record(provider="Novita", model="model"),
+                probe_record(role="warm", attempt=1, cached=90, prompt_total=100),
+            ],
+        },
+        reported_average=_REPORTED_AVERAGE,
+    )
+
+    rendered = cli.run("report", str(run_dir), tty_stdout=True, env=bench_paths.env)
+    assert rendered.code == 0, rendered.stderr
+    assert "vs OpenRouter's reported average for 2026-09-20" in rendered.stdout
+
+    as_json = cli.run("report", str(run_dir), "--json", env=bench_paths.env)
+    assert as_json.code == 0, as_json.stderr
+    reported = as_document(as_json.document["reported_average"])
+    assert reported is not None
+    assert reported["day"] == "2026-09-20"
+    [summary] = [d for d in map(as_document, as_list(as_json.document["summaries"]) or []) if d]
+    assert summary["or_avg_share_pct"] == pytest.approx(87.2)
+    assert summary["vs_or_avg_pct"] is not None
+
+
+def test_report_of_a_reported_average_block_without_a_model_renders_as_before(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    """A block stored before `model` joined it names no owner for its shares, so the run
+    loads and renders exactly as one with no block at all, instead of failing to load."""
+    block = {key: value for key, value in _REPORTED_AVERAGE.items() if key != "model"}
+    run_dir = _write_probe_run(
+        bench_paths.runs_dir,
+        {
+            "or:model@novita": [
+                probe_record(provider="Novita", model="model"),
+                probe_record(role="warm", attempt=1, cached=90, prompt_total=100),
+            ],
+        },
+        reported_average=block,
+    )
+
+    rendered = cli.run("report", str(run_dir), tty_stdout=True, env=bench_paths.env)
+    assert rendered.code == 0, rendered.stderr
+    assert "vs OpenRouter's reported average" not in rendered.stdout
+
+    as_json = cli.run("report", str(run_dir), "--json", env=bench_paths.env)
+    assert as_json.code == 0, as_json.stderr
+    [summary] = [d for d in map(as_document, as_list(as_json.document["summaries"]) or []) if d]
+    assert summary["or_avg_share_pct"] is None
+
+
+def test_report_without_a_reported_average_renders_as_before(
+    cli: Cli, bench_paths: BenchPaths
+) -> None:
+    """A `run.json` written before this slice (no `reported_average` key at all) renders
+    exactly as it did: no comparison table, the five new summary fields all `None`/`False`."""
+    run_dir = _write_probe_run(
+        bench_paths.runs_dir,
+        {
+            "or:model@novita": [
+                probe_record(provider="Novita", model="model"),
+                probe_record(role="warm", attempt=1, cached=90, prompt_total=100),
+            ],
+        },
+    )
+
+    rendered = cli.run("report", str(run_dir), tty_stdout=True, env=bench_paths.env)
+    assert rendered.code == 0, rendered.stderr
+    assert "vs OpenRouter's reported average" not in rendered.stdout
+
+    as_json = cli.run("report", str(run_dir), "--json", env=bench_paths.env)
+    assert as_json.code == 0, as_json.stderr
+    assert as_json.document["reported_average"] is None
+    [summary] = [d for d in map(as_document, as_list(as_json.document["summaries"]) or []) if d]
+    assert summary["or_avg_share_pct"] is None
+    assert summary["or_avg_pooled"] is False
 
 
 def test_probe_report_marks_provider_drift_against_the_reference(

@@ -1531,6 +1531,27 @@ def test_sweep_schema_lists_quantization_and_pinned(cli: Cli) -> None:
     printed = json.dumps(detail.document)
     assert "quantization" in printed
     assert "pinned" in printed
+    assert "reported_average" in printed
+    for field in (
+        "or_avg_share_pct",
+        "or_avg_pooled",
+        "or_avg_eff_per_m_prompt",
+        "or_avg_session_prompt_usd",
+        "vs_or_avg_pct",
+    ):
+        assert field in printed
+    # `model` and `permaslug` also print elsewhere in the schema (the sweep's own model, the
+    # candidate list), so `reported_average`'s own properties are checked by name, not by a
+    # bare substring of the whole document.
+    output = as_document(detail.document["output"])
+    assert output is not None
+    properties = as_document(output["properties"])
+    assert properties is not None
+    reported_average_schema = as_document(properties["reported_average"])
+    assert reported_average_schema is not None
+    schema_properties = as_document(reported_average_schema["properties"])
+    assert schema_properties is not None
+    assert {"day", "model", "permaslug", "fetched_at", "shares"} <= set(schema_properties)
 
 
 def test_sweep_availability_check_removes_a_candidate_without_a_summary_row(

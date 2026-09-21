@@ -18,6 +18,7 @@ from provibench.commands.probe_spend import (
     listing_prices_document,
 )
 from provibench.commands.run_refs import resolve_run_dir
+from provibench.commands.summary_schema import REPORTED_AVERAGE, reported_average_document
 from provibench.commands.summary_view import (
     SWEEP_BLOCK_PROPERTIES,
     probe_summary_to_document,
@@ -73,6 +74,7 @@ _OUTPUT = obj(
         "precheck": PRECHECK_SCHEMA,
         "trace_prompt_tokens": nullable_integer(),
         "listing_prices": LISTING_PRICES_SCHEMA,
+        "reported_average": REPORTED_AVERAGE,
         "output_file": nullable_string(),
         "changed": boolean(),
     },
@@ -91,6 +93,7 @@ _OUTPUT = obj(
         "precheck",
         "trace_prompt_tokens",
         "listing_prices",
+        "reported_average",
         "output_file",
         "changed",
     ],
@@ -186,6 +189,7 @@ def _full_report(run_dir: Path) -> Document:
         "precheck": None,
         "trace_prompt_tokens": None,
         "listing_prices": [],
+        "reported_average": None,
         "output_file": None,
         "changed": False,
     }
@@ -195,6 +199,7 @@ def _probe_report(run_dir: Path) -> Document:
     from provibench.bench.probe_drift import apply_drift
     from provibench.bench.probe_runs import load_probe_run
     from provibench.bench.probe_summary import summarize_probe
+    from provibench.bench.reported_average import apply_reported_average
     from provibench.bench.spend import run_worst_case_usd, total_spend
     from provibench.bench.summary import cache_mode_note
 
@@ -224,6 +229,9 @@ def _probe_report(run_dir: Path) -> Document:
         by_label = {ref.label: ref for ref in meta.specs}
         specs = [by_label[summary.label] for summary in summaries]
     summaries = apply_drift(summaries, specs)
+    summaries = apply_reported_average(
+        summaries, specs, meta.reported_average, trace_prompt_tokens=meta.trace_prompt_tokens
+    )
     spend = total_spend([summary.spend_usd for summary in summaries])
     worst = run_worst_case_usd(
         records,
@@ -247,6 +255,7 @@ def _probe_report(run_dir: Path) -> Document:
         "precheck": meta.precheck.model_dump() if meta.precheck is not None else None,
         "trace_prompt_tokens": meta.trace_prompt_tokens,
         "listing_prices": listing_prices_document(meta.listing_prices),
+        "reported_average": reported_average_document(meta.reported_average),
         "output_file": None,
         "changed": False,
     }

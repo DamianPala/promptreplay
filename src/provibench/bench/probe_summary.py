@@ -23,6 +23,7 @@ from statistics import fmean, median
 from pydantic import AliasChoices, BaseModel, Field
 
 from provibench.bench.estimate import SpecPrices
+from provibench.bench.pricing import effective_price
 from provibench.bench.probe_models import ProbeResult, is_failed, is_served
 from provibench.bench.probe_notes import probe_notes
 from provibench.bench.probe_pricing import choose_prices
@@ -138,6 +139,14 @@ class ProbeSummary(BaseModel):
     retries: int = 0
     skipped: int = 0
     notes: list[str] = Field(default_factory=list)
+    # OpenRouter's reported average for this provider that day: share, whether it pools more
+    # than one endpoint, the same two prices/bill at that share, and the bill against it
+    # (negative `vs_or_avg_pct`: cached better) -- see `bench.reported_average`.
+    or_avg_share_pct: float | None = None
+    or_avg_pooled: bool = False
+    or_avg_eff_per_m_prompt: float | None = None
+    or_avg_session_prompt_usd: float | None = None
+    vs_or_avg_pct: float | None = None
 
     @property
     def cold_ms(self) -> float | None:
@@ -268,10 +277,9 @@ def summarize_probe(
     priced, priced_as, listed = choose_prices(
         prices, records, unpinned_gateway=unpinned_gateway, listing=listing
     )
-    # Priced from the pooled `h`: a long agent session runs in the steady state the later
-    # reads sample (prefixes admitted, several replicas warm); `first_h` is the cold-start
-    # bound and stays visible next to it (see the module docstring).
-    eff_per_m_prompt = _effective_price(h, priced)
+    # Priced from the pooled `h`, the steady-state rate; `first_h` is the cold-start bound
+    # and stays visible next to it (see the module docstring).
+    eff_per_m_prompt = effective_price(h, priced.prices if priced is not None else None)
     billed_usd = _billed_total(records)
     output_tokens, reads = output_token_stats(records)
     rate_limited = rate_limited_count(records)
@@ -355,14 +363,6 @@ def _hit(record: ProbeResult, prefix: int) -> float | None:
     if not is_served(record):
         return None
     return round(_fraction(cached_of(record), prefix), 2)
-
-
-def _effective_price(h: float | None, prices: SpecPrices | None) -> float | None:
-    """USD per 1M prompt tokens at the given hit-weighted `h`: misses at input, hits at cache
-    read."""
-    if h is None or prices is None:
-        return None
-    return (1 - h) * prices.prices.input + h * prices.prices.cache_read
 
 
 def _billed_total(records: Sequence[ProbeResult]) -> float | None:

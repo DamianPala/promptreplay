@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -272,6 +273,7 @@ def test_probe_runs_a_rung_and_persists_the_run(
         "precheck",
         "trace_prompt_tokens",
         "listing_prices",
+        "reported_average",
         "changed",
     }
     assert doc["partial"] is False
@@ -914,6 +916,128 @@ def test_probe_prices_an_openrouter_spec_from_the_endpoint_snapshot(
     assert prices["prices"]["input"] == pytest.approx(0.3)
     assert prices["prices"]["cache_read"] == pytest.approx(0.03)
     assert prices["source"] == "openrouter-endpoint"
+
+
+def test_probe_stores_the_reported_average_and_prints_no_unavailable_line(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fetch that succeeds stores the block in `run.json` and the summary's five fields,
+    and the "unavailable" line never prints."""
+    from provibench.bench.openrouter_stats import ReportedAverage, ReportedShare
+
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    _install(
+        monkeypatch, _transport(lambda index: _ok(cached=90, input_tokens=10) if index else _ok())
+    )
+
+    async def fake_fetch(client: httpx.AsyncClient, model: str, *, day: str) -> ReportedAverage:
+        del client
+        return ReportedAverage(
+            day=day,
+            model=model,
+            permaslug="test/model",
+            fetched_at="2026-09-21T00:00:00+00:00",
+            shares={"novita": ReportedShare(share_pct=87.2, endpoints=1, tokens=123)},
+        )
+
+    monkeypatch.setattr("provibench.bench.openrouter_stats.fetch_reported_average", fake_fetch)
+
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "or:model-a@novita",
+        "--rungs",
+        "1",
+        "--repeats",
+        "2",
+        "--gap",
+        "0",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert "unavailable" not in outcome.stderr
+    reported = as_document(outcome.document["reported_average"])
+    assert reported is not None
+    shares = as_document(reported["shares"])
+    assert shares is not None
+    novita = as_document(shares["novita"])
+    assert novita is not None
+    assert novita["share_pct"] == pytest.approx(87.2)
+    [summary] = [d for d in map(as_document, as_list(outcome.document["summaries"]) or []) if d]
+    assert summary["or_avg_share_pct"] == pytest.approx(87.2)
+
+    meta = json.loads((Path(str(outcome.document["run_dir"])) / "run.json").read_text())
+    assert meta["reported_average"]["shares"]["novita"]["share_pct"] == pytest.approx(87.2)
+
+
+def test_probe_fetches_the_reported_average_for_yesterdays_utc_day(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OpenRouter aggregates the figure over a full UTC day, so a run started this morning
+    must not ask for today's -- still partial -- day."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    _install(
+        monkeypatch, _transport(lambda index: _ok(cached=90, input_tokens=10) if index else _ok())
+    )
+    seen_days: list[str] = []
+
+    async def fake_fetch(client: httpx.AsyncClient, model: str, *, day: str) -> None:
+        del client, model
+        seen_days.append(day)
+        return None
+
+    monkeypatch.setattr("provibench.bench.openrouter_stats.fetch_reported_average", fake_fetch)
+
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "or:model-a@novita",
+        "--rungs",
+        "1",
+        "--repeats",
+        "2",
+        "--gap",
+        "0",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    yesterday = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
+    assert seen_days == [yesterday]
+
+
+def test_probe_prints_unavailable_once_when_the_fetch_returns_none(
+    cli: Cli, bench_paths: BenchPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`no_reported_average_network` (autouse) already fails the fetch like a real one would:
+    the message prints exactly once and the run carries no comparison at all."""
+    _write_targets(bench_paths.targets_path)
+    _probe_trace(bench_paths)
+    _install(
+        monkeypatch, _transport(lambda index: _ok(cached=90, input_tokens=10) if index else _ok())
+    )
+
+    outcome = _probe(
+        cli,
+        bench_paths,
+        "t",
+        "or:model-a@novita",
+        "--rungs",
+        "1",
+        "--repeats",
+        "2",
+        "--gap",
+        "0",
+        "--yes",
+    )
+    assert outcome.code == 0, outcome.stderr
+    assert outcome.stderr.count("OpenRouter's reported average unavailable") == 1
+    assert outcome.document["reported_average"] is None
+    [summary] = [d for d in map(as_document, as_list(outcome.document["summaries"]) or []) if d]
+    assert summary["or_avg_share_pct"] is None
 
 
 def test_probe_a_pin_matching_no_endpoint_is_invalid_input(

@@ -17,6 +17,7 @@ from provibench.bench.labels import join_and, size_label
 from provibench.bench.probe_charts import reference_size
 from provibench.bench.probe_summary import ProbeSummary
 from provibench.bench.probe_tables import TableBlock
+from provibench.bench.reported_average import reported_average_source
 from provibench.bench.selection import SweepInfo
 from provibench.bench.selection_text import not_probed_lines, selection_line
 from provibench.bench.spend import run_cost_sentence
@@ -49,7 +50,7 @@ into one sentence for every endpoint (`_cached_cold_caveat`) instead of listing 
 _MARKER_POSITION = "The marker sits at the request's very first token."
 """Where the cold (nonce) mode's marker sits, in the words a provider engineer would want:
 a block-aligned prefix cache can legitimately report a shared system prefix as cached when
-the marker sits after it, and this run's marker does not (item 3)."""
+the marker sits after it, and this run's marker does not."""
 
 _MARKER_POSITION_WITH_CACHED_COLD = (
     "The marker sits at the request's very first token, so the next caveat's cold writes "
@@ -75,11 +76,32 @@ def run_method_sentence(summaries: Sequence[ProbeSummary], document: Document) -
     options = as_document(document.get("options")) or {}
     repeats = [value for value in as_list(options.get("repeats")) or [] if isinstance(value, int)]
     turns = "1 turn" if len(rungs) == 1 else f"{len(rungs)} turns"
-    return (
+    sentence = (
         f"The run replayed {turns} of a recorded coding session "
         f"({join_and(sizes)} prompt tokens) against each endpoint: one uncached request to "
         f"write the cache, then {_repeat_phrase(repeats)} to read it."
     )
+    day = _reported_day(summaries, document)
+    if day is not None:
+        sentence += (
+            " The section below sets this run's cache share against OpenRouter's reported "
+            f"average for {day}."
+        )
+    return sentence
+
+
+def _reported_day(summaries: Sequence[ProbeSummary], document: Document) -> str | None:
+    """The run's reported-average day, but only while a summary carries a figure to show.
+
+    A fetch can come back with no share for any endpoint the run probed (a provider absent
+    from that day's row, a price the run never learned); `reported_average_section` then
+    renders nothing, so neither the method sentence nor the source caveat may point at it.
+    """
+    if not any(summary.or_avg_share_pct is not None for summary in summaries):
+        return None
+    reported = as_document(document.get("reported_average"))
+    day = reported.get("day") if reported is not None else None
+    return day if isinstance(day, str) else None
 
 
 def _repeat_phrase(repeats: Sequence[int]) -> str:
@@ -118,6 +140,9 @@ def caveats_section(
         add(escape(nonce))
     if cached_cold:
         add(escape(cached_cold))
+    source = _reported_average_caveat(summaries, document)
+    if source:
+        add(escape(source))
 
     for line in _selection_lines(document):
         add(escape(line))
@@ -223,11 +248,17 @@ def _cached_cold_caveat(
     )
 
 
+def _reported_average_caveat(summaries: Sequence[ProbeSummary], document: Document) -> str | None:
+    """Where the OR avg figures come from, right after the cached-cold caveat."""
+    day = _reported_day(summaries, document)
+    return reported_average_source(day) if day is not None else None
+
+
 def _nonce_caveat(document: Document, *, cached_cold_present: bool) -> str:
     """The run-wide cache-mode caveat: `_NONCE_CAVEATS`'s shared sentence, plus, for the cold
-    (nonce) mode only, where the marker sits (item 3). `cached_cold_present` picks which of
-    the two marker sentences applies, since only then does the position need to also explain
-    away the objection that a shared prefix could account for the next caveat's cold writes.
+    (nonce) mode only, where the marker sits. `cached_cold_present` picks which of the two
+    marker sentences applies, since only then does the position need to also explain away
+    the objection that a shared prefix could account for the next caveat's cold writes.
     """
     options = as_document(document.get("options")) or {}
     warm = options.get("warm")

@@ -83,16 +83,18 @@ class ProbeBlocks:
     caption: str | None
     endpoint: TableBlock
     rungs: TableBlock
+    reported: TableBlock | None  # vs OpenRouter's reported average, when a summary carries one
+    reported_caption: str | None  # caption above `reported`; `None` without `reported` or `day`
 
 
-def render_probe(summaries: Sequence[ProbeSummary]) -> str:
+def render_probe(summaries: Sequence[ProbeSummary], *, day: str | None = None) -> str:
     """The probe's human output: one row per endpoint, then one row per rung; for a tty."""
-    return _render(summaries, markdown=False)
+    return _render(summaries, markdown=False, day=day)
 
 
-def probe_markdown(summaries: Sequence[ProbeSummary]) -> str:
+def probe_markdown(summaries: Sequence[ProbeSummary], *, day: str | None = None) -> str:
     """The same two tables as markdown, for a report that gets pasted somewhere."""
-    return _render(summaries, markdown=True)
+    return _render(summaries, markdown=True, day=day)
 
 
 def probe_labels(summaries: Sequence[ProbeSummary]) -> list[str]:
@@ -101,10 +103,10 @@ def probe_labels(summaries: Sequence[ProbeSummary]) -> list[str]:
     return _labels_from(probe_blocks(summaries))
 
 
-def _render(summaries: Sequence[ProbeSummary], *, markdown: bool) -> str:
-    blocks = probe_blocks(summaries)
+def _render(summaries: Sequence[ProbeSummary], *, markdown: bool, day: str | None = None) -> str:
+    blocks = probe_blocks(summaries, day=day)
     lines = _lines(blocks, markdown=markdown)
-    notes = probe_note_lines(summaries, _labels_from(blocks))
+    notes = probe_note_lines(summaries, _labels_from(blocks), day=day)
     if notes:
         lines = [*lines, "", *notes]
     return "\n".join(lines) if lines else "\n\n"
@@ -124,18 +126,26 @@ def _lines(blocks: ProbeBlocks, *, markdown: bool) -> list[str]:
     return lines[:-1]
 
 
-def probe_blocks(summaries: Sequence[ProbeSummary]) -> ProbeBlocks:
+def probe_blocks(summaries: Sequence[ProbeSummary], *, day: str | None = None) -> ProbeBlocks:
     """The caption, the endpoint table and the rung table as data, for any renderer.
 
     The caption is its own block, which is what `report`'s text extraction splits on to
-    recover the two tables whether or not there is one.
+    recover the two tables whether or not there is one. `day` -- the run's own day, known
+    only to a caller that has the full report document -- is what lets the OR-avg caption
+    name the date; without it the comparison table still renders, captionless.
     """
+    from provibench.bench.reported_average import (
+        reported_average_block,
+        reported_average_table_caption,
+    )
+
     rungs = [rung for summary in summaries for rung in summary.rungs]
     rung_columns = _rung_columns(rungs)
     label_width = _planned_widths(summaries, rung_columns)
     caption, labels = _labels_of(summaries, label_width=label_width)
     rows = zip(summaries, labels, strict=True)
     run_rows = [_run_cells(summary, label) for summary, label in rows]
+    reported = reported_average_block(summaries, labels)
     return ProbeBlocks(
         caption=caption,
         endpoint=TableBlock(columns=_RUN_COLUMNS, rows=tuple(tuple(row) for row in run_rows)),
@@ -143,26 +153,36 @@ def probe_blocks(summaries: Sequence[ProbeSummary]) -> ProbeBlocks:
             columns=rung_columns,
             rows=tuple(tuple(row) for row in _rung_rows(summaries, labels, rung_columns)),
         ),
+        reported=reported,
+        reported_caption=reported_average_table_caption(day)
+        if reported is not None and day
+        else None,
     )
 
 
 def _blocks(blocks: ProbeBlocks, *, markdown: bool) -> list[str]:
-    """The optional caption, the endpoint table and the rung table, rendered as text."""
+    """The optional caption, the two tables, then the OR-avg caption and table when present."""
     table = _md_table if markdown else _table
     rendered = [table(block.columns, block.rows) for block in (blocks.endpoint, blocks.rungs)]
-    return [blocks.caption, *rendered] if blocks.caption is not None else rendered
+    parts = [blocks.caption, *rendered] if blocks.caption is not None else rendered
+    if blocks.reported is not None:
+        if blocks.reported_caption is not None:
+            parts = [*parts, blocks.reported_caption]
+        parts = [*parts, table(blocks.reported.columns, blocks.reported.rows)]
+    return parts
 
 
 _CACHE_MODE_NOTES = frozenset({cache_mode_note(True), cache_mode_note(False)})
 
 
-def probe_note_lines(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -> list[str]:
-    """The run-wide cache-mode sentence once, unprefixed, then one `{label}: {note}` line per
-    remaining note, in endpoint order -- shared by every renderer.
-
-    `labels` is the endpoint table's own short column (`probe_blocks(...).endpoint.rows`, or
-    `probe_labels`): a note names the same endpoint the table above it does, `@relace/fp4`
-    rather than the full label the caption already expanded.
+def probe_note_lines(
+    summaries: Sequence[ProbeSummary], labels: Sequence[str], *, day: str | None = None
+) -> list[str]:
+    """The run-wide cache-mode sentence once, unprefixed, one `{label}: {note}` line per
+    remaining note, then the OR-avg pooled note and source sentence when they apply -- shared
+    by every renderer. `labels` is the endpoint table's own short column
+    (`probe_blocks(...).endpoint.rows`, or `probe_labels`): a note names the same endpoint the
+    table above it does, `@relace/fp4` rather than the full label the caption already expanded.
     """
     shared = _shared_cache_mode(summaries)
     lines = [cache_mode_sentence(shared == cache_mode_note(True))] if shared is not None else []
@@ -172,7 +192,19 @@ def probe_note_lines(summaries: Sequence[ProbeSummary], labels: Sequence[str]) -
         for note in summary.notes
         if note != shared
     )
+    lines.extend(_reported_average_notes(summaries, day))
     return lines
+
+
+def _reported_average_notes(summaries: Sequence[ProbeSummary], day: str | None) -> list[str]:
+    from provibench.bench.reported_average import pooled_note, reported_average_source
+
+    notes: list[str] = []
+    if any(summary.or_avg_pooled for summary in summaries):
+        notes.append(pooled_note())
+    if day is not None and any(summary.or_avg_share_pct is not None for summary in summaries):
+        notes.append(reported_average_source(day))
+    return notes
 
 
 def _shared_cache_mode(summaries: Sequence[ProbeSummary]) -> str | None:

@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from provibench.bench.estimate import SpecPrices, match_endpoint
 from provibench.bench.openrouter import Endpoint, normalize_provider
+from provibench.bench.openrouter_stats import ReportedAverage
 from provibench.bench.probe_models import ProbeOptions, ProbeResult, ProbeRun
 from provibench.bench.replay import RunRef
 from provibench.bench.selection import SweepInfo
@@ -108,6 +109,10 @@ class ProbeRunMeta(BaseModel):
     looking its served provider up here. `None` (not `{}`) for a run written before this
     field existed, so `choose_prices` knows to fit the served rate instead; `{}` for a run
     with no OpenRouter spec to list."""
+    reported_average: ReportedAverage | None = None
+    """OpenRouter's reported cache share for the last complete UTC day, fetched once for the
+    sweep's or the first pinned spec's model; `None` for a run written before this field
+    existed, one with no pinned OpenRouter spec, or one where the fetch failed."""
 
     @model_validator(mode="before")
     @classmethod
@@ -203,6 +208,7 @@ def write_probe_run(  # noqa: PLR0913 (one keyword per part of the record it wri
     precheck: Sequence[ProbeResult] = (),
     trace_prompt_tokens: int | None = None,
     listing_prices: Mapping[str, Prices] | None = None,
+    reported_average: ReportedAverage | None = None,
 ) -> Path:
     """Write one `<slug>.jsonl` per spec plus the run's `run.json`.
 
@@ -259,6 +265,7 @@ def write_probe_run(  # noqa: PLR0913 (one keyword per part of the record it wri
         precheck=precheck_summary,
         trace_prompt_tokens=trace_prompt_tokens,
         listing_prices=None if listing_prices is None else dict(listing_prices),
+        reported_average=reported_average,
     )
     (run_dir / "run.json").write_text(meta.model_dump_json(indent=2) + "\n", encoding="utf-8")
     return run_dir

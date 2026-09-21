@@ -38,6 +38,7 @@ from provibench.bench.html_layout import (
     table_section,
     theme_switch,
 )
+from provibench.bench.html_reported import reported_average_section
 from provibench.bench.html_style import CSS
 from provibench.bench.html_svg import Point, grouped_bars, horizontal_bars, line_chart
 from provibench.bench.labels import join_and, size_label
@@ -223,6 +224,10 @@ def _probe_sections(document: Document) -> list[str]:
             key_column="eff $/M",
         )
     )
+
+    reported = reported_average_section(summaries, labels, document)
+    if reported:
+        sections.append(reported)
 
     charts = _probe_charts(summaries, labels, document)
     if charts:

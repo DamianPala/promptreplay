@@ -29,6 +29,7 @@ from provibench.core.documents import (
 )
 
 if TYPE_CHECKING:
+    from provibench.bench.openrouter_stats import ReportedAverage
     from provibench.bench.pricing import CostBreakdown
     from provibench.bench.probe_summary import ProbeSummary
     from provibench.bench.summary import RunSummary
@@ -140,7 +141,31 @@ PROBE_SUMMARY = _all(
         "retries": integer(),
         "skipped": integer(),
         "notes": array(string()),
+        "or_avg_share_pct": nullable_number(),
+        "or_avg_pooled": boolean(),
+        "or_avg_eff_per_m_prompt": nullable_number(),
+        "or_avg_session_prompt_usd": nullable_number(),
+        "vs_or_avg_pct": nullable_number(),
     }
+)
+
+_REPORTED_SHARE_PROPERTIES: dict[str, JsonSchema] = {
+    "share_pct": number(),
+    "endpoints": integer(),
+    "tokens": nullable_integer(),
+}
+"""`ReportedAverage.shares`'s value shape; the object itself is keyed by provider slug, which
+the O4 schema subset (no `additionalProperties`) cannot enumerate, so its own schema below
+declares it a bare object rather than listing every possible slug as a property."""
+REPORTED_AVERAGE_PROPERTIES: dict[str, JsonSchema] = {
+    "day": string(),
+    "model": string(),
+    "permaslug": string(),
+    "fetched_at": string(),
+    "shares": {"type": "object"},
+}
+REPORTED_AVERAGE = nullable_object(
+    REPORTED_AVERAGE_PROPERTIES, required=list(REPORTED_AVERAGE_PROPERTIES)
 )
 
 _SWEEP_DROP = _all(
@@ -244,6 +269,24 @@ def probe_summary_to_document(summary: ProbeSummary) -> Document:
         "retries": summary.retries,
         "skipped": summary.skipped,
         "notes": list(summary.notes),
+        "or_avg_share_pct": summary.or_avg_share_pct,
+        "or_avg_pooled": summary.or_avg_pooled,
+        "or_avg_eff_per_m_prompt": summary.or_avg_eff_per_m_prompt,
+        "or_avg_session_prompt_usd": summary.or_avg_session_prompt_usd,
+        "vs_or_avg_pct": summary.vs_or_avg_pct,
+    }
+
+
+def reported_average_document(average: ReportedAverage | None) -> Document | None:
+    """A `ReportedAverage` (or `None`) as the document `probe`/`report` publish it."""
+    if average is None:
+        return None
+    return {
+        "day": average.day,
+        "model": average.model,
+        "permaslug": average.permaslug,
+        "fetched_at": average.fetched_at,
+        "shares": {slug: share.model_dump() for slug, share in average.shares.items()},
     }
 
 

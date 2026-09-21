@@ -1,0 +1,16 @@
+{
+  "data": [
+    {
+      "id": "deepseek/deepseek-v4.1-flash",
+      "name": "DeepSeek: DeepSeek V4.1 Flash",
+      "canonical_slug": "deepseek/deepseek-v4.1-flash-20260910",
+      "context_length": 1048576
+    },
+    {
+      "id": "z-ai/glm-5.3-flash",
+      "name": "Z.ai: GLM 5.3 Flash",
+      "canonical_slug": "z-ai/glm-5.3-flash-20260826",
+      "context_length": 1310720
+    }
+  ]
+}

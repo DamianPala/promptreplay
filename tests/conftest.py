@@ -37,6 +37,22 @@ def no_price_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("provibench.bench.prices.fetch_payload", offline)
 
 
+@pytest.fixture(autouse=True)
+def no_reported_average_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test reaches OpenRouter's reported-average feed; the fetch boundary returns `None`.
+
+    That is the same outcome a real fetch failure produces, so a test that never replaces
+    `provibench.bench.openrouter_stats.fetch_reported_average` exercises the "unavailable"
+    path. A test that wants a figure replaces that name with its own fetcher.
+    """
+
+    async def offline(client: httpx.AsyncClient, model: str, *, day: str) -> None:
+        del client, model, day
+        return None
+
+    monkeypatch.setattr("provibench.bench.openrouter_stats.fetch_reported_average", offline)
+
+
 class FakeClock:
     """A clock that advances only when something sleeps, so waits finish instantly."""
 

@@ -73,7 +73,7 @@ def probe_report_text(document: Document, *, key: str = "summaries") -> str:
         *spend_lines(document),
         *session_footer_lines(summaries, labels, trace_tokens),
     ]
-    lines = render_probe(summaries).splitlines()
+    lines = render_probe(summaries, day=_reported_day(document)).splitlines()
     if closing:
         lines = [*lines, "", *closing]
     return "\n".join(lines)
@@ -112,7 +112,7 @@ def report_markdown(document: Document) -> str:
         labels = probe_labels(summaries)
         trace_tokens = document.get("trace_prompt_tokens")
         closing = [*spend_lines(document), *session_footer_lines(summaries, labels, trace_tokens)]
-        lines = probe_markdown(summaries).splitlines()
+        lines = probe_markdown(summaries, day=_reported_day(document)).splitlines()
         if closing:
             lines = [*lines, "", *closing]
         return "\n".join(lines) + "\n"
@@ -173,6 +173,13 @@ def sweep_lines(block: object) -> list[str]:
         return []
     sweep = SweepInfo.model_validate(document)
     return [selection_line(sweep), *not_probed_lines(sweep)]
+
+
+def _reported_day(document: Document) -> str | None:
+    """The run's `reported_average.day`, for the OR-avg table's caption; `None` without one."""
+    reported = as_document(document.get("reported_average"))
+    day = reported.get("day") if reported is not None else None
+    return day if isinstance(day, str) else None
 
 
 def _probe_summary(entry: Document) -> ProbeSummary:

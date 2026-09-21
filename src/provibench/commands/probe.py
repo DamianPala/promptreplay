@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -52,6 +53,7 @@ from provibench.commands.run_specs import (
     spec_price_map,
     validate_pinned_providers,
 )
+from provibench.commands.summary_schema import REPORTED_AVERAGE, reported_average_document
 from provibench.commands.summary_view import (
     PROBE_SUMMARY,
     message_lines,
@@ -75,6 +77,7 @@ from provibench.core.registry import Command, require_invocation
 from provibench.core.spec import CommandSpec, Effects
 
 if TYPE_CHECKING:
+    from provibench.bench.openrouter_stats import ReportedAverage
     from provibench.bench.probe import ProbeResult
     from provibench.bench.targets import RunSpec
 
@@ -90,12 +93,14 @@ _PROBE_PROPERTIES: dict[str, JsonSchema] = {
     "precheck": PRECHECK_SCHEMA,
     "trace_prompt_tokens": nullable_integer(),
     "listing_prices": LISTING_PRICES_SCHEMA,
+    "reported_average": REPORTED_AVERAGE,
     "changed": boolean(),
     **dry_run_fields(precheck=True),
 }
-# spend_usd, worst_case_usd, precheck, trace_prompt_tokens and listing_prices sit next to
-# summaries: present on a real run, absent (like run_dir and summaries) on a --dry-run
-# document, so only the two fields both shapes always carry are required.
+# spend_usd, worst_case_usd, precheck, trace_prompt_tokens, listing_prices and
+# reported_average sit next to summaries: present on a real run, absent (like run_dir and
+# summaries) on a --dry-run document, so only the two fields both shapes always carry are
+# required.
 _PROBE_REQUIRED = ["partial", "changed"]
 _OUTPUT = obj(_PROBE_PROPERTIES, required=_PROBE_REQUIRED)
 
@@ -191,6 +196,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     from provibench.bench.probe_drift import apply_drift
     from provibench.bench.probe_runs import endpoint_snapshot, listing_prices, write_probe_run
     from provibench.bench.probe_summary import summarize_probe
+    from provibench.bench.reported_average import apply_reported_average
     from provibench.bench.summary import cache_mode_note
     from provibench.bench.trace import load_trace, total_prompt_tokens, trace_name
 
@@ -261,6 +267,8 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
     except ValueError as exc:
         raise OperationFailed(str(exc)) from exc
 
+    average = _reported_average(invocation, checked.specs)
+
     parallel = parallel_note(request.parallel)
     notes = [*lookup_notes, cache_mode_note(options.warm), *parallel]
     trace_prompt_tokens = total_prompt_tokens(selected)
@@ -285,6 +293,9 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         summaries = by_price(summaries)
         specs = in_order(specs, summaries)
     summaries = apply_drift(summaries, specs)
+    summaries = apply_reported_average(
+        summaries, specs, average, trace_prompt_tokens=trace_prompt_tokens
+    )
 
     sweep = recorded_sweep(request.sweep, checked)
     runs_dir = Path(invocation.setting("runs_dir") or ".")
@@ -304,6 +315,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         precheck=checked.precheck,
         trace_prompt_tokens=trace_prompt_tokens,
         listing_prices=listing,
+        reported_average=average,
     )
     precheck_document, total, worst = report_spend(
         summaries,
@@ -323,6 +335,7 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         "precheck": precheck_document,
         "trace_prompt_tokens": trace_prompt_tokens,
         "listing_prices": listing_prices_document(listing),
+        "reported_average": reported_average_document(average),
         "changed": True,
     }
     if sweep is not None:
@@ -332,3 +345,35 @@ def execute_probe(invocation: Invocation, request: ProbeRequest) -> Document:
         document["sweep"] = sweep.to_document()
     fail_on_partial(invocation, run, summaries, document, run_dir)
     return document
+
+
+def _reported_average(invocation: Invocation, specs: Sequence[RunSpec]) -> ReportedAverage | None:
+    """OpenRouter's reported average for the first pinned OpenRouter spec's model, or `None`.
+
+    Fetched once, after the run's own requests, for whichever model the run's first pinned
+    OpenRouter spec names; a probe mixing pinned specs of several models applies the figure
+    only to that model's specs (`bench.reported_average.apply_reported_average`), which a
+    mixed-model probe is rare enough to accept. `None` with no pinned OpenRouter spec at all,
+    or when the fetch itself failed -- the caller is told once either way that it happened.
+    OpenRouter aggregates the figure over a full UTC day, so the run asks for the last
+    complete one rather than today's, which a morning run would otherwise compare against
+    while it is still partial.
+    """
+    pinned = [spec for spec in specs if spec.kind == "openrouter" and spec.providers]
+    if not pinned:
+        return None
+    import httpx
+
+    from provibench.bench.openrouter_stats import fetch_reported_average
+
+    day = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
+    model = pinned[0].model
+
+    async def _fetch() -> ReportedAverage | None:
+        async with httpx.AsyncClient() as client:
+            return await fetch_reported_average(client, model, day=day)
+
+    average = asyncio.run(_fetch())
+    if average is None:
+        invocation.message("OpenRouter's reported average unavailable; the comparison is left out.")
+    return average

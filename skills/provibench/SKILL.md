@@ -72,6 +72,7 @@ Name the winner from the measured fields of each `summaries` item, never from th
 - `ttft_ms` (`TTFT ms`) and `gen_tok_s` (`tok/s`) are the median time to first token and output tokens per second. A rung answered in one burst has no `gen_tok_s`; the endpoint's median then comes from the rungs that streamed.
 - `errors`, `rate_limited`, `drift` and `notes` hold failed requests, the 429s among them, a served provider or model that differs from the reference row, and the caveats the text report prints under the table.
 - `priced_as` says where an endpoint's price came from. An unpinned OpenRouter endpoint is repriced from the provider that actually served it, so its `eff_per_m_prompt` is not a listed price.
+- `or_avg_share_pct`, `or_avg_pooled`, `or_avg_eff_per_m_prompt` and `or_avg_session_prompt_usd` are a pinned OpenRouter endpoint's numbers repriced at OpenRouter's own reported cache share for that provider on the last complete UTC day before the run, instead of this run's own share, at the same listed prices; `None` for a native or unpinned spec, or a provider the feed did not report. `vs_or_avg_pct` is this run's session bill against that one: negative means this session cached better on that endpoint than OpenRouter's average traffic did.
 
 Tell the user the winning endpoint, its `eff_per_m_prompt` next to the listed input price, the session bill, and whether `first_hit_rate` sits well below `hit_rate`.
 Give the date of the run: routing, quantization and prices shift week to week, so one run is one day's measurement.
