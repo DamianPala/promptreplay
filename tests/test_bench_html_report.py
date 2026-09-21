@@ -1241,6 +1241,14 @@ def test_reported_average_section_marks_the_run_price_cell_as_key() -> None:
     assert '<td class="key">' in section
 
 
+def test_reported_average_caption_renders_the_column_name_as_code() -> None:
+    """The shared caption names the column in backticks; the page shows `<code>`, not them."""
+    html = render_html(reported_average_probe_document())
+    section = html.split("Against OpenRouter's reported average", 1)[1]
+    assert "A negative <code>vs OR avg</code> means" in section
+    assert "`vs OR avg`" not in section
+
+
 def test_reported_average_section_absent_without_any_figure() -> None:
     html = render_html(probe_document())
     assert "Against OpenRouter's reported average" not in html

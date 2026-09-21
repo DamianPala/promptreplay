@@ -15,6 +15,7 @@ text` can never disagree.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from html import escape
 
@@ -52,6 +53,19 @@ _VS_TOOLTIP = (
 )
 
 
+_CODE_SPAN = re.compile(r"`([^`]+)`")
+
+
+def _code_spans(escaped: str) -> str:
+    """Backtick spans in the shared caption become `<code>` on the page.
+
+    The caption is one string for the text, Markdown and HTML renderers, and names the
+    `vs OR avg` column the way the text report does, in backticks; the page shows column
+    names in `<code>` everywhere else, so raw backticks here would be the one exception.
+    """
+    return _CODE_SPAN.sub(r"<code>\1</code>", escaped)
+
+
 def reported_average_section(
     summaries: Sequence[ProbeSummary], labels: Sequence[str], document: Document
 ) -> str | None:
@@ -66,7 +80,7 @@ def reported_average_section(
         return None
     trace_tokens = document.get("trace_prompt_tokens")
     caption = reported_average_caption(day, trace_tokens if isinstance(trace_tokens, int) else None)
-    caption_html = escape(caption)
+    caption_html = _code_spans(escape(caption))
     if any(summary.or_avg_pooled for summary, _ in pairs):
         caption_html += f' <span class="hint">{escape(pooled_note())}</span>'
     sentence = reported_average_sentence(summaries, labels)

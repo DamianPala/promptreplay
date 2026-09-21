@@ -168,8 +168,9 @@ def reported_average_sentence(
 ) -> str | None:
     """How many endpoints cached better this session than OpenRouter's average traffic did.
 
-    `None` when no summary carries a figure at all; the "below" clause is left out when
-    nothing was below.
+    `None` when no summary carries a figure at all. The "below" clause is left out when
+    nothing was below, and the "above" count is left out when nothing was above, so a
+    one-endpoint run never reads "on 0 of the one endpoints".
     """
     pairs = [
         (label, summary.or_avg_share_pct, (summary.h or 0.0) * 100)
@@ -180,13 +181,24 @@ def reported_average_sentence(
         return None
     above = sum(1 for _, share, run in pairs if run > share)
     below = [label for label, share, run in pairs if run < share]
-    sentence = (
-        f"This session's share sits above OpenRouter's average on {_count_word(above)} of "
-        f"the {_count_word(len(pairs))} endpoints"
+    if not above and not below:
+        return f"This session's share matches OpenRouter's average on {_endpoints(len(pairs))}."
+    if not above:
+        return f"This session's share sits below OpenRouter's average on {join_and(below)}."
+    where = (
+        "the one endpoint"
+        if len(pairs) == 1
+        else f"{_count_word(above)} of the {_count_word(len(pairs))} endpoints"
     )
+    sentence = f"This session's share sits above OpenRouter's average on {where}"
     if below:
         sentence += f" and below it on {join_and(below)}"
     return sentence + "."
+
+
+def _endpoints(count: int) -> str:
+    """`the one endpoint` or `all six endpoints`."""
+    return "the one endpoint" if count == 1 else f"all {_count_word(count)} endpoints"
 
 
 def reported_average_source(day: str) -> str:

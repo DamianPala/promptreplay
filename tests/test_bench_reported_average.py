@@ -184,6 +184,39 @@ def test_reported_average_sentence_omits_the_below_clause_when_nothing_was_below
     )
 
 
+def test_reported_average_sentence_for_one_endpoint_below_names_it_alone() -> None:
+    """A one-endpoint run that cached worse: no "0 of the one endpoints"."""
+    summaries = [_scored("@z-ai", h=0.518, or_avg=91.3)]
+
+    sentence = reported_average_sentence(summaries, ["@z-ai"])
+
+    assert sentence == "This session's share sits below OpenRouter's average on @z-ai."
+
+
+def test_reported_average_sentence_for_one_endpoint_above_says_the_one_endpoint() -> None:
+    summaries = [_scored("@z-ai", h=0.95, or_avg=91.3)]
+
+    sentence = reported_average_sentence(summaries, ["@z-ai"])
+
+    assert sentence == "This session's share sits above OpenRouter's average on the one endpoint."
+
+
+def test_reported_average_sentence_when_nothing_was_above_lists_only_the_below() -> None:
+    summaries = [_scored("@a", h=0.60, or_avg=80.0), _scored("@b", h=0.60, or_avg=80.0)]
+
+    sentence = reported_average_sentence(summaries, ["@a", "@b"])
+
+    assert sentence == "This session's share sits below OpenRouter's average on @a and @b."
+
+
+def test_reported_average_sentence_when_every_share_matches() -> None:
+    summaries = [_scored("@a", h=0.80, or_avg=80.0), _scored("@b", h=0.80, or_avg=80.0)]
+
+    sentence = reported_average_sentence(summaries, ["@a", "@b"])
+
+    assert sentence == "This session's share matches OpenRouter's average on all two endpoints."
+
+
 def test_reported_average_sentence_is_none_without_any_figure() -> None:
     summaries = [_summary("@a"), _summary("@b")]
     labels = [s.label for s in summaries]
